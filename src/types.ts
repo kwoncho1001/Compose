@@ -1,20 +1,25 @@
-export type NoteStatus = 'Planned' | 'In-Progress' | 'Done';
-
-export type FolderName =
-  | '01_Common'
-  | '02_Data_Logic'
-  | '03_Interface'
-  | '04_User_Experience';
+export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict';
 
 export interface Note {
   id: string;
   title: string;
-  folder: FolderName;
+  folder: string;
   userView: string;
   aiSpec: string;
   status: NoteStatus;
   githubLink?: string;
   yamlMetadata: string;
+  isMainFeature?: boolean;
+  conflictInfo?: {
+    filePath: string;
+    fileContent: string;
+    reason: string;
+    guide?: string;
+  };
+  consistencyConflict?: {
+    description: string;
+    suggestion: string;
+  };
 }
 
 export interface GCMEntity {

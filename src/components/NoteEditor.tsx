@@ -1,15 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Note } from '../types';
-import { FileText, Code, Activity, CheckCircle, Clock, Circle } from 'lucide-react';
+import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send } from 'lucide-react';
+import { updateSpecFromCode, generateFixGuide } from '../services/gemini';
 
 interface NoteEditorProps {
   note: Note | null;
   onUpdateNote: (note: Note) => void;
+  onTargetedUpdate: (noteId: string, command: string) => Promise<void>;
 }
 
-export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) => {
+export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTargetedUpdate }) => {
+  const [isResolving, setIsResolving] = useState(false);
+  const [command, setCommand] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
+
   if (!note) {
     return (
       <div className="flex-1 flex items-center justify-center bg-white text-slate-400">
@@ -25,13 +31,59 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) =>
     onUpdateNote({ ...note, status: e.target.value as Note['status'] });
   };
 
+  const handleCodeWins = async () => {
+    if (!note.conflictInfo) return;
+    setIsResolving(true);
+    try {
+      const newSpec = await updateSpecFromCode(note.aiSpec, note.conflictInfo.fileContent);
+      onUpdateNote({ ...note, aiSpec: newSpec, status: 'Done', conflictInfo: undefined });
+    } catch (e) {
+      alert('Failed to update spec.');
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const handleDesignWins = async () => {
+    if (!note.conflictInfo) return;
+    setIsResolving(true);
+    try {
+      const guide = await generateFixGuide(note.aiSpec, note.conflictInfo.fileContent);
+      onUpdateNote({ ...note, conflictInfo: { ...note.conflictInfo, guide } });
+    } catch (e) {
+      alert('Failed to generate guide.');
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
+  const handleCommandSubmit = async () => {
+    if (!command.trim()) return;
+    setIsUpdating(true);
+    try {
+      await onTargetedUpdate(note.id, command);
+      setCommand('');
+    } catch (e) {
+      alert('Failed to update note.');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
-    <div className="flex-1 bg-white overflow-y-auto p-8 border-r border-slate-200">
-      <div className="max-w-3xl mx-auto">
+    <div className="flex-1 bg-white overflow-y-auto p-8 border-r border-slate-200 flex flex-col">
+      <div className="max-w-3xl mx-auto w-full flex-1">
         {/* Header */}
         <div className="mb-8 pb-6 border-b border-slate-200">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-3xl font-bold text-slate-900">{note.title}</h1>
+            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
+              {note.title}
+              {note.isMainFeature && (
+                <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-medium">
+                  Main Feature
+                </span>
+              )}
+            </h1>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-slate-500">Status:</span>
               <select
@@ -42,6 +94,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) =>
                 <option value="Planned">Planned</option>
                 <option value="In-Progress">In-Progress</option>
                 <option value="Done">Done</option>
+                <option value="Conflict">Conflict</option>
               </select>
             </div>
           </div>
@@ -64,6 +117,65 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) =>
           </div>
         </div>
 
+        {/* Consistency Conflict Banner */}
+        {note.consistencyConflict && (
+          <div className="mb-8 bg-orange-50 border border-orange-200 rounded-lg p-5">
+            <div className="flex items-center gap-2 text-orange-700 font-semibold mb-2">
+              <AlertTriangle className="w-5 h-5" />
+              정합성 충돌 (Consistency Conflict)
+            </div>
+            <p className="text-sm text-orange-800 mb-2 font-medium">{note.consistencyConflict.description}</p>
+            <div className="bg-white border border-orange-100 rounded p-3 text-sm text-orange-700">
+              <strong>해결 제안:</strong> {note.consistencyConflict.suggestion}
+            </div>
+            <button
+              onClick={() => onUpdateNote({ ...note, consistencyConflict: undefined })}
+              className="mt-3 text-xs text-orange-600 hover:text-orange-800 underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Implementation Conflict Banner */}
+        {note.status === 'Conflict' && note.conflictInfo && (
+          <div className="mb-8 bg-red-50 border border-red-200 rounded-lg p-5">
+            <div className="flex items-center gap-2 text-red-700 font-semibold mb-2">
+              <AlertTriangle className="w-5 h-5" />
+              구현 충돌 (Implementation Conflict): {note.conflictInfo.filePath}
+            </div>
+            <p className="text-sm text-red-600 mb-4">{note.conflictInfo.reason}</p>
+            
+            {note.conflictInfo.guide ? (
+              <div className="bg-white border border-red-100 rounded p-4 mb-4">
+                <h4 className="font-semibold text-slate-800 mb-2">구현 보정 가이드 (Implementation Guide):</h4>
+                <div className="prose prose-sm max-w-none">
+                  <Markdown remarkPlugins={[remarkGfm]}>{note.conflictInfo.guide}</Markdown>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-3">
+                <button
+                  onClick={handleCodeWins}
+                  disabled={isResolving}
+                  className="bg-white border border-red-200 hover:bg-red-50 text-red-700 px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  코드가 맞습니다 (설계 업데이트)
+                </button>
+                <button
+                  onClick={handleDesignWins}
+                  disabled={isResolving}
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  설계가 맞습니다 (수정 가이드 생성)
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* YAML Metadata */}
         <div className="mb-8">
           <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
@@ -78,7 +190,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) =>
         {/* User View */}
         <div className="mb-8">
           <h2 className="text-xl font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-2">
-            User View (Non-Technical)
+            친절한 기능 설명 (User View)
           </h2>
           <div className="prose prose-slate max-w-none">
             <Markdown remarkPlugins={[remarkGfm]}>{note.userView}</Markdown>
@@ -86,13 +198,40 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote }) =>
         </div>
 
         {/* AI Spec */}
-        <div>
+        <div className="mb-12">
           <h2 className="text-xl font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-2">
-            AI Spec (Technical)
+            수석 아키텍트 기술 명세 (AI Spec)
           </h2>
           <div className="prose prose-slate max-w-none prose-pre:bg-slate-900 prose-pre:text-slate-300">
             <Markdown remarkPlugins={[remarkGfm]}>{note.aiSpec}</Markdown>
           </div>
+        </div>
+      </div>
+
+      {/* Targeted Command Input */}
+      <div className="max-w-3xl mx-auto w-full mt-auto pt-6 border-t border-slate-200 sticky bottom-0 bg-white pb-4">
+        <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+          <MessageSquare className="w-4 h-4 text-indigo-500" />
+          Targeted Command (이 노트만 집중 업데이트)
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="e.g., '이 로직에 에러 핸들링 추가해줘'"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCommandSubmit()}
+            disabled={isUpdating}
+            className="flex-1 border border-slate-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          <button
+            onClick={handleCommandSubmit}
+            disabled={isUpdating || !command.trim()}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+          >
+            {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Update
+          </button>
         </div>
       </div>
     </div>

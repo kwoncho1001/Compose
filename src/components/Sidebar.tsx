@@ -24,7 +24,7 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
 
 export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, onSelectNote, onAddNote }) => {
   // Extract dynamic folders
-  const folders = Array.from(new Set((notes || []).map(n => n?.folder || 'Uncategorized'))).sort();
+  const folders = Array.from(new Set((notes || []).map(n => n?.folder || '미분류'))).sort();
 
   return (
     <div className="w-64 bg-slate-900 dark:bg-slate-950 text-slate-300 h-full flex flex-col border-r border-slate-800 transition-colors duration-200">
@@ -38,7 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
         <button 
           onClick={onAddNote}
           className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
-          title="Add New Note"
+          title="새 노트 추가"
         >
           <Plus className="w-4 h-4" />
         </button>
@@ -46,7 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
       
       <div className="flex-1 overflow-y-auto py-4">
         {(folders || []).map((folder, fIndex) => {
-          const folderNotes = (notes || []).filter((n) => (n?.folder || 'Uncategorized') === folder);
+          const folderNotes = (notes || []).filter((n) => (n?.folder || '미분류') === folder);
           if (folderNotes.length === 0) return null;
 
           return (
@@ -73,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
                         <StatusIcon status={note?.status || 'Planned'} />
                         <div className="flex flex-col flex-1 min-w-0">
                           <span className={`truncate ${isConflict ? 'text-red-400' : ''}`}>
-                            {note?.title || 'Untitled Note'}
+                            {note?.title || '제목 없음'}
                           </span>
                           {note?.summary && (
                             <span className="text-[10px] text-slate-500 truncate">
@@ -92,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
         })}
         {(!notes || notes.length === 0) && (
           <div className="px-4 text-sm text-slate-500 italic">
-            No notes generated yet.
+            생성된 노트가 없습니다.
           </div>
         )}
       </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { NoteEditor } from './NoteEditor';
 import { GCMViewer } from './GCMViewer';
+import { MindMap } from './MindMap';
 import { Note, GCM, AppState } from '../types';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -13,10 +14,11 @@ import {
   updateSingleNote,
   checkConsistency,
   consolidateNotes,
-  generateSubModules
+  generateSubModules,
+  generateNoteFromCode
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -46,6 +48,8 @@ export const Dashboard: React.FC = () => {
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
   const [showGcm, setShowGcm] = useState(false);
+  const [showSuggestion, setShowSuggestion] = useState(true);
+  const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -203,14 +207,14 @@ export const Dashboard: React.FC = () => {
 
   const handleAutoConsolidate = async (notesToUse?: Note[], gcmToUse?: GCM) => {
     setIsCheckingConsistency(true);
-    setProcessStatus({ message: 'Analyzing notes for consolidation...' });
+    setProcessStatus({ message: '노트 정리 분석 중...' });
     try {
       const { mergedNotes, removedNoteIds, updatedGcm } = await consolidateNotes(
         notesToUse || state.notes, 
         gcmToUse || state.gcm
       );
       
-      setProcessStatus({ message: 'Applying merged structure...' });
+      setProcessStatus({ message: '병합된 구조 적용 중...' });
       setState(prev => {
         const newNotes = [...prev.notes.filter(n => !removedNoteIds.includes(n.id)), ...mergedNotes];
         return {
@@ -221,7 +225,7 @@ export const Dashboard: React.FC = () => {
       });
       alert("불필요한 노트가 정리되었습니다.");
     } catch (e) {
-      alert(`Failed to consolidate notes: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`노트 정리 실패: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIsCheckingConsistency(false);
       setProcessStatus(null);
@@ -230,7 +234,7 @@ export const Dashboard: React.FC = () => {
 
   const handleGenerateSubModules = async (mainNote: Note) => {
     setIsDecomposing(true);
-    setProcessStatus({ message: `Generating sub-modules for ${mainNote.title}...` });
+    setProcessStatus({ message: `${mainNote.title}의 하위 모듈 생성 중...` });
     try {
       const { newNotes, updatedGcm } = await generateSubModules(mainNote, state.gcm, state.notes);
       
@@ -252,7 +256,7 @@ export const Dashboard: React.FC = () => {
       alert(`${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`);
     } catch (error) {
       console.error('Failed to generate sub-modules:', error);
-      alert(`Failed to generate sub-modules: ${error instanceof Error ? error.message : String(error)}`);
+      alert(`하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsDecomposing(false);
       setProcessStatus(null);
@@ -277,7 +281,7 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleDeleteNote = (noteId: string) => {
-    if (window.confirm('Are you sure you want to delete this note?')) {
+    if (window.confirm('이 노트를 삭제하시겠습니까?')) {
       setState(prev => ({
         ...prev,
         notes: prev.notes.filter(n => n.id !== noteId)
@@ -290,26 +294,32 @@ export const Dashboard: React.FC = () => {
 
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
-      alert('Please enter a GitHub repository URL.');
+      alert('GitHub 저장소 URL을 입력해주세요.');
       return;
     }
 
     setIsSyncing(true);
+    setProcessStatus({ message: 'GitHub 파일 목록 가져오는 중...' });
     try {
       const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
       const updatedNotes = [...state.notes];
       let conflictCount = 0;
+      const matchedFiles: string[] = [];
+
+      setProcessStatus({ message: '기존 노트와 대조 중...', current: 0, total: updatedNotes.length });
 
       for (let i = 0; i < updatedNotes.length; i++) {
+        setProcessStatus(prev => ({ ...prev!, current: i + 1 }));
         const note = updatedNotes[i];
-        if (note.status === 'Done') continue;
-
+        
+        // Find a matching file by title or keywords
         const keywords = note.title.toLowerCase().split(' ');
         const matchedFile = files.find((file) => 
           keywords.some(kw => kw.length > 3 && file.toLowerCase().includes(kw)) && !file.includes('node_modules')
         );
 
         if (matchedFile) {
+          matchedFiles.push(matchedFile);
           try {
             const content = await fetchGithubFileContent(state.githubRepo, matchedFile, state.githubToken);
             const { isMatch, reason } = await checkConflict(note.content, content);
@@ -330,22 +340,65 @@ export const Dashboard: React.FC = () => {
         }
       }
 
-      setState((prev) => ({ ...prev, notes: updatedNotes }));
+      // --- Auto-Discovery Flow ---
+      setProcessStatus({ message: '새로운 파일 탐색 중 (Auto-Discovery)...' });
       
-      const { suggestion } = await suggestNextSteps(updatedNotes, files);
+      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.py', '.go', '.java', '.c', '.cpp'];
+      const unmatchedFiles = files.filter(file => 
+        !matchedFiles.includes(file) && 
+        sourceExtensions.some(ext => file.endsWith(ext)) &&
+        !file.includes('node_modules') &&
+        !file.includes('.git') &&
+        !file.includes('dist') &&
+        !file.includes('build')
+      );
+
+      // Limit discovery to avoid hitting AI limits
+      const discoveryLimit = 10;
+      const filesToDiscover = unmatchedFiles.slice(0, discoveryLimit);
+      const discoveredNotes: Note[] = [];
+
+      if (filesToDiscover.length > 0) {
+        setProcessStatus({ message: '새로운 파일 분석 및 노트 생성 중...', current: 0, total: filesToDiscover.length });
+        
+        for (let i = 0; i < filesToDiscover.length; i++) {
+          const file = filesToDiscover[i];
+          setProcessStatus(prev => ({ ...prev!, current: i + 1 }));
+          
+          try {
+            const content = await fetchGithubFileContent(state.githubRepo, file, state.githubToken);
+            const noteData = await generateNoteFromCode(file, content, updatedNotes);
+            
+            const newNote: Note = {
+              ...noteData,
+              id: Math.random().toString(36).substr(2, 9),
+              status: 'Done', // Since it's discovered from code, it's already implemented
+            };
+            discoveredNotes.push(newNote);
+          } catch (e) {
+            console.error('Failed to discover note from file:', file, e);
+          }
+        }
+      }
+
+      const finalNotes = [...updatedNotes, ...discoveredNotes];
+      setState((prev) => ({ ...prev, notes: finalNotes }));
+      
+      const { suggestion } = await suggestNextSteps(finalNotes, files);
       setNextStepSuggestion(suggestion);
 
-      if (conflictCount > 0) {
-        alert(`Sync complete. Found ${conflictCount} conflict(s) between design and code.`);
-      } else {
-        alert('Sync complete. No conflicts found.');
-      }
+      let alertMsg = '동기화 완료.';
+      if (conflictCount > 0) alertMsg += ` ${conflictCount}개의 충돌을 발견했습니다.`;
+      if (discoveredNotes.length > 0) alertMsg += ` ${discoveredNotes.length}개의 새로운 노트를 자동으로 발견하여 생성했습니다.`;
+      
+      alert(alertMsg);
 
     } catch (error) {
       console.error('Failed to sync with GitHub:', error);
-      alert('Failed to sync with GitHub. Check console for details.');
+      alert('GitHub 동기화 실패. 콘솔에서 상세 내용을 확인하세요.');
     } finally {
       setIsSyncing(false);
+      setProcessStatus(null);
     }
   };
 
@@ -365,7 +418,7 @@ export const Dashboard: React.FC = () => {
         };
       });
     } catch (e) {
-      alert('Failed to refactor folders.');
+      alert('폴더 구조 재구성 실패.');
     } finally {
       setIsRefactoring(false);
     }
@@ -388,12 +441,12 @@ export const Dashboard: React.FC = () => {
       
       const conflictCount = Object.keys(conflicts).length;
       if (conflictCount > 0) {
-        alert(`Found ${conflictCount} consistency conflict(s). Check the red highlighted notes.`);
+        alert(`${conflictCount}개의 일관성 충돌을 발견했습니다. 빨간색으로 강조된 노트를 확인하세요.`);
       } else {
-        alert('No consistency conflicts found! Everything looks good.');
+        alert('일관성 충돌이 발견되지 않았습니다! 모든 것이 정상입니다.');
       }
     } catch (e) {
-      alert('Failed to check consistency.');
+      alert('일관성 검사 실패.');
     } finally {
       setIsCheckingConsistency(false);
     }
@@ -449,8 +502,8 @@ export const Dashboard: React.FC = () => {
             return {
               ...n,
               consistencyConflict: {
-                description: `This note might be affected by recent changes to "${updatedNote.title}".`,
-                suggestion: "Please review this note to ensure it aligns with the updated GCM and logic."
+                description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
+                suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
               }
             };
           }
@@ -485,7 +538,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex-1 max-w-2xl flex items-center gap-2">
               <input
                 type="text"
-                placeholder="Enter a feature you want to build (e.g., 'Login system')"
+                placeholder="구축하고 싶은 기능을 입력하세요 (예: '로그인 시스템')"
                 value={featureInput}
                 onChange={(e) => setFeatureInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
@@ -498,37 +551,44 @@ export const Dashboard: React.FC = () => {
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {isDecomposing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Decompose
+                기능 분해
               </button>
             </div>
 
             <div className="flex items-center gap-4 ml-8">
               <button
-                onClick={() => setShowGcm(!showGcm)}
-                className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                title={showGcm ? "Hide GCM" : "Show GCM"}
+                onClick={() => setViewMode(viewMode === 'editor' ? 'mindmap' : 'editor')}
+                className={`p-2 rounded-full transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                title={viewMode === 'mindmap' ? "에디터 보기" : "마인드맵 보기"}
               >
-                <Database className="w-4 h-4" />
+                <Layers className="w-4 h-4" />
               </button>
               <button
-                onClick={() => setDarkMode(!darkMode)}
-                className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
-                title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+                onClick={() => setShowSuggestion(!showSuggestion)}
+                className={`p-2 rounded-full transition-colors ${showSuggestion && nextStepSuggestion ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                title={showSuggestion ? "제안 숨기기" : "제안 보기"}
               >
-                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                <Lightbulb className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setShowGcm(!showGcm)}
+                className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                title={showGcm ? "GCM 숨기기" : "GCM 보기"}
+              >
+                <Database className="w-4 h-4" />
               </button>
               <div className="flex items-center gap-2 border-r border-slate-200 dark:border-slate-700 pr-4">
                 <button
                   onClick={handleExport}
                   className="text-slate-600 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
-                  title="Export Project"
+                  title="프로젝트 내보내기"
                 >
                   <Download className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="text-slate-600 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
-                  title="Import Project"
+                  title="프로젝트 가져오기"
                 >
                   <Upload className="w-4 h-4" />
                 </button>
@@ -543,14 +603,14 @@ export const Dashboard: React.FC = () => {
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="GitHub Repo URL"
+                  placeholder="GitHub 레포지토리 URL"
                   value={state.githubRepo}
                   onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
                   className="w-48 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
                 />
                 <input
                   type="password"
-                  placeholder="PAT (Optional)"
+                  placeholder="PAT (선택 사항)"
                   value={state.githubToken}
                   onChange={(e) => setState({ ...state, githubToken: e.target.value })}
                   className="w-32 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
@@ -562,7 +622,7 @@ export const Dashboard: React.FC = () => {
                 className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
               >
                 {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Github className="w-4 h-4" />}
-                Sync with GitHub
+                GitHub와 동기화
               </button>
             </div>
           </div>
@@ -574,7 +634,7 @@ export const Dashboard: React.FC = () => {
               className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
             >
               <FileUp className="w-3 h-3" />
-              Upload Text Files (.md, .txt)
+              텍스트 파일 업로드 (.md, .txt)
             </button>
             <input
               type="file"
@@ -590,7 +650,7 @@ export const Dashboard: React.FC = () => {
               className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <Merge className="w-3 h-3" />}
-              Consolidate Notes
+              노트 통합
             </button>
             <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
@@ -599,7 +659,7 @@ export const Dashboard: React.FC = () => {
               className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isRefactoring ? <Loader2 className="w-3 h-3 animate-spin" /> : <FolderTree className="w-3 h-3" />}
-              Refactor Folders
+              폴더 구조 재구축
             </button>
             <button
               onClick={handleCheckConsistency}
@@ -607,17 +667,26 @@ export const Dashboard: React.FC = () => {
               className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />}
-              Check Consistency
+              일관성 검사
             </button>
           </div>
         </header>
 
         {/* Next Step Suggestion Banner */}
-        {nextStepSuggestion && (
-          <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/50 p-3 flex items-start gap-3">
+        {nextStepSuggestion && showSuggestion && (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/50 p-4 flex items-start gap-3 max-h-48 overflow-y-auto relative group">
             <Lightbulb className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-amber-800 dark:text-amber-200">
-              <strong className="block font-semibold mb-1">Next Step Suggestion</strong>
+            <div className="text-sm text-amber-800 dark:text-amber-200 flex-1">
+              <div className="flex items-center justify-between mb-2">
+                <strong className="font-semibold">다음 단계 제안</strong>
+                <button 
+                  onClick={() => setShowSuggestion(false)}
+                  className="p-1 hover:bg-amber-200 dark:hover:bg-amber-800 rounded-md transition-colors"
+                  title="닫기"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
               <div className="prose prose-sm prose-amber dark:prose-invert max-w-none">
                 <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
               </div>
@@ -635,7 +704,7 @@ export const Dashboard: React.FC = () => {
             {processStatus.current !== undefined && processStatus.total !== undefined && (
               <div className="flex items-center gap-4">
                 <div className="text-xs font-mono bg-indigo-500 px-2 py-1 rounded">
-                  {processStatus.current} / {processStatus.total} Files
+                  {processStatus.current} / {processStatus.total} 파일
                 </div>
                 <div className="w-48 h-2 bg-indigo-800 rounded-full overflow-hidden">
                   <div 
@@ -648,9 +717,19 @@ export const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Note Editor */}
+        {/* Center Content Area */}
         <div className="flex-1 overflow-hidden flex">
-          {selectedNote ? (
+          {viewMode === 'mindmap' ? (
+            <MindMap 
+              notes={state.notes} 
+              onSelectNote={(id) => {
+                setSelectedNoteId(id);
+                setViewMode('editor');
+              }}
+              selectedNoteId={selectedNoteId}
+              darkMode={darkMode}
+            />
+          ) : selectedNote ? (
             <NoteEditor 
               note={selectedNote} 
               allNotes={state.notes}
@@ -666,9 +745,9 @@ export const Dashboard: React.FC = () => {
                 <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-500 dark:text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                   <RefreshCw className="w-8 h-8" />
                 </div>
-                <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Welcome to Vibe-Architect</h2>
+                <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Vibe-Architect에 오신 것을 환영합니다</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Enter a feature idea in the top bar to automatically decompose it into modular notes, update the Global Context Map, and sync with your GitHub repository.
+                  상단 바에 기능 아이디어를 입력하면 자동으로 모듈형 노트로 분해하고, 글로벌 컨텍스트 맵을 업데이트하며, GitHub 저장소와 동기화합니다.
                 </p>
               </div>
             </div>

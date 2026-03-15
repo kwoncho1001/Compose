@@ -17,10 +17,10 @@ export const GCMViewer: React.FC<GCMViewerProps> = ({ gcm }) => {
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 z-10">
         <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
           <Database className="w-5 h-5 text-emerald-500" />
-          Global Context Map
+          글로벌 컨텍스트 맵
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Ensures consistency across all notes and code.
+          모든 노트와 코드 간의 일관성을 보장합니다.
         </p>
       </div>
 
@@ -29,10 +29,10 @@ export const GCMViewer: React.FC<GCMViewerProps> = ({ gcm }) => {
         <div>
           <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
             <Link className="w-4 h-4" />
-            Entities
+            엔티티
           </h3>
           {Object.keys(entities).length === 0 ? (
-            <p className="text-sm text-slate-400 italic">No entities defined.</p>
+            <p className="text-sm text-slate-400 italic">정의된 엔티티가 없습니다.</p>
           ) : (
             <div className="space-y-4">
               {Object.values(entities).map((entity) => (
@@ -62,10 +62,10 @@ export const GCMViewer: React.FC<GCMViewerProps> = ({ gcm }) => {
         <div>
           <h3 className="text-sm font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
             <Hash className="w-4 h-4" />
-            Global Variables
+            전역 변수
           </h3>
           {Object.keys(variables).length === 0 ? (
-            <p className="text-sm text-slate-400 italic">No variables defined.</p>
+            <p className="text-sm text-slate-400 italic">정의된 변수가 없습니다.</p>
           ) : (
             <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
               {Object.entries(variables).map(([key, value], index) => (

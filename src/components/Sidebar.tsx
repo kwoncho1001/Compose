@@ -1,5 +1,5 @@
 import React from 'react';
-import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus } from 'lucide-react';
+import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus, ShieldAlert, X, PanelLeft, PanelRight } from 'lucide-react';
 import { Note } from '../types';
 
 interface SidebarProps {
@@ -17,6 +17,10 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
       return <Clock className="w-4 h-4 text-amber-500" />;
     case 'Conflict':
       return <AlertTriangle className="w-4 h-4 text-red-500" />;
+    case 'Review-Required':
+      return <ShieldAlert className="w-4 h-4 text-indigo-500" />;
+    case 'Deprecated':
+      return <X className="w-4 h-4 text-slate-500" />;
     default:
       return <Circle className="w-4 h-4 text-slate-400" />;
   }

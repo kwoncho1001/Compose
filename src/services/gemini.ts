@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { Note, GCM, NoteStatus } from "../types";
+import { Note, GCM, NoteStatus, GCMEntity } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -618,5 +618,163 @@ Return JSON:
   return {
     newNotes: result.newNotes || [],
     updatedGcm: result.updatedGcm || currentGcm
+  };
+};
+
+export const suggestGcmUpdates = async (
+  notes: Note[],
+  currentGcm: GCM
+): Promise<{ suggestedEntities: GCMEntity[]; suggestedVariables: Record<string, string> }> => {
+  const prompt = `
+당신은 시스템 아키텍트입니다. 현재 작성된 모든 노트들을 분석하여 공통적으로 사용되는 엔티티(Entity)나 전역 변수를 추출하여 GCM(Global Context Map)에 등록할 것을 제안하십시오.
+
+현재 GCM:
+${JSON.stringify(currentGcm, null, 2)}
+
+노트 요약 및 내용 일부:
+${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, summary: n.summary, content: n.content.slice(0, 500) })), null, 2)}
+
+작업:
+1. 여러 노트에서 공통으로 언급되는 데이터 구조나 객체를 찾아 엔티티로 정의합니다.
+2. 시스템 전반에서 공유되어야 할 설정값이나 상태를 찾아 전역 변수로 정의합니다.
+3. 기존 GCM과 중복되지 않는 새로운 제안만 포함하십시오.
+
+Return JSON:
+{
+  "suggestedEntities": [ { "name": "...", "type": "...", "description": "...", "properties": { "prop1": "type" } } ],
+  "suggestedVariables": { "VAR_NAME": "description/value" }
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return safeJsonParse(response.text || '{"suggestedEntities": [], "suggestedVariables": {}}');
+};
+
+export const detectMissingLinks = async (
+  notes: Note[]
+): Promise<{ suggestedLinks: { fromId: string; toId: string; reason: string }[] }> => {
+  const prompt = `
+당신은 그래프 분석 전문가입니다. 마인드맵 상에서 논리적 연결(relatedNoteIds)이 부족하거나 고립된 노드(Orphan Node)를 찾아 관계 형성을 추천하십시오.
+
+노트 목록:
+${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, summary: n.summary, relatedNoteIds: n.relatedNoteIds || [] })), null, 2)}
+
+작업:
+1. 기능적으로 연관이 있어 보이지만 연결되지 않은 노드 쌍을 찾습니다.
+2. 고립된 노드가 있다면 적절한 부모나 관련 노드를 찾아 연결을 제안합니다.
+
+Return JSON:
+{
+  "suggestedLinks": [ { "fromId": "...", "toId": "...", "reason": "한국어 이유" } ]
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return safeJsonParse(response.text || '{"suggestedLinks": []}');
+};
+
+/**
+ * 프로젝트 내에서 빈번하게 참조되는 노트를 분석하여 'Shared Core'로 격상할 것을 제안합니다.
+ */
+export const analyzeSharedCore = async (notes: Note[]): Promise<{ suggestedPromotions: { noteId: string; reason: string }[] }> => {
+  const prompt = `
+당신은 아키텍처 분석가입니다. 다음 노트들의 연결 관계(relatedNoteIds)를 분석하여, 여러 다른 노트들로부터 빈번하게 참조되는(In-degree가 높은) 노트를 찾아 'Shared Core' 모듈로 격상할 것을 제안하세요.
+공통 유틸리티, 인증 로직, 전역 상태 관리, 공통 UI 컴포넌트 등이 대상입니다.
+
+노트 목록:
+${notes.map(n => `- ID: ${n.id}, 제목: ${n.title}, 폴더: ${n.folder}, 참조하는노트들: ${n.relatedNoteIds?.join(', ') || '없음'}`).join('\n')}
+
+출력 형식 (JSON):
+{
+  "suggestedPromotions": [
+    { "noteId": "노트ID", "reason": "격상 제안 이유 (예: 5개의 서로 다른 기능에서 참조됨)" }
+  ]
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return safeJsonParse(response.text || '{"suggestedPromotions": []}');
+};
+
+/**
+ * 디자인 명세와 코드를 지능적으로 병합합니다.
+ */
+export const partialMerge = async (spec: string, code: string): Promise<string> => {
+  const prompt = `
+디자인 명세와 실제 구현 코드 사이의 충돌이 발생했습니다. 두 내용을 지능적으로 병합하여 최적의 명세를 만드세요.
+디자인 명세:
+${spec}
+
+구현 코드:
+${code}
+
+작업:
+1. 코드에서 구현된 실제 로직과 변수명을 명세에 반영하세요.
+2. 명세에만 있는 중요한 비즈니스 로직이나 주석은 유지하세요.
+3. GCM 변수와 일치하지 않는 부분이 있다면 코드의 구현을 우선하되 명세에 기록하세요.
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: { systemInstruction }
+  });
+
+  return response.text || spec;
+};
+
+/**
+ * YAML 메타데이터의 유효성을 검사합니다.
+ */
+export const validateYamlMetadata = (content: string): { isValid: boolean; errors: string[] } => {
+  const errors: string[] = [];
+  const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  
+  if (!yamlMatch) {
+    return { isValid: true, errors: [] }; // 메타데이터가 없는 것은 허용
+  }
+
+  const yamlStr = yamlMatch[1];
+  const lines = yamlStr.split('\n');
+  
+  // 간단한 키-값 쌍 검사
+  lines.forEach((line, index) => {
+    if (line.trim() && !line.includes(':')) {
+      errors.push(`Line ${index + 1}: 올바른 YAML 형식이 아닙니다 (키: 값 형식이 필요함)`);
+    }
+  });
+
+  // 필수 필드 체크 (예시: status)
+  if (!yamlStr.includes('status:')) {
+    errors.push("필수 필드 'status'가 누락되었습니다.");
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
   };
 };

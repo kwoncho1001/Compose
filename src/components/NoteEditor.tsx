@@ -4,8 +4,10 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Note } from '../types';
-import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff } from 'lucide-react';
-import { updateSpecFromCode, generateFixGuide } from '../services/gemini';
+import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge } from 'lucide-react';
+import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge } from '../services/gemini';
+import { Button } from './common/Button';
+import { Input } from './common/Input';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -29,6 +31,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingSub, setIsGeneratingSub] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [yamlErrors, setYamlErrors] = useState<string[]>([]);
   
   // Local state for manual editing
   const [editData, setEditData] = useState<{
@@ -127,7 +130,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
 
   const onYamlChange = useCallback((value: string) => {
     setEditData(prev => ({ ...prev, yamlMetadata: value }));
+    const validation = validateYamlMetadata(value);
+    setYamlErrors(validation.errors);
   }, []);
+
+  const handlePartialMerge = async () => {
+    if (!note.conflictInfo) return;
+    setIsResolving(true);
+    try {
+      const newContent = await partialMerge(note.content, note.conflictInfo.fileContent);
+      onUpdateNote({ ...note, content: newContent, status: 'Done', conflictInfo: undefined });
+    } catch (e) {
+      alert('병합에 실패했습니다.');
+    } finally {
+      setIsResolving(false);
+    }
+  };
 
   return (
     <div className="flex-1 bg-white dark:bg-slate-950 overflow-y-auto p-8 border-r border-slate-200 dark:border-slate-800 flex flex-col">
@@ -145,24 +163,27 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
               />
             </div>
             <div className="flex items-center gap-3">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={async () => {
                   setIsGeneratingSub(true);
                   await onGenerateSubModules(note);
                   setIsGeneratingSub(false);
                 }}
-                disabled={isGeneratingSub}
-                className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 px-3 py-1.5 rounded-md text-sm font-bold hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors disabled:opacity-50"
+                isLoading={isGeneratingSub}
+                icon={<Layers className="w-4 h-4" />}
               >
-                {isGeneratingSub ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
                 하위 모듈 생성
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={handleSaveManual}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                icon={<Save className="w-4 h-4" />}
               >
-                <Save className="w-4 h-4" /> 저장
-              </button>
+                저장
+              </Button>
               <button
                 onClick={() => onDeleteNote(note.id)}
                 className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all"
@@ -182,6 +203,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                   <option value="In-Progress">진행 중</option>
                   <option value="Done">완료</option>
                   <option value="Conflict">충돌</option>
+                  <option value="Review-Required">검토 필요</option>
+                  <option value="Deprecated">폐기됨</option>
                 </select>
               </div>
             </div>
@@ -271,6 +294,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                   {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   설계가 맞습니다 (수정 가이드 생성)
                 </button>
+                <button
+                  onClick={handlePartialMerge}
+                  disabled={isResolving}
+                  className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Merge className="w-4 h-4" />}
+                  지능형 부분 병합 (AI 추천)
+                </button>
               </div>
             )}
           </div>
@@ -295,8 +326,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
           <h2 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
             <Activity className="w-4 h-4" />
             메타데이터 (YAML)
+            {yamlErrors.length > 0 && <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">오류 {yamlErrors.length}</span>}
           </h2>
-          <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500 transition-all">
+          <div className={`border rounded-lg overflow-hidden transition-all ${yamlErrors.length > 0 ? 'border-red-500 ring-1 ring-red-500' : 'border-slate-200 dark:border-slate-800 focus-within:ring-2 focus-within:ring-indigo-500'}`}>
             <CodeMirror
               value={editData.yamlMetadata}
               height="150px"
@@ -306,6 +338,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
               className="text-xs"
             />
           </div>
+          {yamlErrors.map((err, i) => (
+            <p key={i} className="text-[10px] text-red-500 mt-1 ml-1">{err}</p>
+          ))}
         </div>
 
         {/* Related Notes (Graph Connections) */}
@@ -403,23 +438,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
           집중 업데이트 (이 노트만 집중 업데이트)
         </label>
         <div className="flex gap-2">
-          <input
-            type="text"
+          <Input
             placeholder="e.g., '이 로직에 에러 핸들링 추가해줘'"
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleCommandSubmit()}
             disabled={isUpdating}
-            className="flex-1 border border-slate-300 dark:border-slate-700 bg-transparent dark:text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1"
           />
-          <button
+          <Button
             onClick={handleCommandSubmit}
-            disabled={isUpdating || !command.trim()}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+            disabled={!command.trim()}
+            isLoading={isUpdating}
+            icon={<Send className="w-4 h-4" />}
           >
-            {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             업데이트
-          </button>
+          </Button>
         </div>
       </div>
     </div>

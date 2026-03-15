@@ -1,4 +1,4 @@
-export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict';
+export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required';
 
 export interface Note {
   id: string;

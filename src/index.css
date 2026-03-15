@@ -1,2 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@import "katex/dist/katex.min.css";
+
+@layer base {
+  body {
+    @apply transition-colors duration-200;
+  }
+}
+
+.dark {
+  color-scheme: dark;
+}

@@ -22,16 +22,16 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
   }
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ notes, selectedNoteId, onSelectNote, onAddNote }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, onSelectNote, onAddNote }) => {
   // Extract dynamic folders
-  const folders = Array.from(new Set(notes.map(n => n.folder || 'Uncategorized'))).sort();
+  const folders = Array.from(new Set((notes || []).map(n => n?.folder || 'Uncategorized'))).sort();
 
   return (
-    <div className="w-64 bg-slate-900 text-slate-300 h-full flex flex-col border-r border-slate-800">
+    <div className="w-64 bg-slate-900 dark:bg-slate-950 text-slate-300 h-full flex flex-col border-r border-slate-800 transition-colors duration-200">
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
         <h1 className="text-xl font-bold text-white flex items-center gap-2">
           <div className="w-6 h-6 bg-indigo-500 rounded-md flex items-center justify-center">
-            <span className="text-white text-xs">VA</span>
+            <span className="text-white text-xs font-bold">VA</span>
           </div>
           Vibe-Architect
         </h1>
@@ -45,36 +45,42 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes, selectedNoteId, onSelec
       </div>
       
       <div className="flex-1 overflow-y-auto py-4">
-        {folders.map((folder) => {
-          const folderNotes = notes.filter((n) => (n.folder || 'Uncategorized') === folder);
+        {(folders || []).map((folder, fIndex) => {
+          const folderNotes = (notes || []).filter((n) => (n?.folder || 'Uncategorized') === folder);
           if (folderNotes.length === 0) return null;
 
           return (
-            <div key={folder} className="mb-6">
+            <div key={folder || `folder-${fIndex}`} className="mb-6">
               <div className="px-4 mb-2 flex items-center gap-2 text-slate-400 uppercase text-xs font-semibold tracking-wider">
                 <Folder className="w-4 h-4" />
                 {folder}
               </div>
               <ul className="space-y-0.5">
-                {folderNotes.map((note) => {
-                  const hasConsistencyConflict = !!note.consistencyConflict;
-                  const isConflict = note.status === 'Conflict' || hasConsistencyConflict;
+                {folderNotes.map((note, nIndex) => {
+                  const hasConsistencyConflict = !!note?.consistencyConflict;
+                  const isConflict = note?.status === 'Conflict' || hasConsistencyConflict;
                   
                   return (
-                    <li key={note.id}>
+                    <li key={note?.id || `note-${nIndex}`}>
                       <button
-                        onClick={() => onSelectNote(note.id)}
+                        onClick={() => note?.id && onSelectNote(note.id)}
                         className={`w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors ${
-                          selectedNoteId === note.id
+                          selectedNoteId === note?.id
                             ? 'bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500'
                             : 'hover:bg-slate-800 hover:text-slate-200'
                         }`}
                       >
-                        <StatusIcon status={note.status} />
-                        <span className={`truncate flex-1 ${isConflict ? 'text-red-400' : ''}`}>
-                          {note.title}
-                        </span>
-                        {note.isMainFeature && <Star className="w-3 h-3 text-amber-400" />}
+                        <StatusIcon status={note?.status || 'Planned'} />
+                        <div className="flex flex-col flex-1 min-w-0">
+                          <span className={`truncate ${isConflict ? 'text-red-400' : ''}`}>
+                            {note?.title || 'Untitled Note'}
+                          </span>
+                          {note?.summary && (
+                            <span className="text-[10px] text-slate-500 truncate">
+                              {note.summary}
+                            </span>
+                          )}
+                        </div>
                         {hasConsistencyConflict && <AlertTriangle className="w-3 h-3 text-red-500" />}
                       </button>
                     </li>
@@ -84,7 +90,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes, selectedNoteId, onSelec
             </div>
           );
         })}
-        {notes.length === 0 && (
+        {(!notes || notes.length === 0) && (
           <div className="px-4 text-sm text-slate-500 italic">
             No notes generated yet.
           </div>

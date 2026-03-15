@@ -16,7 +16,9 @@ import {
   generateSubModules
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database } from 'lucide-react';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 
 export const Dashboard: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -27,6 +29,13 @@ export const Dashboard: React.FC = () => {
   });
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('vibe-architect-theme') === 'dark' || 
+             (!localStorage.getItem('vibe-architect-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
   
   // Loading states
   const [isDecomposing, setIsDecomposing] = useState(false);
@@ -36,6 +45,7 @@ export const Dashboard: React.FC = () => {
   const [processStatus, setProcessStatus] = useState<{ message: string; current?: number; total?: number } | null>(null);
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
+  const [showGcm, setShowGcm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,7 +55,20 @@ export const Dashboard: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.notes) setState(parsed);
+        if (parsed.notes) {
+          // General logic: Ensure child notes are in the same folder as their parents
+          const notesMap = new Map<string, Note>(parsed.notes.map((n: Note) => [n.id, n]));
+          const fixedNotes = parsed.notes.map((n: Note) => {
+            if (n.parentNoteId) {
+              const parent = notesMap.get(n.parentNoteId);
+              if (parent && parent.folder !== n.folder) {
+                return { ...n, folder: parent.folder };
+              }
+            }
+            return n;
+          });
+          setState({ ...parsed, notes: fixedNotes });
+        }
       } catch (e) {
         console.error('Failed to load state from localStorage', e);
       }
@@ -56,6 +79,16 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('vibe-architect-state', JSON.stringify(state));
   }, [state]);
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('vibe-architect-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('vibe-architect-theme', 'light');
+    }
+  }, [darkMode]);
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -107,9 +140,10 @@ export const Dashboard: React.FC = () => {
           existingNotesMap.set(un.id, un);
         });
 
+        const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotesWithIds];
         return {
           ...prev,
-          notes: [...Array.from(existingNotesMap.values()), ...newNotesWithIds],
+          notes: alignChildFolders(combinedNotes),
           gcm: updatedGcm,
         };
       });
@@ -144,8 +178,8 @@ export const Dashboard: React.FC = () => {
           id: Math.random().toString(36).substr(2, 9),
           title: title,
           folder: 'Imported',
-          userView: content,
-          aiSpec: '## Technical Specification\nImported from file.',
+          content: content,
+          summary: `Imported from ${file.name}`,
           status: 'Planned',
           yamlMetadata: `type: imported\nsource: ${file.name}`
         };
@@ -177,11 +211,14 @@ export const Dashboard: React.FC = () => {
       );
       
       setProcessStatus({ message: 'Applying merged structure...' });
-      setState(prev => ({
-        ...prev,
-        notes: [...prev.notes.filter(n => !removedNoteIds.includes(n.id)), ...mergedNotes],
-        gcm: updatedGcm
-      }));
+      setState(prev => {
+        const newNotes = [...prev.notes.filter(n => !removedNoteIds.includes(n.id)), ...mergedNotes];
+        return {
+          ...prev,
+          notes: alignChildFolders(newNotes),
+          gcm: updatedGcm
+        };
+      });
       alert("불필요한 노트가 정리되었습니다.");
     } catch (e) {
       alert(`Failed to consolidate notes: ${e instanceof Error ? e.message : String(e)}`);
@@ -203,11 +240,14 @@ export const Dashboard: React.FC = () => {
         status: 'Planned' as const,
       }));
 
-      setState(prev => ({
-        ...prev,
-        notes: [...prev.notes, ...newNotesWithIds],
-        gcm: updatedGcm
-      }));
+      setState(prev => {
+        const newNotes = [...prev.notes, ...newNotesWithIds];
+        return {
+          ...prev,
+          notes: alignChildFolders(newNotes),
+          gcm: updatedGcm
+        };
+      });
       
       alert(`${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`);
     } catch (error) {
@@ -222,12 +262,12 @@ export const Dashboard: React.FC = () => {
   const handleAddNote = () => {
     const newNote: Note = {
       id: Math.random().toString(36).substr(2, 9),
-      title: 'New Note',
-      folder: 'Uncategorized',
-      userView: '# New Note\nDescribe the feature here.',
-      aiSpec: '## Technical Specification\nDefine technical details here.',
+      title: '새 노트',
+      folder: '미분류',
+      content: '# 새 노트\n여기에 기능을 설명하세요.',
+      summary: '새로운 기능 설명',
       status: 'Planned',
-      yamlMetadata: 'type: feature\nstatus: planned'
+      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
     };
     setState(prev => ({
       ...prev,
@@ -272,7 +312,7 @@ export const Dashboard: React.FC = () => {
         if (matchedFile) {
           try {
             const content = await fetchGithubFileContent(state.githubRepo, matchedFile, state.githubToken);
-            const { isMatch, reason } = await checkConflict(note.aiSpec, content);
+            const { isMatch, reason } = await checkConflict(note.content, content);
 
             if (isMatch) {
               updatedNotes[i] = { ...note, status: 'Done', conflictInfo: undefined };
@@ -314,13 +354,16 @@ export const Dashboard: React.FC = () => {
     setIsRefactoring(true);
     try {
       const mapping = await refactorFolders(state.notes);
-      setState(prev => ({
-        ...prev,
-        notes: prev.notes.map(n => ({
+      setState(prev => {
+        const newNotes = prev.notes.map(n => ({
           ...n,
           folder: mapping[n.id] || n.folder
-        }))
-      }));
+        }));
+        return {
+          ...prev,
+          notes: alignChildFolders(newNotes)
+        };
+      });
     } catch (e) {
       alert('Failed to refactor folders.');
     } finally {
@@ -356,11 +399,32 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const alignChildFolders = (notes: Note[]): Note[] => {
+    const notesMap = new Map<string, Note>(notes.map(n => [n.id, n]));
+    let changed = false;
+    const fixedNotes = notes.map(n => {
+      if (n.parentNoteId) {
+        const parent = notesMap.get(n.parentNoteId);
+        if (parent && parent.folder !== n.folder) {
+          changed = true;
+          return { ...n, folder: parent.folder };
+        }
+      }
+      return n;
+    });
+    // Recursive check in case of deep nesting
+    if (changed) return alignChildFolders(fixedNotes);
+    return fixedNotes;
+  };
+
   const handleUpdateNote = (updatedNote: Note) => {
-    setState((prev) => ({
-      ...prev,
-      notes: prev.notes.map((n) => (n.id === updatedNote.id ? updatedNote : n)),
-    }));
+    setState((prev) => {
+      const newNotes = prev.notes.map((n) => (n.id === updatedNote.id ? updatedNote : n));
+      return {
+        ...prev,
+        notes: alignChildFolders(newNotes),
+      };
+    });
   };
 
   const handleTargetedUpdate = async (noteId: string, command: string) => {
@@ -402,7 +466,7 @@ export const Dashboard: React.FC = () => {
   const selectedNote = state.notes.find((n) => n.id === selectedNoteId) || null;
 
   return (
-    <div className="flex h-screen bg-slate-100 font-sans overflow-hidden">
+    <div className="flex h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden transition-colors duration-200">
       {/* Sidebar */}
       <Sidebar
         notes={state.notes}
@@ -414,7 +478,7 @@ export const Dashboard: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Navigation / Input Area */}
-        <header className="bg-white border-b border-slate-200 p-4 shadow-sm z-10 flex flex-col gap-4">
+        <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-4 shadow-sm z-10 flex flex-col gap-4 transition-colors duration-200">
           
           {/* Top Row: Input & Global Actions */}
           <div className="flex items-center justify-between">
@@ -425,7 +489,7 @@ export const Dashboard: React.FC = () => {
                 value={featureInput}
                 onChange={(e) => setFeatureInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
-                className="flex-1 border border-slate-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="flex-1 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent dark:text-white"
                 disabled={isDecomposing}
               />
               <button
@@ -439,7 +503,21 @@ export const Dashboard: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4 ml-8">
-              <div className="flex items-center gap-2 border-r border-slate-200 pr-4">
+              <button
+                onClick={() => setShowGcm(!showGcm)}
+                className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                title={showGcm ? "Hide GCM" : "Show GCM"}
+              >
+                <Database className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+                title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+              >
+                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+              <div className="flex items-center gap-2 border-r border-slate-200 dark:border-slate-700 pr-4">
                 <button
                   onClick={handleExport}
                   className="text-slate-600 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
@@ -468,14 +546,14 @@ export const Dashboard: React.FC = () => {
                   placeholder="GitHub Repo URL"
                   value={state.githubRepo}
                   onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
-                  className="w-48 border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  className="w-48 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
                 />
                 <input
                   type="password"
                   placeholder="PAT (Optional)"
                   value={state.githubToken}
                   onChange={(e) => setState({ ...state, githubToken: e.target.value })}
-                  className="w-32 border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  className="w-32 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
                 />
               </div>
               <button
@@ -493,7 +571,7 @@ export const Dashboard: React.FC = () => {
           <div className="flex items-center gap-3">
             <button
               onClick={() => textFileInputRef.current?.click()}
-              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
+              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
             >
               <FileUp className="w-3 h-3" />
               Upload Text Files (.md, .txt)
@@ -509,16 +587,16 @@ export const Dashboard: React.FC = () => {
             <button
               onClick={() => handleAutoConsolidate()}
               disabled={isCheckingConsistency || state.notes.length === 0}
-              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <Merge className="w-3 h-3" />}
               Consolidate Notes
             </button>
-            <div className="h-4 w-px bg-slate-200 mx-1" />
+            <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={handleRefactorFolders}
               disabled={isRefactoring || state.notes.length === 0}
-              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isRefactoring ? <Loader2 className="w-3 h-3 animate-spin" /> : <FolderTree className="w-3 h-3" />}
               Refactor Folders
@@ -526,7 +604,7 @@ export const Dashboard: React.FC = () => {
             <button
               onClick={handleCheckConsistency}
               disabled={isCheckingConsistency || state.notes.length === 0}
-              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
             >
               {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />}
               Check Consistency
@@ -536,12 +614,12 @@ export const Dashboard: React.FC = () => {
 
         {/* Next Step Suggestion Banner */}
         {nextStepSuggestion && (
-          <div className="bg-amber-50 border-b border-amber-200 p-3 flex items-start gap-3">
+          <div className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800/50 p-3 flex items-start gap-3">
             <Lightbulb className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-amber-800">
+            <div className="text-sm text-amber-800 dark:text-amber-200">
               <strong className="block font-semibold mb-1">Next Step Suggestion</strong>
-              <div className="prose prose-sm prose-amber max-w-none">
-                <Markdown remarkPlugins={[remarkGfm]}>{nextStepSuggestion}</Markdown>
+              <div className="prose prose-sm prose-amber dark:prose-invert max-w-none">
+                <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
               </div>
             </div>
           </div>
@@ -575,19 +653,21 @@ export const Dashboard: React.FC = () => {
           {selectedNote ? (
             <NoteEditor 
               note={selectedNote} 
+              allNotes={state.notes}
               onUpdateNote={handleUpdateNote} 
               onTargetedUpdate={handleTargetedUpdate}
               onGenerateSubModules={handleGenerateSubModules}
               onDeleteNote={handleDeleteNote}
+              darkMode={darkMode}
             />
           ) : (
-            <div className="flex-1 flex items-center justify-center bg-slate-50 text-slate-400">
+            <div className="flex-1 flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-400 transition-colors duration-200">
               <div className="text-center max-w-md p-6">
-                <div className="w-16 h-16 bg-indigo-100 text-indigo-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-500 dark:text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                   <RefreshCw className="w-8 h-8" />
                 </div>
-                <h2 className="text-xl font-semibold text-slate-700 mb-2">Welcome to Vibe-Architect</h2>
-                <p className="text-sm text-slate-500">
+                <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Welcome to Vibe-Architect</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
                   Enter a feature idea in the top bar to automatically decompose it into modular notes, update the Global Context Map, and sync with your GitHub repository.
                 </p>
               </div>
@@ -597,7 +677,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* GCM Viewer */}
-      <GCMViewer gcm={state.gcm} />
+      {showGcm && <GCMViewer gcm={state.gcm} />}
     </div>
   );
 };

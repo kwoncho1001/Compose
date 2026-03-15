@@ -4,8 +4,9 @@ export interface Note {
   id: string;
   title: string;
   folder: string;
-  userView: string;
-  aiSpec: string;
+  content: string;
+  summary: string;
+  parentNoteId?: string;
   status: NoteStatus;
   githubLink?: string;
   yamlMetadata: string;

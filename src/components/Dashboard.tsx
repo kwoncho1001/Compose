@@ -3,16 +3,20 @@ import { Sidebar } from './Sidebar';
 import { NoteEditor } from './NoteEditor';
 import { GCMViewer } from './GCMViewer';
 import { Note, GCM, AppState } from '../types';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { 
   decomposeFeature, 
   suggestNextSteps, 
   checkConflict, 
   refactorFolders,
   updateSingleNote,
-  checkConsistency
+  checkConsistency,
+  consolidateNotes,
+  generateSubModules
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers } from 'lucide-react';
 
 export const Dashboard: React.FC = () => {
   const [state, setState] = useState<AppState>({
@@ -29,9 +33,11 @@ export const Dashboard: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isRefactoring, setIsRefactoring] = useState(false);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
+  const [processStatus, setProcessStatus] = useState<{ message: string; current?: number; total?: number } | null>(null);
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textFileInputRef = useRef<HTMLInputElement>(null);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -84,30 +90,161 @@ export const Dashboard: React.FC = () => {
     if (!featureInput.trim()) return;
 
     setIsDecomposing(true);
+    setProcessStatus({ message: 'Analyzing feature request...' });
     try {
-      const { newNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm);
+      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes);
       
-      const notesWithIds = newNotes.map((n) => ({
+      setProcessStatus({ message: 'Updating project state...' });
+      const newNotesWithIds = newNotes.map((n) => ({
         ...n,
         id: Math.random().toString(36).substr(2, 9),
         status: 'Planned' as const,
       }));
 
-      setState((prev) => ({
-        ...prev,
-        notes: [...prev.notes, ...notesWithIds],
-        gcm: updatedGcm,
-      }));
+      setState((prev) => {
+        const existingNotesMap = new Map(prev.notes.map(n => [n.id, n]));
+        updatedNotes.forEach(un => {
+          existingNotesMap.set(un.id, un);
+        });
+
+        return {
+          ...prev,
+          notes: [...Array.from(existingNotesMap.values()), ...newNotesWithIds],
+          gcm: updatedGcm,
+        };
+      });
       setFeatureInput('');
       
-      if (notesWithIds.length > 0) {
-        setSelectedNoteId(notesWithIds[0].id);
+      if (newNotesWithIds.length > 0) {
+        setSelectedNoteId(newNotesWithIds[0].id);
+      } else if (updatedNotes.length > 0) {
+        setSelectedNoteId(updatedNotes[0].id);
       }
     } catch (error) {
       console.error('Failed to decompose feature:', error);
-      alert('Failed to decompose feature. Check console for details.');
+      alert(`Failed to decompose feature: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsDecomposing(false);
+      setProcessStatus(null);
+    }
+  };
+
+  const handleTextFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const newNotes: Note[] = [];
+
+    for (const file of files) {
+      try {
+        const content = await file.text();
+        const title = file.name.replace(/\.[^/.]+$/, ""); // Remove extension
+        
+        const newNote: Note = {
+          id: Math.random().toString(36).substr(2, 9),
+          title: title,
+          folder: 'Imported',
+          userView: content,
+          aiSpec: '## Technical Specification\nImported from file.',
+          status: 'Planned',
+          yamlMetadata: `type: imported\nsource: ${file.name}`
+        };
+        newNotes.push(newNote);
+      } catch (err) {
+        console.error(`Failed to read file ${file.name}`, err);
+      }
+    }
+
+    if (newNotes.length > 0) {
+      setState(prev => ({
+        ...prev,
+        notes: [...prev.notes, ...newNotes]
+      }));
+      setSelectedNoteId(newNotes[0].id);
+      alert(`${newNotes.length} notes imported successfully.`);
+    }
+
+    if (textFileInputRef.current) textFileInputRef.current.value = '';
+  };
+
+  const handleAutoConsolidate = async (notesToUse?: Note[], gcmToUse?: GCM) => {
+    setIsCheckingConsistency(true);
+    setProcessStatus({ message: 'Analyzing notes for consolidation...' });
+    try {
+      const { mergedNotes, removedNoteIds, updatedGcm } = await consolidateNotes(
+        notesToUse || state.notes, 
+        gcmToUse || state.gcm
+      );
+      
+      setProcessStatus({ message: 'Applying merged structure...' });
+      setState(prev => ({
+        ...prev,
+        notes: [...prev.notes.filter(n => !removedNoteIds.includes(n.id)), ...mergedNotes],
+        gcm: updatedGcm
+      }));
+      alert("불필요한 노트가 정리되었습니다.");
+    } catch (e) {
+      alert(`Failed to consolidate notes: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsCheckingConsistency(false);
+      setProcessStatus(null);
+    }
+  };
+
+  const handleGenerateSubModules = async (mainNote: Note) => {
+    setIsDecomposing(true);
+    setProcessStatus({ message: `Generating sub-modules for ${mainNote.title}...` });
+    try {
+      const { newNotes, updatedGcm } = await generateSubModules(mainNote, state.gcm, state.notes);
+      
+      const newNotesWithIds = newNotes.map((n) => ({
+        ...n,
+        id: Math.random().toString(36).substr(2, 9),
+        status: 'Planned' as const,
+      }));
+
+      setState(prev => ({
+        ...prev,
+        notes: [...prev.notes, ...newNotesWithIds],
+        gcm: updatedGcm
+      }));
+      
+      alert(`${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`);
+    } catch (error) {
+      console.error('Failed to generate sub-modules:', error);
+      alert(`Failed to generate sub-modules: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setIsDecomposing(false);
+      setProcessStatus(null);
+    }
+  };
+
+  const handleAddNote = () => {
+    const newNote: Note = {
+      id: Math.random().toString(36).substr(2, 9),
+      title: 'New Note',
+      folder: 'Uncategorized',
+      userView: '# New Note\nDescribe the feature here.',
+      aiSpec: '## Technical Specification\nDefine technical details here.',
+      status: 'Planned',
+      yamlMetadata: 'type: feature\nstatus: planned'
+    };
+    setState(prev => ({
+      ...prev,
+      notes: [...prev.notes, newNote]
+    }));
+    setSelectedNoteId(newNote.id);
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    if (window.confirm('Are you sure you want to delete this note?')) {
+      setState(prev => ({
+        ...prev,
+        notes: prev.notes.filter(n => n.id !== noteId)
+      }));
+      if (selectedNoteId === noteId) {
+        setSelectedNoteId(null);
+      }
     }
   };
 
@@ -271,6 +408,7 @@ export const Dashboard: React.FC = () => {
         notes={state.notes}
         selectedNoteId={selectedNoteId}
         onSelectNote={setSelectedNoteId}
+        onAddNote={handleAddNote}
       />
 
       {/* Main Content Area */}
@@ -354,6 +492,30 @@ export const Dashboard: React.FC = () => {
           {/* Bottom Row: Tools */}
           <div className="flex items-center gap-3">
             <button
+              onClick={() => textFileInputRef.current?.click()}
+              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
+            >
+              <FileUp className="w-3 h-3" />
+              Upload Text Files (.md, .txt)
+            </button>
+            <input
+              type="file"
+              multiple
+              accept=".md,.txt,.yaml"
+              ref={textFileInputRef}
+              onChange={handleTextFileUpload}
+              className="hidden"
+            />
+            <button
+              onClick={() => handleAutoConsolidate()}
+              disabled={isCheckingConsistency || state.notes.length === 0}
+              className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+            >
+              {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <Merge className="w-3 h-3" />}
+              Consolidate Notes
+            </button>
+            <div className="h-4 w-px bg-slate-200 mx-1" />
+            <button
               onClick={handleRefactorFolders}
               disabled={isRefactoring || state.notes.length === 0}
               className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
@@ -378,8 +540,33 @@ export const Dashboard: React.FC = () => {
             <Lightbulb className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800">
               <strong className="block font-semibold mb-1">Next Step Suggestion</strong>
-              {nextStepSuggestion}
+              <div className="prose prose-sm prose-amber max-w-none">
+                <Markdown remarkPlugins={[remarkGfm]}>{nextStepSuggestion}</Markdown>
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Progress / Status Banner */}
+        {processStatus && (
+          <div className="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="font-medium">{processStatus.message}</span>
+            </div>
+            {processStatus.current !== undefined && processStatus.total !== undefined && (
+              <div className="flex items-center gap-4">
+                <div className="text-xs font-mono bg-indigo-500 px-2 py-1 rounded">
+                  {processStatus.current} / {processStatus.total} Files
+                </div>
+                <div className="w-48 h-2 bg-indigo-800 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-white transition-all duration-500" 
+                    style={{ width: `${(processStatus.current / processStatus.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -390,6 +577,8 @@ export const Dashboard: React.FC = () => {
               note={selectedNote} 
               onUpdateNote={handleUpdateNote} 
               onTargetedUpdate={handleTargetedUpdate}
+              onGenerateSubModules={handleGenerateSubModules}
+              onDeleteNote={handleDeleteNote}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center bg-slate-50 text-slate-400">

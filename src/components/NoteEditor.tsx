@@ -1,20 +1,46 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Note } from '../types';
-import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send } from 'lucide-react';
+import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2 } from 'lucide-react';
 import { updateSpecFromCode, generateFixGuide } from '../services/gemini';
 
 interface NoteEditorProps {
   note: Note | null;
   onUpdateNote: (note: Note) => void;
   onTargetedUpdate: (noteId: string, command: string) => Promise<void>;
+  onGenerateSubModules: (mainNote: Note) => Promise<void>;
+  onDeleteNote: (noteId: string) => void;
 }
 
-export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTargetedUpdate }) => {
+export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTargetedUpdate, onGenerateSubModules, onDeleteNote }) => {
   const [isResolving, setIsResolving] = useState(false);
   const [command, setCommand] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [isGeneratingSub, setIsGeneratingSub] = useState(false);
+  
+  // Local state for manual editing
+  const [editData, setEditData] = useState({
+    title: '',
+    folder: '',
+    userView: '',
+    aiSpec: '',
+    yamlMetadata: ''
+  });
+
+  useEffect(() => {
+    if (note) {
+      setEditData({
+        title: note.title,
+        folder: note.folder,
+        userView: note.userView,
+        aiSpec: note.aiSpec,
+        yamlMetadata: note.yamlMetadata
+      });
+      setIsEditMode(false);
+    }
+  }, [note?.id]);
 
   if (!note) {
     return (
@@ -29,6 +55,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTa
 
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     onUpdateNote({ ...note, status: e.target.value as Note['status'] });
+  };
+
+  const handleSaveManual = () => {
+    onUpdateNote({
+      ...note,
+      ...editData
+    });
+    setIsEditMode(false);
   };
 
   const handleCodeWins = async () => {
@@ -76,32 +110,102 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTa
         {/* Header */}
         <div className="mb-8 pb-6 border-b border-slate-200">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
-              {note.title}
-              {note.isMainFeature && (
-                <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-medium">
-                  Main Feature
-                </span>
+            <div className="flex-1">
+              {isEditMode ? (
+                <input
+                  type="text"
+                  value={editData.title}
+                  onChange={(e) => setEditData({ ...editData, title: e.target.value })}
+                  className="text-3xl font-bold text-slate-900 border-b border-indigo-300 focus:outline-none w-full"
+                />
+              ) : (
+                <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
+                  {note.title}
+                  {note.isMainFeature && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-medium">
+                        Main Feature
+                      </span>
+                      <button
+                        onClick={async () => {
+                          setIsGeneratingSub(true);
+                          await onGenerateSubModules(note);
+                          setIsGeneratingSub(false);
+                        }}
+                        disabled={isGeneratingSub}
+                        className="flex items-center gap-1 text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded-full font-bold hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                        title="하위 모듈 자동 생성 (Step 2)"
+                      >
+                        {isGeneratingSub ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />}
+                        GENERATE SUB-MODULES
+                      </button>
+                    </div>
+                  )}
+                </h1>
               )}
-            </h1>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-slate-500">Status:</span>
-              <select
-                value={note.status}
-                onChange={handleStatusChange}
-                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2"
-              >
-                <option value="Planned">Planned</option>
-                <option value="In-Progress">In-Progress</option>
-                <option value="Done">Done</option>
-                <option value="Conflict">Conflict</option>
-              </select>
+            </div>
+            <div className="flex items-center gap-3">
+              {isEditMode ? (
+                <>
+                  <button
+                    onClick={handleSaveManual}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  >
+                    <Save className="w-4 h-4" /> Save
+                  </button>
+                  <button
+                    onClick={() => setIsEditMode(false)}
+                    className="flex items-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  >
+                    <X className="w-4 h-4" /> Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onDeleteNote(note.id)}
+                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-all"
+                    title="Delete Note"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setIsEditMode(true)}
+                    className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  >
+                    <Edit3 className="w-4 h-4" /> Edit
+                  </button>
+                </>
+              )}
+              <div className="h-6 w-px bg-slate-200 mx-1" />
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-500">Status:</span>
+                <select
+                  value={note.status}
+                  onChange={handleStatusChange}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2"
+                >
+                  <option value="Planned">Planned</option>
+                  <option value="In-Progress">In-Progress</option>
+                  <option value="Done">Done</option>
+                  <option value="Conflict">Conflict</option>
+                </select>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-4 text-sm text-slate-500">
             <span className="flex items-center gap-1">
               <FileText className="w-4 h-4" />
-              {note.folder}
+              {isEditMode ? (
+                <input
+                  type="text"
+                  value={editData.folder}
+                  onChange={(e) => setEditData({ ...editData, folder: e.target.value })}
+                  className="border-b border-slate-300 focus:outline-none"
+                />
+              ) : (
+                note.folder
+              )}
             </span>
             {note.githubLink && (
               <a
@@ -182,9 +286,17 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTa
             <Activity className="w-4 h-4" />
             Metadata (YAML)
           </h2>
-          <pre className="bg-slate-900 text-slate-300 p-4 rounded-lg text-sm font-mono overflow-x-auto">
-            {note.yamlMetadata}
-          </pre>
+          {isEditMode ? (
+            <textarea
+              value={editData.yamlMetadata}
+              onChange={(e) => setEditData({ ...editData, yamlMetadata: e.target.value })}
+              className="w-full bg-slate-900 text-slate-300 p-4 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 h-32"
+            />
+          ) : (
+            <pre className="bg-slate-900 text-slate-300 p-4 rounded-lg text-sm font-mono overflow-x-auto">
+              {note.yamlMetadata}
+            </pre>
+          )}
         </div>
 
         {/* User View */}
@@ -192,9 +304,17 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTa
           <h2 className="text-xl font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-2">
             친절한 기능 설명 (User View)
           </h2>
-          <div className="prose prose-slate max-w-none">
-            <Markdown remarkPlugins={[remarkGfm]}>{note.userView}</Markdown>
-          </div>
+          {isEditMode ? (
+            <textarea
+              value={editData.userView}
+              onChange={(e) => setEditData({ ...editData, userView: e.target.value })}
+              className="w-full border border-slate-300 rounded-lg p-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 h-64"
+            />
+          ) : (
+            <div className="prose prose-slate max-w-none">
+              <Markdown remarkPlugins={[remarkGfm]}>{note.userView}</Markdown>
+            </div>
+          )}
         </div>
 
         {/* AI Spec */}
@@ -202,9 +322,17 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, onUpdateNote, onTa
           <h2 className="text-xl font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-2">
             수석 아키텍트 기술 명세 (AI Spec)
           </h2>
-          <div className="prose prose-slate max-w-none prose-pre:bg-slate-900 prose-pre:text-slate-300">
-            <Markdown remarkPlugins={[remarkGfm]}>{note.aiSpec}</Markdown>
-          </div>
+          {isEditMode ? (
+            <textarea
+              value={editData.aiSpec}
+              onChange={(e) => setEditData({ ...editData, aiSpec: e.target.value })}
+              className="w-full border border-slate-300 rounded-lg p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 h-96"
+            />
+          ) : (
+            <div className="prose prose-slate max-w-none prose-pre:bg-slate-900 prose-pre:text-slate-300">
+              <Markdown remarkPlugins={[remarkGfm]}>{note.aiSpec}</Markdown>
+            </div>
+          )}
         </div>
       </div>
 

@@ -15,25 +15,43 @@ const noteSchema: Schema = {
   required: ["title", "folder", "userView", "aiSpec", "yamlMetadata"],
 };
 
+const safeJsonParse = (text: string) => {
+  try {
+    // Remove potential markdown code blocks
+    const cleaned = text.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("Failed to parse JSON response from AI:", text);
+    throw new Error(`AI returned invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+};
+
 export const decomposeFeature = async (
   featureRequest: string,
-  currentGcm: GCM
-): Promise<{ newNotes: Omit<Note, 'id' | 'status'>[]; updatedGcm: GCM }> => {
+  currentGcm: GCM,
+  existingNotes: Note[]
+): Promise<{ 
+  newNotes: Omit<Note, 'id' | 'status'>[]; 
+  updatedNotes: Note[];
+  updatedGcm: GCM 
+}> => {
   
-  // Step 1: Main Feature Design
+  // Step 1: Main Feature Design & Reuse Analysis
   const step1Prompt = `
-용도: 메인 기능 설계
-페르소나: 노련한 시스템 아키텍트이자 프로덕트 매니저
-목표: 기능의 핵심 가치를 정의하고 3~7개의 전략적 구성 요소를 도출합니다.
+용도: 메인 기능 설계 및 기존 아키텍처 연동
+목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
+폴더 분류 원칙: 기능적 도메인(Domain)별로 그룹화합니다. (예: '난이도 설정', '난이도 조회'는 'Difficulty_Management' 폴더로 분류)
+
+기존 노트 목록 (요약):
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
 
 User Request: "${featureRequest}"
 
 Task:
-1. 핵심 목표 및 가치 정의
-2. 전략적 구성 요소 분할 (Component Breakdown) - 3~7개
-3. 상위 수준의 데이터 흐름
-4. 사용자 경험(UX) 시나리오
-5. 미래 확장성 및 실험적 제안
+1. 기존 노트 중 이번 요청과 유사한 맥락이 있는지 판단합니다.
+2. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성합니다.
+3. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
+4. 모든 노트(신규/기존)는 논리적인 기능 그룹(Folder)으로 분류되어야 합니다.
 
 Return JSON:
 {
@@ -42,7 +60,8 @@ Return JSON:
   "userView": "핵심 목표 및 가치, UX 시나리오 등 (Markdown)",
   "aiSpec": "상위 수준의 데이터 흐름, 미래 확장성 등 (Markdown)",
   "yamlMetadata": "YAML metadata string",
-  "components": ["Component 1", "Component 2", "Component 3"]
+  "reusedNoteIds": ["id1", "id2"],
+  "newComponents": ["New Component 1"]
 }
 `;
 
@@ -59,34 +78,39 @@ Return JSON:
           userView: { type: Type.STRING },
           aiSpec: { type: Type.STRING },
           yamlMetadata: { type: Type.STRING },
-          components: { type: Type.ARRAY, items: { type: Type.STRING } },
+          reusedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+          newComponents: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
-        required: ["title", "folder", "userView", "aiSpec", "yamlMetadata", "components"],
+        required: ["title", "folder", "userView", "aiSpec", "yamlMetadata", "reusedNoteIds", "newComponents"],
       },
     },
   });
 
-  const mainFeature = JSON.parse(step1Response.text || "{}");
+  const mainFeature = safeJsonParse(step1Response.text || "{}");
 
-  // Step 2: Module Detailed Specs
+  // Step 2: Module Detailed Specs (New & Reused)
+  // To avoid huge payloads, we only send the content of notes that are actually being reused
+  const reusedNotesContent = existingNotes.filter(n => mainFeature.reusedNoteIds.includes(n.id));
+
   const step2Prompt = `
-용도: 모듈별 상세 노트 작성
-페르소나: 친절한 기술 커뮤니케이터 & 수석 시스템 아키텍트
+### 수정된 프롬프트: '2. 구성 요소(모듈) 상세 노트 작성 프롬프트 (하이브리드 - 기능 설명 & 기술 명세)'
+용도: 메인 기능의 특정 모듈에 대해 사람이 쉽게 이해할 수 있는 기능 설명과 AI가 정확히 구현할 수 있는 구체적인 알고리즘 명세를 하나의 문서에 담을 때 사용합니다.
+목표: [[메인 기능 노트]]의 하위 모듈에 대한 '핵심 기능'과 '역할'을 쉽게 설명하고, 이어서 '구현 로직'과 '데이터 규약'을 상세히 정의합니다.
 
 Main Feature: ${mainFeature.title}
-Components to detail: ${mainFeature.components.join(', ')}
+New Components to detail: ${mainFeature.newComponents.join(', ')}
+Existing Notes to update: ${JSON.stringify(reusedNotesContent.map(n => ({ id: n.id, title: n.title, aiSpec: n.aiSpec })))}
 Current GCM: ${JSON.stringify(currentGcm)}
 
-Task:
-1. 각 구성 요소에 대해 상세 노트를 작성합니다.
-2. userView에는 [사람을 위한 기능 설명] (핵심 역할, 무엇을 하는가, 어떻게 작동하는가 등)을 작성합니다.
-3. aiSpec에는 [AI를 위한 기술 명세] (데이터 인터페이스, 단계별 알고리즘, 예외 처리 등)를 작성합니다.
-4. GCM을 업데이트합니다 (새로운 엔티티, 변수 추가).
-5. 각 노트의 성격에 맞는 동적 폴더명(예: Auth_Logic, UI_Components, Data_Models 등)을 생성하여 지정합니다.
+지시사항:
+1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다.
+2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다.
+3. GCM을 업데이트합니다.
 
 Return JSON:
 {
-  "detailNotes": [ array of notes matching the schema ],
+  "newDetailNotes": [ array of notes matching the schema ],
+  "updatedDetailNotes": [ array of notes matching the schema but including the 'id' field ],
   "updatedGcm": { "entities": {...}, "variables": {...} }
 }
 `;
@@ -99,7 +123,18 @@ Return JSON:
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          detailNotes: { type: Type.ARRAY, items: noteSchema },
+          newDetailNotes: { type: Type.ARRAY, items: noteSchema },
+          updatedDetailNotes: { 
+            type: Type.ARRAY, 
+            items: {
+              ...noteSchema,
+              properties: {
+                ...noteSchema.properties,
+                id: { type: Type.STRING }
+              },
+              required: [...(noteSchema.required || []), "id"]
+            } 
+          },
           updatedGcm: {
             type: Type.OBJECT,
             properties: {
@@ -109,12 +144,12 @@ Return JSON:
             required: ["entities", "variables"],
           },
         },
-        required: ["detailNotes", "updatedGcm"],
+        required: ["newDetailNotes", "updatedDetailNotes", "updatedGcm"],
       },
     },
   });
 
-  const step2Result = JSON.parse(step2Response.text || "{}");
+  const step2Result = safeJsonParse(step2Response.text || "{}");
   
   const mainNote: Omit<Note, 'id' | 'status'> = {
     title: mainFeature.title,
@@ -126,9 +161,61 @@ Return JSON:
   };
 
   return {
-    newNotes: [mainNote, ...(step2Result.detailNotes || [])],
+    newNotes: [mainNote, ...(step2Result.newDetailNotes || [])],
+    updatedNotes: step2Result.updatedDetailNotes || [],
     updatedGcm: step2Result.updatedGcm || currentGcm,
   };
+};
+
+export const consolidateNotes = async (notes: Note[], gcm: GCM): Promise<{
+  mergedNotes: Note[];
+  removedNoteIds: string[];
+  updatedGcm: GCM;
+}> => {
+  // Limit notes content to avoid huge prompt
+  const simplifiedNotes = notes.map(n => ({
+    id: n.id,
+    title: n.title,
+    folder: n.folder,
+    aiSpec: n.aiSpec.slice(0, 2000), // Truncate very long specs for analysis
+  }));
+
+  const prompt = `
+당신은 시스템 최적화 전문가입니다. 현재 프로젝트의 모든 노트를 분석하여 기능이 겹치거나, 지나치게 파편화된 모듈을 논리적으로 통폐합하십시오.
+특히 비슷한 맥락(예: '실력 설정'과 '실력 업데이트')은 하나의 핵심 모듈로 합치는 것이 효율적입니다.
+
+Notes Summary: ${JSON.stringify(simplifiedNotes)}
+GCM: ${JSON.stringify(gcm)}
+
+결과물:
+1. 병합되어 내용이 보강된 노트 목록 (mergedNotes)
+2. 삭제될 중복 노트 ID 목록 (removedNoteIds)
+3. 변경된 GCM (updatedGcm)
+
+Return JSON:
+{
+  "mergedNotes": [ array of notes ],
+  "removedNoteIds": ["id1", "id2"],
+  "updatedGcm": { ... }
+}
+`;
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          mergedNotes: { type: Type.ARRAY, items: { type: Type.OBJECT } },
+          removedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+          updatedGcm: { type: Type.OBJECT },
+        },
+        required: ["mergedNotes", "removedNoteIds", "updatedGcm"],
+      },
+    },
+  });
+  return safeJsonParse(response.text || "{}");
 };
 
 export const refactorFolders = async (notes: Note[]): Promise<Record<string, string>> => {
@@ -152,7 +239,7 @@ Return a JSON object mapping each note ID to its new folder name.
       },
     },
   });
-  return JSON.parse(response.text || "{}");
+  return safeJsonParse(response.text || "{}");
 };
 
 export const updateSingleNote = async (
@@ -206,7 +293,7 @@ Return JSON:
     },
   });
   
-  const result = JSON.parse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}");
   return {
     updatedNote: { ...note, ...result.updatedNote },
     updatedGcm: result.updatedGcm || gcm,
@@ -224,8 +311,8 @@ You are an On-Demand Consistency Checker. Scan all notes and the GCM for contrad
 GCM:
 ${JSON.stringify(gcm, null, 2)}
 
-Notes:
-${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, aiSpec: n.aiSpec })), null, 2)}
+Notes Summary:
+${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, aiSpec: n.aiSpec.slice(0, 1000) })), null, 2)}
 
 Identify any conflicts. Return a JSON object mapping the conflicting note ID to the conflict details.
 If no conflicts, return an empty object {}.
@@ -249,7 +336,7 @@ Return JSON format:
       },
     },
   });
-  return JSON.parse(response.text || "{}");
+  return safeJsonParse(response.text || "{}");
 };
 
 export const suggestNextSteps = async (
@@ -292,7 +379,7 @@ Return a JSON object with two keys:
     },
   });
 
-  const result = JSON.parse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}");
   return {
     suggestion: result.suggestion || "No suggestions available.",
     updatedStatuses: result.updatedStatuses || {},
@@ -332,7 +419,7 @@ Return JSON: { "isMatch": boolean, "reason": "string" }
       },
     },
   });
-  return JSON.parse(response.text || '{"isMatch": false, "reason": "Failed to parse"}');
+  return safeJsonParse(response.text || '{"isMatch": false, "reason": "Failed to parse"}');
 };
 
 export const updateSpecFromCode = async (aiSpec: string, fileContent: string): Promise<string> => {
@@ -369,4 +456,57 @@ ${fileContent.slice(0, 15000)}
     contents: prompt,
   });
   return response.text || "No guide available.";
+};
+
+export const generateSubModules = async (
+  mainNote: Note,
+  currentGcm: GCM,
+  existingNotes: Note[]
+): Promise<{ 
+  newNotes: Omit<Note, 'id' | 'status'>[]; 
+  updatedGcm: GCM 
+}> => {
+  const prompt = `
+용도: 메인 기능의 하위 모듈 상세 설계
+목표: 주어진 메인 기능 노트를 분석하여 필요한 하위 구성 요소(Sub-modules)를 상세 설계합니다.
+
+메인 기능:
+제목: ${mainNote.title}
+설명: ${mainNote.userView}
+기술 명세: ${mainNote.aiSpec}
+
+기존 노트 목록 (중복 방지용):
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
+
+Task:
+1. 메인 기능을 구현하기 위해 필요한 하위 모듈(UI 컴포넌트, API, 데이터 모델 등)을 식별합니다.
+2. 기존 노트와 중복되지 않는 새로운 하위 모듈만 생성합니다.
+3. 각 하위 모듈은 메인 기능과 동일하거나 연관된 폴더에 배치합니다.
+
+Return JSON:
+{
+  "newNotes": [
+    {
+      "title": "Sub-module Title",
+      "folder": "Folder_Name",
+      "userView": "Markdown description",
+      "aiSpec": "Technical specification",
+      "yamlMetadata": "YAML string"
+    }
+  ],
+  "updatedGcm": { ... }
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: { responseMimeType: "application/json" }
+  });
+
+  const result = safeJsonParse(response.text);
+  return {
+    newNotes: result.newNotes || [],
+    updatedGcm: result.updatedGcm || currentGcm
+  };
 };

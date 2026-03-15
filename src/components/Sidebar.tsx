@@ -1,11 +1,12 @@
 import React from 'react';
-import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star } from 'lucide-react';
+import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus } from 'lucide-react';
 import { Note } from '../types';
 
 interface SidebarProps {
   notes: Note[];
   selectedNoteId: string | null;
   onSelectNote: (id: string) => void;
+  onAddNote: () => void;
 }
 
 const StatusIcon = ({ status }: { status: Note['status'] }) => {
@@ -21,19 +22,26 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
   }
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ notes, selectedNoteId, onSelectNote }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ notes, selectedNoteId, onSelectNote, onAddNote }) => {
   // Extract dynamic folders
   const folders = Array.from(new Set(notes.map(n => n.folder || 'Uncategorized'))).sort();
 
   return (
     <div className="w-64 bg-slate-900 text-slate-300 h-full flex flex-col border-r border-slate-800">
-      <div className="p-4 border-b border-slate-800">
+      <div className="p-4 border-b border-slate-800 flex items-center justify-between">
         <h1 className="text-xl font-bold text-white flex items-center gap-2">
           <div className="w-6 h-6 bg-indigo-500 rounded-md flex items-center justify-center">
             <span className="text-white text-xs">VA</span>
           </div>
           Vibe-Architect
         </h1>
+        <button 
+          onClick={onAddNote}
+          className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
+          title="Add New Note"
+        >
+          <Plus className="w-4 h-4" />
+        </button>
       </div>
       
       <div className="flex-1 overflow-y-auto py-4">

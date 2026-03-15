@@ -3,6 +3,23 @@ import { Note, GCM, NoteStatus } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+const systemInstruction = `
+당신은 Vibe-Architect 프로젝트의 핵심 AI 설계자입니다.
+아래의 공통 규칙을 모든 작업에 엄격히 적용하십시오:
+
+1. 언어 설정: 모든 텍스트(제목, 내용, 요약, 설명 등)는 반드시 한국어로 작성하십시오. 영어 사용을 최소화하십시오.
+2. 가독성: Markdown 작성 시 단락 구분을 위해 줄바꿈(\\n\\n)을 적절히 사용하십시오.
+3. 그래프 아키텍처: 계층적 폴더보다는 노드 간의 연결(relatedNoteIds)을 최우선으로 고려하십시오.
+4. 메타데이터 표준: yamlMetadata는 항상 다음 형식을 포함해야 합니다:
+   - version: 1.0.0
+   - lastUpdated: 2026-03-15
+   - tags: [키워드 목록]
+   - componentType: Core|UI|Shared|Feature
+   - dependencies: [라이브러리 목록]
+   - importance: 1~5
+5. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
+`;
+
 const noteSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -18,6 +35,17 @@ const noteSchema: Schema = {
     },
   },
   required: ["title", "folder", "content", "summary", "yamlMetadata"],
+};
+
+const parseMetadata = (yaml: string): Record<string, string> => {
+  const result: Record<string, string> = {};
+  yaml.split('\n').forEach(line => {
+    const [key, ...valueParts] = line.split(':');
+    if (key && valueParts.length > 0) {
+      result[key.trim()] = valueParts.join(':').trim();
+    }
+  });
+  return result;
 };
 
 const safeJsonParse = (text: string) => {
@@ -43,11 +71,7 @@ export const decomposeFeature = async (
   
   // Step 1: Main Feature Design & Reuse Analysis
   const step1Prompt = `
-용도: 메인 기능 설계 및 그래프 기반 아키텍처 연동
 목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
-구조 원칙: 계층적 폴더보다는 노드 간의 연결(relatedNoteIds)을 중요시합니다. 공통 로직은 'Shared Core'로 취급합니다.
-언어 설정: 모든 텍스트(제목, 내용, 요약 등)는 반드시 한국어로 작성하십시오. 영어 사용을 최소화하십시오.
-가독성: Markdown 작성 시 단락 구분을 위해 줄바꿈(\n\n)을 적절히 사용하십시오.
 
 기존 노트 목록 (요약):
 ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })))}
@@ -55,24 +79,17 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.f
 User Request: "${featureRequest}"
 
 Task:
-1. 기존 노트 중 이번 요청과 유사하거나 재사용 가능한 '공통 부품'이 있는지 판단합니다.
+1. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
 2. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
 3. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
 4. 모든 노트는 태그(tags)를 통해 성격(UI, Logic, Common 등)을 분류합니다.
 5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오.
-6. Metadata(yamlMetadata)는 다음 항목을 포함해야 합니다:
-   - version: 1.0.0
-   - lastUpdated: 2026-03-15
-   - tags: [키워드]
-   - componentType: Core(핵심), UI(화면), Shared(공용), Feature(기능) 중 선택
-   - dependencies: [필요 라이브러리/모듈]
-   - importance: 1~5 (중요도)
 
 Return JSON:
 {
   "title": "한국어 제목",
   "folder": "한국어_폴더_이름",
-  "content": "# 한국어 제목\n\n## 핵심 목표\n내용...\n\n## 기술 명세\n내용...",
+  "content": "# 한국어 제목\\n\\n## 핵심 목표\\n내용...\\n\\n## 기술 명세\\n내용...",
   "summary": "한국어 요약",
   "yamlMetadata": "version: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]\\ncomponentType: Feature\\ndependencies: []\\nimportance: 3",
   "reusedNoteIds": ["id1", "id2"],
@@ -84,6 +101,7 @@ Return JSON:
     model: "gemini-2.5-flash",
     contents: step1Prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -108,23 +126,18 @@ Return JSON:
   const reusedNotesContent = existingNotes.filter(n => mainFeature.reusedNoteIds.includes(n.id));
 
   const step2Prompt = `
-용도: 메인 기능의 특정 모듈에 대해 기능 설명과 기술 명세를 통합하여 작성합니다.
 목표: [[메인 기능 노트]]의 하위 모듈에 대한 '핵심 기능', '역할', '구현 로직', '데이터 규약'을 하나의 통합 문서(content)에 상세히 정의합니다.
-그래프 원칙: 폴더 종속성보다 "이 기능 구현을 위해 필요한 모든 논리 노드를 생성하고 관계를 선(relatedNoteIds)으로 연결"하는 데 집중하십시오.
-언어 설정: 모든 텍스트는 반드시 한국어로 작성하십시오. 가독성을 위해 줄바꿈을 충분히 사용하십시오.
 
 Main Feature: ${mainFeature.title}
 Main Feature Summary: ${mainFeature.summary}
 New Components to detail: ${mainFeature.newComponents.join(', ')}
-Existing Notes to update: ${JSON.stringify(reusedNotesContent.map(n => ({ id: n.id, title: n.title, content: n.content })))}
+Existing Notes to update: ${JSON.stringify(reusedNotesContent.map(n => ({ id: n.id, title: n.title, content: n.content.slice(0, 1000) })))}
 Current GCM: ${JSON.stringify(currentGcm)}
 
 지시사항:
 1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. parentNoteId와 relatedNoteIds를 적절히 설정하여 마인드맵 관계를 형성하십시오.
 2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다.
 3. GCM을 업데이트합니다.
-4. relatedNoteIds를 통해 다른 하위 모듈이나 공통 부품과의 연결을 AI가 스스로 판단하여 자동으로 설정하십시오.
-5. Metadata(yamlMetadata)는 다음 항목을 포함해야 합니다: version, lastUpdated(2026-03-15), tags, componentType, dependencies, importance.
 
 Return JSON:
 {
@@ -138,6 +151,7 @@ Return JSON:
     model: "gemini-2.5-flash",
     contents: step2Prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -221,6 +235,7 @@ Return JSON:
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -251,6 +266,7 @@ ${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, currentFolder: n.fo
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -267,10 +283,14 @@ export const updateSingleNote = async (
   gcm: GCM,
   allNotes: Note[]
 ): Promise<{ updatedNote: Note; updatedGcm: GCM; affectedNoteIds: string[] }> => {
+  // Cost Optimization: Filter only relevant notes (same folder or importance >= 4)
+  const relevantNotes = allNotes.filter(n => 
+    n.id !== note.id && (n.folder === note.folder || parseInt(parseMetadata(n.yamlMetadata).importance || '0') >= 4)
+  );
+
   const prompt = `
-You are a Targeted Command Executor. Update the specific note based on the user's command.
+Update the specific note based on the user's command.
 Also determine if this change affects the Global Context Map (GCM) and identify any other notes that might conflict or need updates due to this change.
-마인드맵 구조를 고려하여, 다른 노트와의 연관 관계(relatedNoteIds)가 추가되거나 변경되어야 하는지도 판단하십시오.
 
 Target Note:
 ${JSON.stringify(note, null, 2)}
@@ -280,20 +300,21 @@ Command: "${command}"
 Current GCM:
 ${JSON.stringify(gcm, null, 2)}
 
-All Other Notes (for impact analysis and linking):
-${JSON.stringify(allNotes.filter(n => n.id !== note.id).map(n => ({ id: n.id, title: n.title, folder: n.folder })), null, 2)}
+Relevant Other Notes (for impact analysis):
+${JSON.stringify(relevantNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })), null, 2)}
 
 Return JSON:
 {
   "updatedNote": { ...note with updated content, summary, yamlMetadata, parentNoteId, relatedNoteIds },
   "updatedGcm": { ...updated GCM if affected, else current GCM },
-  "affectedNoteIds": ["id1", "id2"] // IDs of other notes potentially affected
+  "affectedNoteIds": ["id1", "id2"]
 }
 `;
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -325,15 +346,18 @@ export const checkConsistency = async (
   notes: Note[],
   gcm: GCM
 ): Promise<Record<string, { description: string; suggestion: string }>> => {
+  // Client-side pre-check: Duplicate variable names in GCM
+  const variableNames = Object.keys(gcm.variables);
+  const duplicates = variableNames.filter((item, index) => variableNames.indexOf(item) !== index);
+  
   const prompt = `
 당신은 온디맨드 일관성 검사기입니다. 모든 노트와 GCM을 스캔하여 모순, 변수 유형 불일치 또는 논리적 공백을 찾으십시오.
-모든 설명과 제안은 반드시 한국어로 작성하십시오.
 
 GCM:
 ${JSON.stringify(gcm, null, 2)}
 
 노트 요약:
-${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, content: n.content.slice(0, 1000) })), null, 2)}
+${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, summary: n.summary })), null, 2)}
 
 충돌을 식별하십시오. 충돌하는 노트 ID를 충돌 세부 정보로 매핑하는 JSON 객체를 반환하십시오.
 충돌이 없으면 빈 객체 {}를 반환하십시오.
@@ -350,6 +374,7 @@ ${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, content: n.content.
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -392,6 +417,7 @@ Return JSON:
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -434,6 +460,7 @@ ${fileContent.slice(0, 15000)}
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -463,6 +490,7 @@ ${fileContent.slice(0, 15000)}
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
+    config: { systemInstruction }
   });
   return response.text || content;
 };
@@ -481,6 +509,7 @@ ${fileContent.slice(0, 15000)}
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
+    config: { systemInstruction }
   });
   return response.text || "가이드가 없습니다.";
 };
@@ -522,6 +551,7 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
     model: "gemini-2.5-flash",
     contents: prompt,
     config: {
+      systemInstruction,
       responseMimeType: "application/json",
       responseSchema: noteSchema,
     },
@@ -578,7 +608,10 @@ Return JSON:
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
-    config: { responseMimeType: "application/json" }
+    config: { 
+      systemInstruction,
+      responseMimeType: "application/json" 
+    }
   });
 
   const result = safeJsonParse(response.text);

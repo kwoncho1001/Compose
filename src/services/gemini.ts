@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Note, GCM, NoteStatus, GCMEntity } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const MODEL_NAME = "gemini-3-flash-preview";
 
 const systemInstruction = `
 당신은 Vibe-Architect 프로젝트의 핵심 AI 설계자입니다.
@@ -29,7 +30,15 @@ const systemInstruction = `
       - 4.3. 예외 처리 및 제약 조건 (Edge Cases & Constraints)
       - 4.4. 상호 연동성 및 의존성 (Dependencies)
 7. [중요] 요약(summary) 규칙: 'summary'는 "Imported from..."과 같은 출처 정보가 아니라, 해당 모듈이 시스템에서 수행하는 실제 기능을 1-2문장의 한국어로 설명해야 합니다.
-8. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
+8. [중요] 폴더 및 명칭 규칙:
+   - 'Imported' 폴더는 임시 저장소입니다. 모든 핵심 모듈은 반드시 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 적절한 카테고리로 재배치하십시오.
+   - 제목에서 'Main_', 'ㄴ.', '1.' 등의 불필요한 접두어를 제거하고, 기능의 본질을 나타내는 명확한 한국어 명칭을 사용하십시오.
+   - [중요] 노트 제목에 'ㄱ, ㄴ, ㄷ' 또는 '1, 2, 3' 등의 숫자를 붙여 순서를 매기지 마십시오.
+   - 시스템의 위계질서를 폴더 이름이 아닌 'componentType'과 'relatedNoteIds'로 표현하십시오.
+9. [중요] 연결성(Mindmap) 유지:
+   - 'relatedNoteIds'에는 반드시 노트의 고유 'id'를 사용하십시오. 제목을 넣지 마십시오.
+   - 최적화 과정에서 기존의 연결 관계가 끊어지지 않도록 주의하고, 새로운 논리적 연결을 적극적으로 찾아 추가하십시오.
+10. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
 `;
 
 const noteSchema: Schema = {
@@ -40,7 +49,7 @@ const noteSchema: Schema = {
     content: { type: Type.STRING, description: "상세 설명 및 기술 명세 (반드시 한국어, 가독성을 위해 적절한 줄바꿈 포함, Markdown)" },
     summary: { type: Type.STRING, description: "이 기능/모듈이 수행하는 역할에 대한 1-2문장 요약 (반드시 한국어)" },
     parentNoteId: { type: Type.STRING, description: "주요 부모 기능의 ID" },
-    relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 ID 목록. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
+    relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 고유 ID(id) 목록. 제목을 넣지 마십시오. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
     yamlMetadata: { 
       type: Type.STRING, 
       description: "표준화된 YAML: noteId: [id], version: 1.0.0, lastUpdated: YYYY-MM-DD, tags: [tag1], componentType: Core|UI|Shared|Feature, dependencies: [lib1], relatedNoteIds: [id1, id2]" 
@@ -96,9 +105,10 @@ Task:
 2. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
 3. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
 4. 모든 노트는 태그(tags)를 통해 성격(UI, Logic, Common 등)을 분류합니다.
-5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오.
+5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
 6. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
 7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
+8. [중요] 폴더명에서 'Imported'를 사용하지 말고, 'Core', 'Feature', 'Shared', 'UI', 'Logic' 중 적절한 것을 선택하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
 
 Return JSON:
 {
@@ -113,7 +123,7 @@ Return JSON:
 `;
 
   const step1Response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: step1Prompt,
     config: {
       systemInstruction,
@@ -150,9 +160,10 @@ Existing Notes to update: ${JSON.stringify(reusedNotesContent.map(n => ({ id: n.
 Current GCM: ${JSON.stringify(currentGcm)}
 
 지시사항:
-1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. parentNoteId와 relatedNoteIds를 적절히 설정하여 마인드맵 관계를 형성하십시오.
-2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다.
+1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. parentNoteId와 relatedNoteIds를 적절히 설정하여 마인드맵 관계를 형성하십시오. (반드시 ID 사용)
+2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다. (ID 절대 보존)
 3. GCM을 업데이트합니다.
+4. [중요] 'Imported' 폴더 사용을 금지하고, 제목에서 불필요한 접두어를 제거하십시오.
 
 Return JSON:
 {
@@ -163,7 +174,7 @@ Return JSON:
 `;
 
   const step2Response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: step2Prompt,
     config: {
       systemInstruction,
@@ -233,71 +244,51 @@ export const optimizeBlueprint = async (
     id: n.id,
     title: n.title,
     folder: n.folder,
-    content: n.content.slice(0, 1500), // Slightly more aggressive slicing
+    summary: n.summary,
+    content: n.content.slice(0, 5000), // Increased slice size to preserve metadata and context
     relatedNoteIds: n.relatedNoteIds,
     parentNoteId: n.parentNoteId
   }));
 
-  const prompt = `
-당신은 시스템 아키텍처 최적화 전문가입니다. 현재의 설계도(노트 목록 및 GCM)를 분석하여 다음 작업을 수행하십시오:
+  // Step 1: Global Analysis - Identify what needs to be changed
+  const analysisPrompt = `
+당신은 시스템 아키텍처 최적화 전문가입니다. 현재의 설계도(노트 목록 및 GCM)를 분석하여 최적화 계획을 세우십시오.
 
-1. **일관성 검사**: 노트 간의 용어 불일치나 논리적 모순을 찾아 수정합니다.
-2. **연결점 자동 형성**: 내용상 연관이 깊지만 연결되지 않은 노드들(relatedNoteIds)을 분석하여 마인드맵 상에서 자동으로 연결하십시오.
-3. **구조 재구축**: 폴더 구조를 논리적으로 재배치합니다.
-4. **중복 제거 및 통합**: 완전히 동일한 기능을 설명하는 노드만 통합하되, **부모-자식 관계가 명확한 모듈화된 노드들은 절대로 하나로 합치지 마십시오.** 모듈성을 유지하는 것이 최우선입니다.
-5. **유령 파일 제거**: 제목이 없거나 내용이 비어있는 쓸데없는 노드들은 삭제 리스트(deletedNoteIds)에 포함하십시오.
-6. [중요] **메타데이터 분리**: 모든 메타데이터(ID, 태그, 연결 정보 등)는 반드시 'yamlMetadata' 필드에만 넣으십시오. 'content' 본문에는 마크다운 형식의 설계 내용만 들어가야 하며, 메타데이터가 중복 포함되어서는 안 됩니다. 또한, 'yamlMetadata'에는 반드시 'noteId: [해당 노트의 ID]'가 포함되어야 합니다.
-7. [중요] **본문 구조**: 모든 'content'는 시스템 지침의 4개 섹션 구조를 유지해야 합니다.
-8. [중요] **요약**: 'summary'는 "Imported from..."과 같은 파일 경로나 소스 정보가 아닌, 기능의 역할을 설명하는 한국어 요약으로 반드시 업데이트하십시오.
-9. **연결성**: 'relatedNoteIds'를 분석하여 논리적으로 연관된 모든 노드들을 연결하십시오.
+작업 목표:
+1. **폴더 강제 재배치**: 'Imported' 폴더에 있는 모든 노트를 내용 분석 결과에 따라 'Core', 'Feature', 'UI', 'Shared', 'Logic' 폴더로 강제 재배분하십시오. 더 이상 'Imported' 폴더에 노드가 남지 않도록 계획하십시오.
+2. **명칭 표준화**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
+3. **업데이트 대상 식별**: 내용 수정, 용어 통일, 메타데이터 보강, 또는 마인드맵 연결(relatedNoteIds) 강화가 필요한 노트를 식별합니다.
+4. **삭제 대상 식별**: 중복되거나, 더 이상 필요 없거나, 다른 노트에 통합되어야 할 '유령' 노트를 식별합니다.
+5. **GCM 최적화**: 노트들의 변화에 맞춰 전역 컨텍스트 맵(GCM)의 엔티티와 변수를 업데이트하거나 정제합니다.
+6. **연결성 복구**: 끊어진 'relatedNoteIds' 관계를 분석하여 다시 연결하고, 새로운 논리적 연결을 찾아 계획에 반영합니다. (반드시 ID 기반 연결)
+
+[주의] 노트의 'id'는 절대 변경하지 마십시오. ID가 변경되면 모든 참조가 깨집니다.
 
 현재 GCM:
 ${JSON.stringify(gcm, null, 2)}
 
-노트 목록:
+노트 목록 (요약):
 ${JSON.stringify(simplifiedNotes, null, 2)}
 
-작업 규칙:
-- [중요] **변경된 노트만 반환**: 응답 크기 제한을 피하기 위해, 내용이나 메타데이터가 실제로 수정된 노트들만 'updatedNotes' 배열에 포함하십시오. 수정되지 않은 노트는 포함하지 마십시오.
-- 결과물에서 각 노트의 ID는 유지되어야 합니다.
-- 삭제해야 할 노트가 있다면 'deletedNoteIds' 배열에 해당 ID들을 넣으십시오.
-- 모든 텍스트는 한국어로 작성하십시오.
-
-Return JSON:
+응답 형식 (JSON):
 {
-  "updatedNotes": [ ... 수정된 노트들만 ... ],
-  "deletedNoteIds": [ "id1", "id2" ],
-  "updatedGcm": { ... },
-  "report": "어떤 최적화가 이루어졌는지에 대한 한국어 요약"
+  "notesToUpdate": [ "id1", "id2", ... ], // 최적화가 필요한 노트 ID 목록 (이후 단계에서 상세 처리됨)
+  "deletedNoteIds": [ "id3", "id4" ], // 삭제해야 할 노트 ID 목록
+  "updatedGcm": { ... }, // 최적화된 GCM (엔티티 및 변수 포함)
+  "analysisReport": "수행할 최적화 작업에 대한 상세 분석 및 요약 (한국어)"
 }
 `;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
+  const analysisResponse = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: analysisPrompt,
     config: {
       systemInstruction,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          updatedNotes: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                title: { type: Type.STRING },
-                folder: { type: Type.STRING },
-                content: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                parentNoteId: { type: Type.STRING },
-                relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                yamlMetadata: { type: Type.STRING },
-              },
-              required: ["id", "title", "folder", "content", "summary", "yamlMetadata"],
-            },
-          },
+          notesToUpdate: { type: Type.ARRAY, items: { type: Type.STRING } },
           deletedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
           updatedGcm: {
             type: Type.OBJECT,
@@ -307,34 +298,114 @@ Return JSON:
             },
             required: ["entities", "variables"],
           },
-          report: { type: Type.STRING },
+          analysisReport: { type: Type.STRING },
         },
-        required: ["updatedNotes", "deletedNoteIds", "updatedGcm", "report"],
+        required: ["notesToUpdate", "deletedNoteIds", "updatedGcm", "analysisReport"],
       },
     },
   });
 
-  const result = safeJsonParse(response.text);
+  const analysisResult = safeJsonParse(analysisResponse.text);
+  const idsToUpdate = analysisResult.notesToUpdate || [];
+  const deletedNoteIds = analysisResult.deletedNoteIds || [];
+  const updatedGcm = analysisResult.updatedGcm || gcm;
+
+  // Step 2: Batch Optimization - Process notes in small chunks to avoid truncation
+  const BATCH_SIZE = 4; // Small batch size for safety
+  let allUpdatedNotes: Note[] = [];
   
-  // Merge updates back into the original notes list
-  const updatedNotesMap = new Map((result.updatedNotes || []).map((n: any) => [n.id, n]));
-  const deletedIds = new Set(result.deletedNoteIds || []);
-  
-  const finalNotes = notes
-    .filter(n => !deletedIds.has(n.id))
-    .map(n => {
-      const update = updatedNotesMap.get(n.id);
-      if (update) {
-        return { ...n, ...(update as any) };
-      }
-      return n;
+  for (let i = 0; i < idsToUpdate.length; i += BATCH_SIZE) {
+    const chunkIds = idsToUpdate.slice(i, i + BATCH_SIZE);
+    const chunkNotes = notes.filter(n => chunkIds.includes(n.id));
+    
+    const optimizationPrompt = `
+당신은 시스템 아키텍처 최적화 전문가입니다. 다음 특정 노트들을 최적화하여 반환하십시오.
+
+[컨텍스트]
+전체 GCM: ${JSON.stringify(updatedGcm)}
+전체 노트 구조 (참고용): ${JSON.stringify(simplifiedNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
+
+[최적화 대상 노트]
+${JSON.stringify(chunkNotes)}
+
+작업 규칙:
+1. **ID 보존**: 제공된 'id'를 절대 변경하지 말고 그대로 반환하십시오.
+2. **폴더 강제 이동**: 'Imported' 폴더에 있다면 반드시 'Core', 'Feature', 'Shared', 'UI', 'Logic' 중 가장 적합한 곳으로 변경하십시오.
+3. **명칭 정제**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 완전히 제거하고 명확한 한국어 제목으로 수정하십시오.
+4. **메타데이터 분리**: 모든 메타데이터는 'yamlMetadata' 필드에만 넣으십시오.
+5. **본문 구조**: 모든 'content'는 시스템 지침의 4개 섹션 구조를 유지해야 합니다.
+6. **요약**: 'summary'는 기능의 역할을 설명하는 한국어 요약으로 업데이트하십시오.
+7. **연결성(Mindmap)**: 'relatedNoteIds'에 다른 노트의 고유 'id'를 사용하여 논리적으로 연관된 노드들을 연결하십시오. (제목 사용 금지)
+8. 모든 텍스트는 한국어로 작성하십시오.
+
+응답 형식 (JSON):
+{
+  "updatedNotes": [ ... 최적화된 노트 객체들 ... ]
+}
+`;
+
+    const optimizationResponse = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: optimizationPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            updatedNotes: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  folder: { type: Type.STRING },
+                  content: { type: Type.STRING },
+                  summary: { type: Type.STRING },
+                  parentNoteId: { type: Type.STRING },
+                  relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  yamlMetadata: { type: Type.STRING },
+                },
+                required: ["id", "title", "folder", "content", "summary", "yamlMetadata"],
+              },
+            },
+          },
+          required: ["updatedNotes"],
+        },
+      },
     });
 
+    const optimizationResult = safeJsonParse(optimizationResponse.text);
+    if (optimizationResult.updatedNotes) {
+      allUpdatedNotes = [...allUpdatedNotes, ...optimizationResult.updatedNotes];
+    }
+  }
+
+  // Post-process: Sanitize relatedNoteIds (ensure they are IDs, not titles)
+  const allNotesMap = new Map(notes.map(n => [n.id, n]));
+  const titleToIdMap = new Map(notes.map(n => [n.title, n.id]));
+  
+  const sanitizedUpdatedNotes = allUpdatedNotes.map(note => {
+    if (!note.relatedNoteIds) return note;
+    
+    const sanitizedIds = note.relatedNoteIds.map(idOrTitle => {
+      // If it's already a valid ID, keep it
+      if (allNotesMap.has(idOrTitle)) return idOrTitle;
+      // If it's a title, try to resolve it
+      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
+      // Otherwise, it might be a new ID or a broken link, keep it for now but filter out later if needed
+      return idOrTitle;
+    }).filter(id => id && typeof id === 'string');
+    
+    return { ...note, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
+  });
+
   return {
-    updatedNotes: finalNotes,
-    deletedNoteIds: result.deletedNoteIds || [],
-    updatedGcm: result.updatedGcm || gcm,
-    report: result.report || "최적화가 완료되었습니다."
+    updatedNotes: sanitizedUpdatedNotes,
+    deletedNoteIds: deletedNoteIds,
+    updatedGcm: updatedGcm,
+    report: analysisResult.analysisReport || "최적화가 완료되었습니다."
   };
 };
 
@@ -378,7 +449,7 @@ Return JSON:
 }
 `;
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -438,7 +509,7 @@ ${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, summary: n.summary 
 }
 `;
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -481,7 +552,7 @@ Return JSON:
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -524,7 +595,7 @@ ${fileContent.slice(0, 15000)}
 반환 JSON: { "isMatch": boolean, "reason": "한국어 문자열" }
 `;
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -555,7 +626,7 @@ ${content}
 ${fileContent.slice(0, 15000)}
 `;
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: { systemInstruction }
   });
@@ -574,7 +645,7 @@ ${content}
 ${fileContent.slice(0, 15000)}
 `;
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: { systemInstruction }
   });
@@ -605,10 +676,10 @@ ${fileContent.slice(0, 15000)}
 ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary })))}
 
 작업:
-1. 코드의 핵심 로직과 역할을 분석하여 제목(title)과 요약(summary)을 작성합니다.
+1. 코드의 핵심 로직과 역할을 분석하여 제목(title)과 요약(summary)을 작성합니다. (불필요한 접두어 제거)
 2. 상세 기술 명세(content)를 Markdown 형식으로 작성합니다. (한국어 필수, 줄바꿈 필수)
-3. 적절한 폴더(folder)를 지정합니다.
-4. 기존 노트 중 이 코드와 논리적으로 연결된 것이 있다면 relatedNoteIds에 포함시킵니다. AI가 스스로 판단하여 자동으로 연결하십시오.
+3. 적절한 폴더(folder)를 지정합니다. ('Imported' 폴더 사용 금지. 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 사용)
+4. 기존 노트 중 이 코드와 논리적으로 연결된 것이 있다면 relatedNoteIds에 포함시킵니다. AI가 스스로 판단하여 자동으로 연결하십시오. (반드시 ID 사용)
 5. Metadata(yamlMetadata)를 작성합니다:
    - version: 1.0.0
    - lastUpdated: 2026-03-15
@@ -621,7 +692,7 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -663,9 +734,10 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.f
 
 Task:
 1. 메인 기능을 구현하기 위해 필요한 하위 모듈(UI 컴포넌트, API, 데이터 모델 등)을 식별합니다.
-2. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다.
-3. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오.
+2. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다. (반드시 ID 사용)
+3. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
 4. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
+5. [중요] 'Imported' 폴더 사용을 금지하고, 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
 
 Return JSON:
 {
@@ -685,7 +757,7 @@ Return JSON:
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: { 
       systemInstruction,
@@ -726,7 +798,7 @@ Return JSON:
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -757,7 +829,7 @@ Return JSON:
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -788,7 +860,7 @@ ${notes.map(n => `- ID: ${n.id}, 제목: ${n.title}, 폴더: ${n.folder}, 참조
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: {
       systemInstruction,
@@ -818,7 +890,7 @@ ${code}
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL_NAME,
     contents: prompt,
     config: { systemInstruction }
   });

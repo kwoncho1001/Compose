@@ -212,12 +212,27 @@ export const Dashboard: React.FC = () => {
     setIsSyncing(true);
     setProcessStatus({ message: '설계도 최적화 진행 중 (일관성, 연결점, 구조 재배치)...' });
     try {
-      const { updatedNotes, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm);
-      setState(prev => ({
-        ...prev,
-        notes: alignChildFolders(updatedNotes),
-        gcm: updatedGcm
-      }));
+      const { updatedNotes, deletedNoteIds, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm);
+      
+      setState(prev => {
+        const existingNotesMap = new Map(prev.notes.map(n => [n.id, n]));
+        
+        // Apply updates
+        updatedNotes.forEach(un => {
+          existingNotesMap.set(un.id, un);
+        });
+        
+        // Remove deleted notes
+        const deletedIdsSet = new Set(deletedNoteIds);
+        const filteredNotes = Array.from(existingNotesMap.values()).filter(n => !deletedIdsSet.has(n.id));
+        
+        return {
+          ...prev,
+          notes: alignChildFolders(filteredNotes),
+          gcm: updatedGcm
+        };
+      });
+      
       setNextStepSuggestion(report);
       setRightSidebarOpen(true);
     } catch (error) {

@@ -130,6 +130,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
     const hasConsistencyConflict = !!note?.consistencyConflict;
     const isConflict = note?.status === 'Conflict' || hasConsistencyConflict;
 
+    const getFolderStatus = (treeItem: TreeItem): 'Conflict' | 'Planned' | 'Done' | 'Other' => {
+      const allNotes: Note[] = [];
+      const collectNotes = (ti: TreeItem) => {
+        if (ti.note) allNotes.push(ti.note);
+        ti.children.forEach(collectNotes);
+      };
+      collectNotes(treeItem);
+      
+      if (allNotes.length === 0) return 'Other';
+      
+      if (allNotes.some(n => n.status === 'Conflict' || !!n.consistencyConflict)) return 'Conflict';
+      if (allNotes.some(n => n.status === 'Planned')) return 'Planned';
+      if (allNotes.every(n => n.status === 'Done')) return 'Done';
+      return 'Other';
+    };
+
+    const folderStatus = item.type === 'folder' ? getFolderStatus(item) : 'Other';
+    const folderColorClass = {
+      'Conflict': 'text-red-500',
+      'Planned': 'text-yellow-500',
+      'Done': 'text-emerald-500',
+      'Other': isExpanded ? 'text-indigo-400' : 'text-slate-500'
+    }[folderStatus];
+
     return (
       <div key={item.id} className="select-none">
         <div 
@@ -154,13 +178,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ notes = [], selectedNoteId, on
             )}
             
             {item.type === 'folder' ? (
-              <Folder className={`w-4 h-4 ${isExpanded ? 'text-indigo-400' : 'text-slate-500'}`} />
+              <Folder className={`w-4 h-4 ${folderColorClass}`} />
             ) : (
               <StatusIcon status={note?.status || 'Planned'} />
             )}
             
             <div className="flex flex-col flex-1 min-w-0">
-              <span className={`text-sm truncate ${isConflict ? 'text-red-400' : ''} ${isSelected ? 'font-medium' : ''}`}>
+              <span className={`text-sm truncate ${item.type === 'folder' && folderStatus !== 'Other' ? folderColorClass : ''} ${isConflict ? 'text-red-400' : ''} ${isSelected ? 'font-medium' : ''}`}>
                 {item.name}
               </span>
             </div>

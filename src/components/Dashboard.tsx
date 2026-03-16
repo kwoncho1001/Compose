@@ -4,6 +4,7 @@ import { NoteEditor } from './NoteEditor';
 import { GCMViewer } from './GCMViewer';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
+import { Dialog } from './common/Dialog';
 import { Note, GCM, AppState } from '../types';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -15,9 +16,6 @@ import {
   optimizeBlueprint,
   generateSubModules,
   generateNoteFromCode,
-  suggestGcmUpdates,
-  detectMissingLinks,
-  analyzeSharedCore,
   summarizeRepoFeatures,
   transpileExternalLogic,
   translateQueryForGithub,
@@ -25,7 +23,7 @@ import {
   summarizeReposShort
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Link as LinkIcon, Search, ChevronRight } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -56,12 +54,12 @@ export const Dashboard: React.FC = () => {
           initialState = { 
             ...parsed, 
             notes: fixedNotes,
-            githubToken: parsed.githubToken || process.env.GIthub_Token || '' 
+            githubToken: parsed.githubToken || process.env.Github_Token || '' 
           };
         } else {
           initialState = { 
             ...parsed, 
-            githubToken: parsed.githubToken || process.env.GIthub_Token || '' 
+            githubToken: parsed.githubToken || process.env.Github_Token || '' 
           };
         }
       } catch (e) {
@@ -108,6 +106,26 @@ export const Dashboard: React.FC = () => {
   const [repoSummaries, setRepoSummaries] = useState<Record<string, { nickname: string; summary: string; features: string }>>({});
   const [selectedFeatures, setSelectedFeatures] = useState<any[]>([]);
   const [selectedGoal, setSelectedGoal] = useState<string | null>(null);
+  const [dialogConfig, setDialogConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'warning' | 'error' | 'success';
+    onConfirm: () => void;
+    onCancel?: () => void;
+    confirmText?: string;
+    cancelText?: string;
+  } | null>(null);
+
+  const showAlert = (title: string, message: string, type: 'info' | 'warning' | 'error' | 'success' = 'info') => {
+    setDialogConfig({
+      isOpen: true,
+      title,
+      message,
+      type,
+      onConfirm: () => setDialogConfig(null)
+    });
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
@@ -146,10 +164,10 @@ export const Dashboard: React.FC = () => {
         const importedState = JSON.parse(event.target?.result as string);
         if (importedState.notes) {
           setState(importedState);
-          alert('Project imported successfully!');
+          showAlert('가져오기 성공', '프로젝트를 성공적으로 불러왔습니다.', 'success');
         }
       } catch (err) {
-        alert('Invalid JSON file');
+        showAlert('오류', '유효하지 않은 JSON 파일입니다.', 'error');
       }
     };
     reader.readAsText(file);
@@ -180,7 +198,7 @@ export const Dashboard: React.FC = () => {
         const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotesWithIds];
         return {
           ...prev,
-          notes: alignChildFolders(combinedNotes),
+          notes: combinedNotes,
           gcm: updatedGcm,
         };
       });
@@ -193,7 +211,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to decompose feature:', error);
-      alert(`Failed to decompose feature: ${error instanceof Error ? error.message : String(error)}`);
+      showAlert('오류', `기능 분해에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
     } finally {
       setIsDecomposing(false);
       setProcessStatus(null);
@@ -232,7 +250,7 @@ export const Dashboard: React.FC = () => {
         notes: [...prev.notes, ...newNotes]
       }));
       setSelectedNoteId(newNotes[0].id);
-      alert(`${newNotes.length} notes imported successfully.`);
+      showAlert('가져오기 성공', `${newNotes.length}개의 노트를 성공적으로 불러왔습니다.`, 'success');
     }
 
     if (textFileInputRef.current) textFileInputRef.current.value = '';
@@ -259,7 +277,7 @@ export const Dashboard: React.FC = () => {
         
         return {
           ...prev,
-          notes: alignChildFolders(filteredNotes),
+          notes: filteredNotes,
           gcm: updatedGcm
         };
       });
@@ -268,7 +286,7 @@ export const Dashboard: React.FC = () => {
       setRightSidebarOpen(true);
     } catch (error) {
       console.error('Optimization failed', error);
-      alert('설계도 최적화 중 오류가 발생했습니다.');
+      showAlert('오류', '설계도 최적화 중 오류가 발생했습니다.', 'error');
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -291,15 +309,15 @@ export const Dashboard: React.FC = () => {
         const newNotes = [...prev.notes, ...newNotesWithIds];
         return {
           ...prev,
-          notes: alignChildFolders(newNotes),
+          notes: newNotes,
           gcm: updatedGcm
         };
       });
       
-      alert(`${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`);
+      showAlert('생성 완료', `${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`, 'success');
     } catch (error) {
       console.error('Failed to generate sub-modules:', error);
-      alert(`하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`);
+      showAlert('오류', `하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
     } finally {
       setIsDecomposing(false);
       setProcessStatus(null);
@@ -323,21 +341,50 @@ export const Dashboard: React.FC = () => {
     setSelectedNoteId(newNote.id);
   };
 
+  const handleAddChildNote = (parentId: string) => {
+    const parentNote = state.notes.find(n => n.id === parentId);
+    const newNote: Note = {
+      id: Math.random().toString(36).substr(2, 9),
+      title: '새 하위 노트',
+      folder: parentNote ? parentNote.folder : '미분류',
+      parentNoteId: parentId,
+      content: `# ${parentNote?.title || ''}의 하위 기능\n여기에 세부 기능을 설명하세요.`,
+      summary: '하위 기능 설명',
+      status: 'Planned',
+      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
+    };
+    setState(prev => ({
+      ...prev,
+      notes: [...prev.notes, newNote]
+    }));
+    setSelectedNoteId(newNote.id);
+  };
+
   const handleDeleteNote = (noteId: string) => {
-    if (window.confirm('이 노트를 삭제하시겠습니까?')) {
-      setState(prev => ({
-        ...prev,
-        notes: prev.notes.filter(n => n.id !== noteId)
-      }));
-      if (selectedNoteId === noteId) {
-        setSelectedNoteId(null);
-      }
-    }
+    setDialogConfig({
+      isOpen: true,
+      title: '노트 삭제',
+      message: '이 노트를 삭제하시겠습니까?\n삭제된 노트는 복구할 수 없습니다.',
+      type: 'warning',
+      confirmText: '삭제',
+      cancelText: '취소',
+      onConfirm: () => {
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.filter(n => n.id !== noteId)
+        }));
+        if (selectedNoteId === noteId) {
+          setSelectedNoteId(null);
+        }
+        setDialogConfig(null);
+      },
+      onCancel: () => setDialogConfig(null)
+    });
   };
 
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
-      alert('GitHub 저장소 URL을 입력해주세요.');
+      showAlert('알림', 'GitHub 저장소 URL을 입력해주세요.', 'warning');
       return;
     }
 
@@ -434,11 +481,11 @@ export const Dashboard: React.FC = () => {
       if (conflictCount > 0) alertMsg += ` ${conflictCount}개의 충돌을 발견했습니다.`;
       if (discoveredNotes.length > 0) alertMsg += ` ${discoveredNotes.length}개의 새로운 노트를 자동으로 발견하여 생성했습니다.`;
       
-      alert(alertMsg);
+      showAlert('동기화 결과', alertMsg, conflictCount > 0 ? 'warning' : 'success');
 
     } catch (error) {
       console.error('Failed to sync with GitHub:', error);
-      alert('GitHub 동기화 실패. 콘솔에서 상세 내용을 확인하세요.');
+      showAlert('오류', 'GitHub 동기화 실패. 콘솔에서 상세 내용을 확인하세요.', 'error');
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -446,30 +493,12 @@ export const Dashboard: React.FC = () => {
   };
 
 
-  const alignChildFolders = (notes: Note[]): Note[] => {
-    const notesMap = new Map<string, Note>(notes.map(n => [n.id, n]));
-    let changed = false;
-    const fixedNotes = notes.map(n => {
-      if (n.parentNoteId) {
-        const parent = notesMap.get(n.parentNoteId);
-        if (parent && parent.folder !== n.folder) {
-          changed = true;
-          return { ...n, folder: parent.folder };
-        }
-      }
-      return n;
-    });
-    // Recursive check in case of deep nesting
-    if (changed) return alignChildFolders(fixedNotes);
-    return fixedNotes;
-  };
-
   const handleUpdateNote = (updatedNote: Note) => {
     setState((prev) => {
       const newNotes = prev.notes.map((n) => (n.id === updatedNote.id ? updatedNote : n));
       return {
         ...prev,
-        notes: alignChildFolders(newNotes),
+        notes: newNotes,
       };
     });
   };
@@ -512,99 +541,25 @@ export const Dashboard: React.FC = () => {
 
   const selectedNote = state.notes.find((n) => n.id === selectedNoteId) || null;
 
-  const [gcmSuggestions, setGcmSuggestions] = useState<{ suggestedEntities: any[]; suggestedVariables: Record<string, string> } | null>(null);
-  const [linkSuggestions, setLinkSuggestions] = useState<{ fromId: string; toId: string; reason: string }[]>([]);
-  const [sharedCoreSuggestions, setSharedCoreSuggestions] = useState<{ noteId: string; reason: string }[]>([]);
-
-  const handleSuggestGcm = async () => {
-    if (state.notes.length === 0) return;
-    setProcessStatus({ message: 'GCM 추천 분석 중...' });
+  const handleAnalyzeNextSteps = async () => {
+    setProcessStatus({ message: '다음 단계 분석 중...' });
     try {
-      const suggestions = await suggestGcmUpdates(state.notes, state.gcm);
-      setGcmSuggestions(suggestions);
-      setRightSidebarOpen(true);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setProcessStatus(null);
-    }
-  };
-
-  const handleDetectLinks = async () => {
-    if (state.notes.length === 0) return;
-    setProcessStatus({ message: '누락된 연결점 탐색 중...' });
-    try {
-      const suggestions = await detectMissingLinks(state.notes);
-      setLinkSuggestions(suggestions.suggestedLinks);
-      setRightSidebarOpen(true);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setProcessStatus(null);
-    }
-  };
-
-  const handleAnalyzeSharedCore = async () => {
-    if (state.notes.length === 0) return;
-    setProcessStatus({ message: 'Shared Core 후보 분석 중...' });
-    try {
-      const suggestions = await analyzeSharedCore(state.notes);
-      setSharedCoreSuggestions(suggestions.suggestedPromotions);
-      setRightSidebarOpen(true);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setProcessStatus(null);
-    }
-  };
-
-  const applySharedCorePromotion = (noteId: string) => {
-    setState(prev => ({
-      ...prev,
-      notes: prev.notes.map(n => {
-        if (n.id === noteId) {
-          return { ...n, folder: 'Shared' };
-        }
-        return n;
-      })
-    }));
-    setSharedCoreSuggestions(prev => prev.filter(s => s.noteId !== noteId));
-  };
-
-  const applyGcmSuggestion = (type: 'entity' | 'variable', data: any) => {
-    setState(prev => {
-      const newGcm = { ...prev.gcm };
-      if (type === 'entity') {
-        newGcm.entities[data.name] = data;
-      } else {
-        newGcm.variables[data.key] = data.value;
+      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, []);
+      setNextStepSuggestion(suggestion);
+      
+      if (Object.keys(updatedStatuses).length > 0) {
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.map(n => updatedStatuses[n.id] ? { ...n, status: updatedStatuses[n.id] } : n)
+        }));
       }
-      return { ...prev, gcm: newGcm };
-    });
-    
-    if (type === 'entity') {
-      setGcmSuggestions(prev => prev ? { ...prev, suggestedEntities: prev.suggestedEntities.filter(e => e.name !== data.name) } : null);
-    } else {
-      setGcmSuggestions(prev => {
-        if (!prev) return null;
-        const newVars = { ...prev.suggestedVariables };
-        delete newVars[data.key];
-        return { ...prev, suggestedVariables: newVars };
-      });
+      setRightSidebarOpen(true);
+    } catch (e) {
+      console.error(e);
+      showAlert('오류', '다음 단계 분석에 실패했습니다.', 'error');
+    } finally {
+      setProcessStatus(null);
     }
-  };
-
-  const applyLinkSuggestion = (link: { fromId: string; toId: string }) => {
-    setState(prev => ({
-      ...prev,
-      notes: prev.notes.map(n => {
-        if (n.id === link.fromId) {
-          return { ...n, relatedNoteIds: Array.from(new Set([...(n.relatedNoteIds || []), link.toId])) };
-        }
-        return n;
-      })
-    }));
-    setLinkSuggestions(prev => prev.filter(l => !(l.fromId === link.fromId && l.toId === link.toId)));
   };
 
   const handleSearchExternal = async (customQuery?: string) => {
@@ -755,7 +710,7 @@ export const Dashboard: React.FC = () => {
 
       setState(prev => ({
         ...prev,
-        notes: alignChildFolders([...prev.notes, ...newNotesWithIds]),
+        notes: [...prev.notes, ...newNotesWithIds],
         gcm: result.updatedGcm
       }));
 
@@ -791,6 +746,8 @@ export const Dashboard: React.FC = () => {
           selectedNoteId={selectedNoteId}
           onSelectNote={setSelectedNoteId}
           onAddNote={handleAddNote}
+          onAddChildNote={handleAddChildNote}
+          onDeleteNote={handleDeleteNote}
         />
       )}
 
@@ -1053,25 +1010,11 @@ export const Dashboard: React.FC = () => {
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
                 </button>
                 <button
-                  onClick={handleSuggestGcm}
-                  disabled={state.notes.length === 0}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
-                >
-                  <Database className="w-3 h-3 text-emerald-500" /> GCM 추천
-                </button>
-                <button
-                  onClick={handleDetectLinks}
-                  disabled={state.notes.length === 0}
-                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
-                >
-                  <LinkIcon className="w-3 h-3 text-amber-500" /> 연결점 탐색
-                </button>
-                <button
-                  onClick={handleAnalyzeSharedCore}
+                  onClick={handleAnalyzeNextSteps}
                   disabled={state.notes.length === 0}
                   className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
                 >
-                  <Layers className="w-3 h-3 text-rose-500" /> Shared Core 분석
+                  <Lightbulb className="w-3 h-3 text-amber-500" /> 다음 단계 분석 (5개 추천)
                 </button>
               </div>
               <button
@@ -1108,110 +1051,7 @@ export const Dashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* GCM Suggestions */}
-              {gcmSuggestions && (gcmSuggestions.suggestedEntities.length > 0 || Object.keys(gcmSuggestions.suggestedVariables).length > 0) && (
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                    <Database className="w-3 h-3 text-emerald-500" />
-                    GCM 추천 엔진
-                  </h3>
-                  
-                  {gcmSuggestions.suggestedEntities.map(entity => (
-                    <div key={entity.name} className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800/50 p-3 rounded-lg space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">{entity.name} ({entity.type})</span>
-                        <button 
-                          onClick={() => applyGcmSuggestion('entity', entity)}
-                          className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded hover:bg-emerald-700"
-                        >
-                          추가
-                        </button>
-                      </div>
-                      <p className="text-[10px] text-emerald-700 dark:text-emerald-400">{entity.description}</p>
-                    </div>
-                  ))}
-
-                  {Object.entries(gcmSuggestions.suggestedVariables).map(([key, value]) => (
-                    <div key={key} className="bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-800/50 p-3 rounded-lg space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono font-bold text-indigo-800 dark:text-indigo-300">{key}</span>
-                        <button 
-                          onClick={() => applyGcmSuggestion('variable', { key, value })}
-                          className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded hover:bg-indigo-700"
-                        >
-                          추가
-                        </button>
-                      </div>
-                      <p className="text-[10px] text-indigo-700 dark:text-indigo-400">{value}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Link Suggestions */}
-              {linkSuggestions.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                    <LinkIcon className="w-3 h-3 text-blue-500" />
-                    누락된 연결점 탐색
-                  </h3>
-                  {linkSuggestions.map((link, idx) => {
-                    const fromNote = state.notes.find(n => n.id === link.fromId);
-                    const toNote = state.notes.find(n => n.id === link.toId);
-                    if (!fromNote || !toNote) return null;
-                    
-                    return (
-                      <div key={idx} className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50 p-3 rounded-lg space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-blue-800 dark:text-blue-300 truncate max-w-[150px]">
-                            {fromNote.title} → {toNote.title}
-                          </span>
-                          <button 
-                            onClick={() => applyLinkSuggestion(link)}
-                            className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700"
-                          >
-                            연결
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-blue-700 dark:text-blue-400">{link.reason}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Shared Core Suggestions */}
-              {sharedCoreSuggestions.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                    <Layers className="w-3 h-3 text-rose-500" />
-                    Shared Core 격상 제안
-                  </h3>
-                  {sharedCoreSuggestions.map((suggestion, idx) => {
-                    const note = state.notes.find(n => n.id === suggestion.noteId);
-                    if (!note) return null;
-                    
-                    return (
-                      <div key={idx} className="bg-rose-50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-800/50 p-3 rounded-lg space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-rose-800 dark:text-rose-300 truncate max-w-[150px]">
-                            {note.title}
-                          </span>
-                          <button 
-                            onClick={() => applySharedCorePromotion(suggestion.noteId)}
-                            className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded hover:bg-rose-700"
-                          >
-                            격상
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-rose-700 dark:text-rose-400">{suggestion.reason}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {!nextStepSuggestion && !gcmSuggestions && linkSuggestions.length === 0 && sharedCoreSuggestions.length === 0 && (
+              {!nextStepSuggestion && (
                 <div className="text-center py-12">
                   <Sparkles className="w-8 h-8 text-slate-200 mx-auto mb-3" />
                   <p className="text-xs text-slate-400">현재 분석된 제안이 없습니다.<br/>상단 도구를 사용하여 분석을 시작하세요.</p>
@@ -1220,6 +1060,18 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      {dialogConfig && (
+        <Dialog
+          isOpen={dialogConfig.isOpen}
+          title={dialogConfig.title}
+          message={dialogConfig.message}
+          type={dialogConfig.type}
+          onConfirm={dialogConfig.onConfirm}
+          onCancel={dialogConfig.onCancel}
+          confirmText={dialogConfig.confirmText}
+          cancelText={dialogConfig.cancelText}
+        />
       )}
     </div>
   );

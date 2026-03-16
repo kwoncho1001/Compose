@@ -119,17 +119,61 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
 
     // 2. Drill-down View (Notes within a domain)
     if (selectedDomain) {
-      const domainNotes = notes.filter(n => (n.folder || '미분류') === selectedDomain);
-      const nodes = domainNotes.map(note => ({
-        id: note.id,
-        name: note.title,
-        val: note.isMainFeature ? 10 : 6,
-        type: 'note',
-        status: note.status,
-        summary: note.summary
+      // 1. 선택된 도메인에 속한 노트들 (Primary Notes)
+      const primaryNotes = notes.filter(n => (n.folder || '미분류') === selectedDomain);
+      const primaryNoteIds = new Set(primaryNotes.map(n => n.id));
+
+      // 2. 선택된 도메인의 노트들과 연결된 '연관 도메인' 찾기
+      const connectedDomainNames = new Set<string>();
+      notes.forEach(note => {
+        const noteDomain = note.folder || '미분류';
+        const targets = [...(note.parentNoteId ? [note.parentNoteId] : []), ...(note.relatedNoteIds || [])];
+
+        // 케이스 A: 선택된 도메인의 노트가 가리키는 대상의 도메인
+        if (noteDomain === selectedDomain) {
+          targets.forEach(tid => {
+            const targetNote = notes.find(n => n.id === tid);
+            if (targetNote) connectedDomainNames.add(targetNote.folder || '미분류');
+          });
+        }
+        // 케이스 B: 다른 도메인의 노트가 선택된 도메인의 노트를 가리키는 경우
+        if (targets.some(tid => primaryNoteIds.has(tid))) {
+          connectedDomainNames.add(noteDomain);
+        }
+      });
+
+      // 3. 필터링 대상: 선택 도메인 + 연관 도메인에 속한 모든 노트
+      const relevantDomains = new Set([selectedDomain, ...Array.from(connectedDomainNames)]);
+      const filteredNotes = notes.filter(n => relevantDomains.has(n.folder || '미분류'));
+
+      const domainNodes = Array.from(relevantDomains).map(domain => ({
+        id: `domain-${domain}`,
+        name: domain,
+        val: domain === selectedDomain ? 18 : 12,
+        type: 'domain',
+        status: 'none',
+        summary: ''
       }));
 
-      return { nodes, links: calculateLinks(domainNotes) };
+      const noteNodes = filteredNotes.map(note => ({
+        id: note.id,
+        name: note.title,
+        val: (note.folder || '미분류') === selectedDomain ? 10 : 6,
+        type: 'note',
+        status: note.status,
+        summary: note.summary,
+        domain: note.folder || '미분류' // 도메인 정보 추가 (색상 구분 등에 활용 가능)
+      }));
+
+      const nodes = [...domainNodes, ...noteNodes];
+      const noteLinks = calculateLinks(filteredNotes);
+      const hierarchyLinks = filteredNotes.map(note => ({
+        source: note.id,
+        target: `domain-${note.folder || '미분류'}`,
+        type: 'hierarchy'
+      }));
+
+      return { nodes, links: [...noteLinks, ...hierarchyLinks] };
     }
 
     // 3. Total View (Existing logic with minor cleanup)
@@ -158,16 +202,35 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       filteredNotes = notes.filter(n => significantIds.has(n.id) || neighborIds.has(n.id));
     }
 
-    const nodes = filteredNotes.map(note => ({
+    const domains = Array.from(new Set(filteredNotes.map(n => n.folder || '미분류')));
+    const domainNodes = domains.map(domain => ({
+      id: `domain-${domain}`,
+      name: domain,
+      val: 15,
+      type: 'domain',
+      status: 'none',
+      summary: ''
+    }));
+
+    const noteNodes = filteredNotes.map(note => ({
       id: note.id,
       name: note.title,
       val: note.isMainFeature ? 10 : 6,
       type: 'note',
       status: note.status,
-      summary: note.summary
+      summary: note.summary,
+      domain: note.folder || '미분류'
     }));
 
-    return { nodes, links: calculateLinks(filteredNotes) };
+    const nodes = [...domainNodes, ...noteNodes];
+    const noteLinks = calculateLinks(filteredNotes);
+    const hierarchyLinks = filteredNotes.map(note => ({
+      source: note.id,
+      target: `domain-${note.folder || '미분류'}`,
+      type: 'hierarchy'
+    }));
+
+    return { nodes, links: [...noteLinks, ...hierarchyLinks] };
   }, [notes, featureOnly, currentView, selectedDomain]);
 
   useEffect(() => {
@@ -182,13 +245,14 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
     if (node.id === selectedNoteId) return '#6366f1'; // Indigo-500
     if (node.status === 'Conflict') return '#ef4444'; // Red-500
     if (node.status === 'Done') return '#10b981'; // Emerald-500
+    if (node.status === 'Planned') return '#eab308'; // Yellow-500
     
     return darkMode ? '#475569' : '#94a3b8';
   };
 
   const handleNodeClick = (node: any) => {
     if (node.type === 'domain') {
-      setSelectedDomain(node.id);
+      setSelectedDomain(node.name);
     } else {
       onSelectNote(node.id);
     }
@@ -260,13 +324,15 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           nodeLabel={(node: any) => `${node.name}\n${node.summary}`}
           nodeColor={nodeColor}
           nodeRelSize={6}
-          linkDirectionalArrowLength={3}
+          linkDirectionalArrowLength={(link: any) => link.type === 'hierarchy' ? 0 : 3}
           linkDirectionalArrowRelPos={1}
           linkCurvature={0.1}
           linkColor={(link: any) => {
+            if (link.type === 'hierarchy') return darkMode ? 'rgba(99, 102, 241, 0.3)' : 'rgba(79, 70, 229, 0.3)';
             if (link.type === 'related' || link.type === 'domain-link') return darkMode ? '#475569' : '#94a3b8';
             return darkMode ? '#334155' : '#cbd5e1';
           }}
+          linkLineDash={(link: any) => link.type === 'hierarchy' ? [2, 2] : null}
           onNodeClick={handleNodeClick}
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const label = node.name || '';
@@ -335,18 +401,18 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
               <span>Conflict (충돌)</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[#94a3b8]"></div>
+              <div className="w-2 h-2 rounded-full bg-[#eab308]"></div>
               <span>Planned (계획중)</span>
             </div>
           </>
         )}
         <div className="mt-1 pt-1 border-t border-slate-200 dark:border-slate-700">
           <div className="flex items-center gap-2">
-            <div className="w-3 h-0.5 bg-slate-400"></div>
-            <span>계층 관계</span>
+            <div className="w-3 h-0.5 border-t border-dashed border-indigo-400"></div>
+            <span>도메인 소속</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-0.5 border-t border-dashed border-slate-400"></div>
+            <div className="w-3 h-0.5 bg-slate-400"></div>
             <span>연관 관계</span>
           </div>
         </div>

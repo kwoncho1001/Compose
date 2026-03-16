@@ -2,7 +2,7 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Note, GCM, NoteStatus, GCMEntity } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const MODEL_NAME = "gemini-3-flash-preview";
+const MODEL_NAME = "gemini-2.5-flash";
 
 const systemInstruction = `
 당신은 Vibe-Architect 프로젝트의 핵심 AI 설계자입니다.
@@ -540,6 +540,9 @@ export const suggestNextSteps = async (
 마인드맵(그래프) 구조를 분석하여, 연결이 부족한 노드나 '공통 부품'으로 분리 가능한 패턴을 찾아 제안하십시오.
 모든 제안과 설명은 반드시 한국어로 작성해야 합니다.
 
+[중요] 특히, 다음에 추가하면 좋을 기능 5가지를 우선순위(구현 순서)에 맞춰서 제시하십시오. 
+예를 들어, 데이터 저장소가 없는데 목록 조회 기능을 제안하지 않도록 선행 조건(Prerequisites)을 고려하여 논리적인 순서로 제안하십시오.
+
 현재 노트 목록:
 ${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, status: n.status, summary: n.summary, relatedNoteIds: n.relatedNoteIds })), null, 2)}
 
@@ -548,13 +551,13 @@ ${JSON.stringify(githubFiles.slice(0, 100))}
 
 작업:
 1. 프로젝트의 전반적인 진행 상황을 요약합니다.
-2. 다음에 구현하거나 구체화해야 할 핵심 기능/모듈을 추천합니다.
+2. 다음에 구현하거나 구체화해야 할 핵심 기능/모듈 5가지를 우선순위에 따라 추천합니다. (구현 순서 강조)
 3. 마인드맵 관점에서 노드 간의 연결을 강화하거나, 공통 로직을 분리할 것을 제안합니다.
 4. 각 노트의 상태(status)가 실제 구현 상황과 맞지 않는 것 같으면 업데이트를 제안합니다.
 
 Return JSON:
 {
-  "suggestion": "한국어로 된 상세한 다음 단계 제안 (Markdown)",
+  "suggestion": "한국어로 된 상세한 다음 단계 제안 (Markdown 형식, 5가지 추천 기능 포함)",
   "updatedStatuses": { "noteId1": "Done", "noteId2": "In-Progress" }
 }
 `;
@@ -771,7 +774,22 @@ Return JSON:
     contents: prompt,
     config: { 
       systemInstruction,
-      responseMimeType: "application/json" 
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          newNotes: { type: Type.ARRAY, items: noteSchema },
+          updatedGcm: {
+            type: Type.OBJECT,
+            properties: {
+              entities: { type: Type.OBJECT },
+              variables: { type: Type.OBJECT },
+            },
+            required: ["entities", "variables"],
+          },
+        },
+        required: ["newNotes", "updatedGcm"],
+      },
     }
   });
 
@@ -1092,18 +1110,11 @@ export const translateQueryForGithub = async (query: string): Promise<{ queries:
       {
         "queries": ["query1", "query2"],
         "suggestedRepos": ["owner/repo1", "owner/repo2"]
-      }`,
+      }
+      
+      반드시 위의 JSON 형식으로만 응답하십시오. 마크다운 백틱(\`\`\`json)이나 다른 설명은 포함하지 마십시오.`,
       config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            queries: { type: Type.ARRAY, items: { type: Type.STRING } },
-            suggestedRepos: { type: Type.ARRAY, items: { type: Type.STRING } }
-          },
-          required: ["queries", "suggestedRepos"]
-        }
+        tools: [{ googleSearch: {} }]
       }
     });
     return safeJsonParse(response.text || "{\"queries\":[], \"suggestedRepos\":[]}");
@@ -1157,13 +1168,14 @@ export const summarizeReposShort = async (
   
   출력 형식 (JSON):
   {
-    "summaries": {
-      "repo_full_name": {
+    "summaries": [
+      {
+        "repoName": "repo_full_name",
         "nickname": "...",
         "summary": "...",
         "features": "..."
       }
-    }
+    ]
   }
   `;
 
@@ -1177,8 +1189,17 @@ export const summarizeReposShort = async (
           type: Type.OBJECT,
           properties: {
             summaries: {
-              type: Type.OBJECT,
-              description: "A map where the key is the repo full_name and the value is the structured summary."
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  repoName: { type: Type.STRING },
+                  nickname: { type: Type.STRING },
+                  summary: { type: Type.STRING },
+                  features: { type: Type.STRING }
+                },
+                required: ["repoName", "nickname", "summary", "features"]
+              }
             }
           },
           required: ["summaries"]
@@ -1186,7 +1207,22 @@ export const summarizeReposShort = async (
       }
     });
 
-    return safeJsonParse(response.text || '{"summaries": {}}');
+    const parsed = safeJsonParse(response.text || '{"summaries": []}');
+    const summariesMap: Record<string, { nickname: string; summary: string; features: string }> = {};
+    
+    if (parsed && Array.isArray(parsed.summaries)) {
+      parsed.summaries.forEach((item: any) => {
+        if (item.repoName) {
+          summariesMap[item.repoName] = {
+            nickname: item.nickname || '',
+            summary: item.summary || '',
+            features: item.features || ''
+          };
+        }
+      });
+    }
+
+    return { summaries: summariesMap };
   } catch (err) {
     console.error('Summarize repos failed:', err);
     return { summaries: {} };

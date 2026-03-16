@@ -8,6 +8,7 @@ import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, 
 import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge } from '../services/gemini';
 import { Button } from './common/Button';
 import { Input } from './common/Input';
+import { Dialog } from './common/Dialog';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -44,6 +45,23 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
   const [isGeneratingSub, setIsGeneratingSub] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [yamlErrors, setYamlErrors] = useState<string[]>([]);
+  const [dialogConfig, setDialogConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'warning' | 'error' | 'success';
+    onConfirm: () => void;
+  } | null>(null);
+
+  const showAlert = (title: string, message: string, type: 'info' | 'warning' | 'error' | 'success' = 'info') => {
+    setDialogConfig({
+      isOpen: true,
+      title,
+      message,
+      type,
+      onConfirm: () => setDialogConfig(null)
+    });
+  };
   
   // Local state for manual editing
   const [editData, setEditData] = useState<{
@@ -110,6 +128,10 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
     onUpdateNote({ ...note, status: e.target.value as Note['status'] });
   };
 
+  const handleParentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    onUpdateNote({ ...note, parentNoteId: e.target.value || undefined });
+  };
+
   const handleSaveManual = () => {
     // Sync relatedNoteIds from YAML before saving
     const meta = parseMetadata(editData.yamlMetadata);
@@ -137,7 +159,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
       const newContent = await updateSpecFromCode(note.content, note.conflictInfo.fileContent);
       onUpdateNote({ ...note, content: newContent, status: 'Done', conflictInfo: undefined });
     } catch (e) {
-      alert('내용 업데이트에 실패했습니다.');
+      showAlert('오류', '내용 업데이트에 실패했습니다.', 'error');
     } finally {
       setIsResolving(false);
     }
@@ -150,7 +172,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
       const guide = await generateFixGuide(note.content, note.conflictInfo.fileContent);
       onUpdateNote({ ...note, conflictInfo: { ...note.conflictInfo, guide } });
     } catch (e) {
-      alert('가이드 생성에 실패했습니다.');
+      showAlert('오류', '가이드 생성에 실패했습니다.', 'error');
     } finally {
       setIsResolving(false);
     }
@@ -163,7 +185,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
       await onTargetedUpdate(note.id, command);
       setCommand('');
     } catch (e) {
-      alert('노트 업데이트에 실패했습니다.');
+      showAlert('오류', '노트 업데이트에 실패했습니다.', 'error');
     } finally {
       setIsUpdating(false);
     }
@@ -196,14 +218,23 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
       const newContent = await partialMerge(note.content, note.conflictInfo.fileContent);
       onUpdateNote({ ...note, content: newContent, status: 'Done', conflictInfo: undefined });
     } catch (e) {
-      alert('병합에 실패했습니다.');
+      showAlert('오류', '병합에 실패했습니다.', 'error');
     } finally {
       setIsResolving(false);
     }
   };
 
   return (
-    <div className="flex-1 bg-white dark:bg-slate-950 overflow-y-auto p-8 border-r border-slate-200 dark:border-slate-800 flex flex-col">
+    <div className="flex-1 bg-white dark:bg-slate-950 overflow-y-auto p-8 border-r border-slate-200 dark:border-slate-800 flex flex-col relative">
+      {dialogConfig && (
+        <Dialog
+          isOpen={dialogConfig.isOpen}
+          title={dialogConfig.title}
+          message={dialogConfig.message}
+          type={dialogConfig.type}
+          onConfirm={dialogConfig.onConfirm}
+        />
+      )}
       <div className="max-w-3xl mx-auto w-full flex-1">
         {/* Header */}
         <div className="mb-8 pb-6 border-b border-slate-200 dark:border-slate-800">
@@ -248,6 +279,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
               </button>
               <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
               <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">상위:</span>
+                <select
+                  value={note.parentNoteId || ''}
+                  onChange={handleParentChange}
+                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2 max-w-[150px]"
+                >
+                  <option value="">없음</option>
+                  {allNotes
+                    .filter(n => n.id !== note.id)
+                    .map(n => (
+                      <option key={n.id} value={n.id}>{n.title}</option>
+                    ))
+                  }
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-slate-500 dark:text-slate-400">상태:</span>
                 <select
                   value={note.status}
@@ -272,7 +319,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                 value={editData.folder}
                 onChange={(e) => setEditData({ ...editData, folder: e.target.value })}
                 className="border-b border-transparent hover:border-slate-200 focus:border-indigo-500 bg-transparent focus:outline-none transition-colors"
-                placeholder="폴더명"
+                placeholder="폴더명 (예: 대분류/소분류)"
               />
             </span>
             {note.parentNoteId && (

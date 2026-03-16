@@ -10,6 +10,7 @@ export interface Note {
   relatedNoteIds?: string[];
   status: NoteStatus;
   githubLink?: string;
+  lastUpdated?: string;
   yamlMetadata: string;
   isMainFeature?: boolean;
   conflictInfo?: {

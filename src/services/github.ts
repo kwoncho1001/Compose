@@ -51,7 +51,7 @@ export const fetchGithubFiles = async (
   // Parse repoUrl: https://github.com/owner/repo
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) {
-    throw new Error("Invalid GitHub repository URL. Expected format: https://github.com/owner/repo");
+    throw new Error("Invalid Github repository URL. Expected format: https://github.com/owner/repo");
   }
 
   const [, owner, repo] = match;

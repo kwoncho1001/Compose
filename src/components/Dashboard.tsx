@@ -16,6 +16,8 @@ import {
   optimizeBlueprint,
   generateSubModules,
   generateNoteFromCode,
+  decomposeAndMatchCode,
+  mergeLogicIntoNote,
   summarizeRepoFeatures,
   transpileExternalLogic,
   translateQueryForGithub,
@@ -384,58 +386,17 @@ export const Dashboard: React.FC = () => {
 
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
-      showAlert('알림', 'GitHub 저장소 URL을 입력해주세요.', 'warning');
+      showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
       return;
     }
 
     setIsSyncing(true);
-    setProcessStatus({ message: 'GitHub 파일 목록 가져오는 중...' });
+    setProcessStatus({ message: 'Github 파일 목록 가져오는 중...' });
     try {
       const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
-      const updatedNotes = [...state.notes];
-      let conflictCount = 0;
-      const matchedFiles: string[] = [];
-
-      setProcessStatus({ message: '기존 노트와 대조 중...', current: 0, total: updatedNotes.length });
-
-      for (let i = 0; i < updatedNotes.length; i++) {
-        setProcessStatus(prev => ({ ...prev!, current: i + 1 }));
-        const note = updatedNotes[i];
-        
-        // Find a matching file by title or keywords
-        const keywords = note.title.toLowerCase().split(' ');
-        const matchedFile = files.find((file) => 
-          keywords.some(kw => kw.length > 3 && file.toLowerCase().includes(kw)) && !file.includes('node_modules')
-        );
-
-        if (matchedFile) {
-          matchedFiles.push(matchedFile);
-          try {
-            const content = await fetchGithubFileContent(state.githubRepo, matchedFile, state.githubToken);
-            const { isMatch, reason } = await checkConflict(note.content, content);
-
-            if (isMatch) {
-              updatedNotes[i] = { ...note, status: 'Done', conflictInfo: undefined };
-            } else {
-              updatedNotes[i] = {
-                ...note,
-                status: 'Conflict',
-                conflictInfo: { filePath: matchedFile, fileContent: content, reason }
-              };
-              conflictCount++;
-            }
-          } catch (e) {
-            console.error('Failed to check conflict for', note.title, e);
-          }
-        }
-      }
-
-      // --- Auto-Discovery Flow ---
-      setProcessStatus({ message: '새로운 파일 탐색 중 (Auto-Discovery)...' });
       
-      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.css', '.html', '.py', '.go', '.java', '.c', '.cpp'];
-      const unmatchedFiles = files.filter(file => 
-        !matchedFiles.includes(file) && 
+      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
+      const sourceFiles = files.filter(file => 
         sourceExtensions.some(ext => file.endsWith(ext)) &&
         !file.includes('node_modules') &&
         !file.includes('.git') &&
@@ -443,49 +404,73 @@ export const Dashboard: React.FC = () => {
         !file.includes('build')
       );
 
-      // Limit discovery to avoid hitting AI limits
-      const discoveryLimit = 10;
-      const filesToDiscover = unmatchedFiles.slice(0, discoveryLimit);
-      const discoveredNotes: Note[] = [];
+      if (sourceFiles.length === 0) {
+        showAlert('알림', '분석할 소스 파일이 없습니다.', 'info');
+        return;
+      }
 
-      if (filesToDiscover.length > 0) {
-        setProcessStatus({ message: '새로운 파일 분석 및 노트 생성 중...', current: 0, total: filesToDiscover.length });
-        
-        for (let i = 0; i < filesToDiscover.length; i++) {
-          const file = filesToDiscover[i];
-          setProcessStatus(prev => ({ ...prev!, current: i + 1 }));
-          
-          try {
-            const content = await fetchGithubFileContent(state.githubRepo, file, state.githubToken);
-            const noteData = await generateNoteFromCode(file, content, updatedNotes);
-            
-            const newNote: Note = {
-              ...noteData,
-              id: Math.random().toString(36).substr(2, 9),
-              status: 'Done', // Since it's discovered from code, it's already implemented
-            };
-            discoveredNotes.push(newNote);
-          } catch (e) {
-            console.error('Failed to discover note from file:', file, e);
+      // Limit files to process for now to avoid excessive AI calls
+      const filesToProcess = sourceFiles.slice(0, 5); 
+      let currentNotes = [...state.notes];
+      let updateCount = 0;
+      let newCount = 0;
+
+      for (let i = 0; i < filesToProcess.length; i++) {
+        const file = filesToProcess[i];
+        setProcessStatus({ 
+          message: `${file} 분석 및 기능 분해 중 (${i + 1}/${filesToProcess.length})...`,
+          current: i + 1,
+          total: filesToProcess.length
+        });
+
+        try {
+          const content = await fetchGithubFileContent(state.githubRepo, file, state.githubToken);
+          const { logicUnits } = await decomposeAndMatchCode(file, content, currentNotes);
+
+          for (const unit of logicUnits) {
+            if (!unit.isNew && unit.matchedNoteId) {
+              // Update existing note
+              const targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
+              if (targetNote) {
+                setProcessStatus(prev => ({ ...prev!, message: `기존 노트 업데이트 중: ${targetNote.title}` }));
+                const updatedNote = await mergeLogicIntoNote(unit, targetNote);
+                currentNotes = currentNotes.map(n => n.id === updatedNote.id ? updatedNote : n);
+                updateCount++;
+              }
+            } else {
+              // Create new note
+              const newNote: Note = {
+                id: Math.random().toString(36).substr(2, 9),
+                title: unit.title,
+                folder: unit.folder,
+                content: unit.content,
+                summary: unit.summary,
+                yamlMetadata: unit.yamlMetadata,
+                status: 'Done',
+              };
+              currentNotes.push(newNote);
+              newCount++;
+            }
           }
+        } catch (e) {
+          console.error(`Failed to process file ${file}:`, e);
         }
       }
 
-      const finalNotes = [...updatedNotes, ...discoveredNotes];
-      setState((prev) => ({ ...prev, notes: finalNotes }));
+      setState(prev => ({ ...prev, notes: currentNotes }));
       
-      const { suggestion } = await suggestNextSteps(finalNotes, files);
+      const { suggestion } = await suggestNextSteps(currentNotes, files);
       setNextStepSuggestion(suggestion);
 
-      let alertMsg = '동기화 완료.';
-      if (conflictCount > 0) alertMsg += ` ${conflictCount}개의 충돌을 발견했습니다.`;
-      if (discoveredNotes.length > 0) alertMsg += ` ${discoveredNotes.length}개의 새로운 노트를 자동으로 발견하여 생성했습니다.`;
-      
-      showAlert('동기화 결과', alertMsg, conflictCount > 0 ? 'warning' : 'success');
+      showAlert(
+        '대조 및 통합 완료', 
+        `분석 완료: ${updateCount}개 노트 업데이트, ${newCount}개 새 기능 노트 생성. (분석된 파일: ${filesToProcess.length}개)`, 
+        'success'
+      );
 
     } catch (error) {
-      console.error('Failed to sync with GitHub:', error);
-      showAlert('오류', 'GitHub 동기화 실패. 콘솔에서 상세 내용을 확인하세요.', 'error');
+      console.error('Failed to sync with Github:', error);
+      showAlert('오류', 'Github 대조 및 통합 실패. 콘솔에서 상세 내용을 확인하세요.', 'error');
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -601,7 +586,7 @@ export const Dashboard: React.FC = () => {
       }
 
       if (!state.githubToken) {
-        setProcessStatus({ message: 'GitHub 토큰이 설정되지 않아 검색 속도가 제한될 수 있습니다.' });
+        setProcessStatus({ message: 'Github 토큰이 설정되지 않아 검색 속도가 제한될 수 있습니다.' });
         setTimeout(() => setProcessStatus(null), 3000);
       }
 
@@ -618,7 +603,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      setProcessStatus({ message: 'GitHub 검색 중 오류가 발생했습니다.' });
+      setProcessStatus({ message: 'Github 검색 중 오류가 발생했습니다.' });
       setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsSearchingExternal(false);
@@ -893,7 +878,7 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <h2 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">Vibe-Architect에 오신 것을 환영합니다</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  상단 바에 기능 아이디어를 입력하면 자동으로 모듈형 노트로 분해하고, 글로벌 컨텍스트 맵을 업데이트하며, GitHub 저장소와 동기화합니다.
+                  상단 바에 기능 아이디어를 입력하면 자동으로 모듈형 노트로 분해하고, 글로벌 컨텍스트 맵을 업데이트하며, Github 저장소와 코드 대조 및 통합을 수행합니다.
                 </p>
               </div>
             </div>
@@ -969,20 +954,20 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* 섹션 2: GitHub 동기화 */}
+            {/* 섹션 2: Github 코드 대조 및 통합 */}
             <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">코드 동기화</h3>
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Github 코드 대조 및 통합</h3>
               <div className="space-y-2">
                 <input
                   type="text"
-                  placeholder="GitHub Repo URL"
+                  placeholder="Github Repo URL"
                   value={state.githubRepo}
                   onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
                 />
                 <input
                   type="password"
-                  placeholder="GitHub PAT (선택 사항)"
+                  placeholder="Github PAT (선택 사항)"
                   value={state.githubToken}
                   onChange={(e) => setState({ ...state, githubToken: e.target.value })}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
@@ -993,7 +978,7 @@ export const Dashboard: React.FC = () => {
                   className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all"
                 >
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
-                  GitHub와 동기화
+                  Github와 코드 대조 및 통합
                 </button>
               </div>
             </div>

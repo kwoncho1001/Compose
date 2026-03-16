@@ -7,7 +7,7 @@ export const fetchGithubFileContent = async (
 
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) {
-    throw new Error("Invalid GitHub repository URL. Expected format: https://github.com/owner/repo");
+    throw new Error("Invalid Github repository URL. Expected format: https://github.com/owner/repo");
   }
 
   const [, owner, repo] = match;
@@ -23,7 +23,7 @@ export const fetchGithubFileContent = async (
   try {
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) {
-      throw new Error(`GitHub API Error: ${response.statusText}`);
+      throw new Error(`Github API Error: ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -37,7 +37,7 @@ export const fetchGithubFileContent = async (
     }
     return data.content || '';
   } catch (error) {
-    console.error("Failed to fetch GitHub file content:", error);
+    console.error("Failed to fetch Github file content:", error);
     throw error;
   }
 };
@@ -76,13 +76,13 @@ export const fetchGithubFiles = async (
           return data.tree.map((item: any) => item.path);
         }
       }
-      throw new Error(`GitHub API Error: ${response.statusText}`);
+      throw new Error(`Github API Error: ${response.statusText}`);
     }
 
     const data = await response.json();
     return data.tree.map((item: any) => item.path);
   } catch (error) {
-    console.error("Failed to fetch GitHub files:", error);
+    console.error("Failed to fetch Github files:", error);
     throw error;
   }
 };
@@ -101,7 +101,7 @@ export const searchGithubRepos = async (
   try {
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) {
-      throw new Error(`GitHub Search Error: ${response.statusText}`);
+      throw new Error(`Github Search Error: ${response.statusText}`);
     }
     const data = await response.json();
     return data.items.map((item: any) => ({
@@ -110,7 +110,7 @@ export const searchGithubRepos = async (
       description: item.description,
     }));
   } catch (error) {
-    console.error("Failed to search GitHub repos:", error);
+    console.error("Failed to search Github repos:", error);
     throw error;
   }
 };

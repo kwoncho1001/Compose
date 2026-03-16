@@ -546,7 +546,7 @@ export const suggestNextSteps = async (
 현재 노트 목록:
 ${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, status: n.status, summary: n.summary, relatedNoteIds: n.relatedNoteIds })), null, 2)}
 
-GitHub 파일 목록:
+Github 파일 목록:
 ${JSON.stringify(githubFiles.slice(0, 100))}
 
 작업:
@@ -588,14 +588,14 @@ Return JSON:
 
 export const checkConflict = async (content: string, fileContent: string): Promise<{ isMatch: boolean; reason: string }> => {
   const prompt = `
-당신은 충돌 관리자입니다. 설계 내용(사양)과 실제 GitHub 소스 코드를 비교하십시오.
+당신은 코드 대조 및 통합 관리자입니다. 설계 내용(사양)과 실제 Github 소스 코드를 비교하십시오.
 소스 코드가 설계를 논리적으로 구현하고 있는지 판단하십시오.
 모든 설명과 이유는 반드시 한국어로 작성하십시오.
 
 설계 내용:
 ${content}
 
-GitHub 소스 코드:
+Github 소스 코드:
 ${fileContent.slice(0, 15000)}
 
 작업:
@@ -715,6 +715,155 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
   const result = safeJsonParse(response.text || "{}");
   const sanitized = sanitizeNotes([result], existingNotes);
   return sanitized[0];
+};
+
+export const decomposeAndMatchCode = async (
+  fileName: string,
+  fileContent: string,
+  existingNotes: Note[]
+): Promise<{
+  logicUnits: {
+    title: string;
+    folder: string;
+    content: string;
+    summary: string;
+    yamlMetadata: string;
+    matchedNoteId?: string;
+    matchReason?: string;
+    isNew: boolean;
+  }[]
+}> => {
+  const prompt = `
+당신은 시스템 역공학 및 아키텍처 매칭 전문가입니다. 제공된 소스 코드를 분석하여 이를 독립적인 '기능(Logic/Feature)' 단위로 분해하고, 기존 노트들과 대조하여 가장 적절한 매칭 대상을 찾으십시오.
+
+[분석 대상 코드]
+파일 이름: ${fileName}
+소스 코드:
+${fileContent.slice(0, 15000)}
+
+[기존 노트 목록 (요약)]
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
+
+[작업 지침]
+1. **기능 분해**: 소스 코드를 논리적으로 독립된 기능 단위(예: 로그인 로직, 데이터 필터링 알고리즘, UI 렌더링 컴포넌트 등)로 쪼갭니다.
+2. **유사도 매칭**: 각 기능 단위에 대해 기존 노트 목록 중 내용이나 목적이 가장 유사한 노트를 찾습니다. 파일 경로나 이름보다는 **'알고리즘의 본질'**과 **'기능적 역할'**을 기준으로 판단하십시오.
+3. **매칭 판단**: 
+   - 유사도가 높으면(80% 이상) 해당 노트의 ID를 'matchedNoteId'로 지정하고 'isNew'를 false로 설정합니다.
+   - 매칭되는 노트가 없으면 'isNew'를 true로 설정합니다.
+4. **결과 작성**: 각 기능 단위에 대해 새로운 노트 형식(title, folder, content, summary, yamlMetadata)을 생성하되, 'content'는 시스템 지침의 4개 섹션 구조를 따르십시오.
+
+[주의]
+- 'Imported' 폴더를 사용하지 마십시오.
+- 모든 텍스트는 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "logicUnits": [
+    {
+      "title": "기능 제목",
+      "folder": "도메인 중심 폴더",
+      "content": "상세 기술 명세 (4개 섹션 구조)",
+      "summary": "역할 중심 요약",
+      "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\n...",
+      "matchedNoteId": "기존_노트_ID (있는 경우)",
+      "matchReason": "매칭 이유 (한국어)",
+      "isNew": boolean
+    }
+  ]
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          logicUnits: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                folder: { type: Type.STRING },
+                content: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                yamlMetadata: { type: Type.STRING },
+                matchedNoteId: { type: Type.STRING },
+                matchReason: { type: Type.STRING },
+                isNew: { type: Type.BOOLEAN },
+              },
+              required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew"],
+            },
+          },
+        },
+        required: ["logicUnits"],
+      },
+    },
+  });
+
+  return safeJsonParse(response.text || '{"logicUnits": []}');
+};
+
+export const mergeLogicIntoNote = async (
+  logicUnit: { title: string; content: string; summary: string },
+  targetNote: Note
+): Promise<Note> => {
+  const prompt = `
+당신은 코드 통합 전문가입니다. 기존 설계 노트에 새로운 코드 분석 결과(기능 단위)를 통합하여 노트를 업데이트하십시오.
+단순히 덮어쓰는 것이 아니라, 기존의 설계 의도와 새로운 코드의 실제 구현 로직을 조화롭게 합쳐서 **'수직적 깊이'**를 더하십시오.
+
+[기존 노트]
+제목: ${targetNote.title}
+내용: ${targetNote.content}
+
+[새로운 코드 분석 결과]
+제목: ${logicUnit.title}
+내용: ${logicUnit.content}
+요약: ${logicUnit.summary}
+
+[작업 지침]
+1. **내용 통합**: 기존 설계의 핵심 개념을 유지하면서, 코드에서 발견된 구체적인 알고리즘과 데이터 흐름을 반영하여 'Detailed Algorithm & Technical Specification' 섹션을 보강하십시오.
+2. **충돌 처리**: 기존 설계와 실제 코드가 다를 경우, 두 방식을 비교 설명하거나 더 나은 방식을 채택하여 상세히 기술하십시오.
+3. **구조 유지**: 업데이트된 'content'는 반드시 시스템 지침의 4개 섹션 구조를 엄격히 따라야 합니다.
+4. **요약 업데이트**: 통합된 기능을 잘 나타내도록 'summary'를 갱신하십시오.
+5. 모든 텍스트는 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "content": "통합된 상세 내용 (Markdown)",
+  "summary": "통합된 요약 (한국어)"
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          content: { type: Type.STRING },
+          summary: { type: Type.STRING },
+        },
+        required: ["content", "summary"],
+      },
+    },
+  });
+
+  const result = safeJsonParse(response.text || "{}");
+  return {
+    ...targetNote,
+    content: result.content || targetNote.content,
+    summary: result.summary || targetNote.summary,
+    status: 'Done',
+    lastUpdated: new Date().toISOString().split('T')[0]
+  };
 };
 
 export const generateSubModules = async (
@@ -970,7 +1119,7 @@ export const summarizeRepoFeatures = async (
   userGoal: string
 ): Promise<{ features: { id: number; title: string; description: string; relatedFiles: string[] }[] }> => {
   const prompt = `
-당신은 오픈소스 분석 전문가입니다. 외부 GitHub 레포지토리의 구조와 README를 분석하여, 사용자가 원하는 목표에 부합하는 핵심 기능 리스트(메뉴)를 추출하십시오.
+당신은 오픈소스 분석 전문가입니다. 외부 Github 레포지토리의 구조와 README를 분석하여, 사용자가 원하는 목표에 부합하는 핵심 기능 리스트(메뉴)를 추출하십시오.
 
 레포지토리: ${repoName}
 사용자 목표: "${userGoal}"
@@ -1097,7 +1246,7 @@ export const translateQueryForGithub = async (query: string): Promise<{ queries:
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `사용자의 다음 요구사항을 만족하는 GitHub 레포지토리를 찾기 위한 최적의 검색 전략을 생성하십시오.
+      contents: `사용자의 다음 요구사항을 만족하는 Github 레포지토리를 찾기 위한 최적의 검색 전략을 생성하십시오.
       
       요구사항: "${query}"
       
@@ -1128,7 +1277,7 @@ export const refineSearchGoal = async (query: string): Promise<string[]> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `사용자가 입력한 키워드를 바탕으로, GitHub에서 검색하기에 적합한 '기능 중심의 설명' 3가지를 생성하십시오. 
+      contents: `사용자가 입력한 키워드를 바탕으로, Github에서 검색하기에 적합한 '기능 중심의 설명' 3가지를 생성하십시오. 
       전문 용어나 라이브러리 이름보다는 사용자가 체감할 수 있는 '기능적 가치'와 '사용자 경험' 위주로 작성하십시오.
       
       입력 키워드: "${query}"
@@ -1157,7 +1306,7 @@ export const summarizeReposShort = async (
   const prompt = `
   사용자의 목표: "${userGoal}"
   
-  다음 GitHub 레포지토리들의 목록을 보고, 각 레포지토리가 사용자의 목표를 어떻게 달성할 수 있는지 분석하십시오.
+  다음 Github 레포지토리들의 목록을 보고, 각 레포지토리가 사용자의 목표를 어떻게 달성할 수 있는지 분석하십시오.
   각 레포지토리에 대해 다음 3가지를 작성하십시오:
   1. nickname: 해당 레포지토리의 핵심 가치를 나타내는 짧은 별명 (예: 필기 최적화의 정석)
   2. summary: 1문장 요약

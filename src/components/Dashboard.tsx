@@ -21,19 +21,54 @@ import {
   summarizeRepoFeatures,
   transpileExternalLogic,
   translateQueryForGithub,
-  refineSearchGoal
+  refineSearchGoal,
+  summarizeReposShort
 } from '../services/gemini';
-import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos } from '../services/github';
+import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails } from '../services/github';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Link as LinkIcon, Search, ChevronRight } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
 export const Dashboard: React.FC = () => {
-  const [state, setState] = useState<AppState>({
-    notes: [],
-    gcm: { entities: {}, variables: {} },
-    githubRepo: '',
-    githubToken: '',
+  const [state, setState] = useState<AppState>(() => {
+    const saved = localStorage.getItem('vibe-architect-state');
+    let initialState: AppState = {
+      notes: [],
+      gcm: { entities: {}, variables: {} },
+      githubRepo: '',
+      githubToken: process.env.GIthub_Token || '',
+    };
+
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.notes) {
+          const notesMap = new Map<string, Note>(parsed.notes.map((n: Note) => [n.id, n]));
+          const fixedNotes = parsed.notes.map((n: Note) => {
+            if (n.parentNoteId) {
+              const parent = notesMap.get(n.parentNoteId);
+              if (parent && parent.folder !== n.folder) {
+                return { ...n, folder: parent.folder };
+              }
+            }
+            return n;
+          });
+          initialState = { 
+            ...parsed, 
+            notes: fixedNotes,
+            githubToken: parsed.githubToken || process.env.GIthub_Token || '' 
+          };
+        } else {
+          initialState = { 
+            ...parsed, 
+            githubToken: parsed.githubToken || process.env.GIthub_Token || '' 
+          };
+        }
+      } catch (e) {
+        console.error('Failed to parse saved state', e);
+      }
+    }
+    return initialState;
   });
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
@@ -69,35 +104,13 @@ export const Dashboard: React.FC = () => {
   const [isTranspiling, setIsTranspiling] = useState(false);
   const [refinedGoals, setRefinedGoals] = useState<string[]>([]);
   const [isRefiningGoals, setIsRefiningGoals] = useState(false);
+  const [transferStep, setTransferStep] = useState<1 | 2 | 3 | 4>(1);
+  const [repoSummaries, setRepoSummaries] = useState<Record<string, { nickname: string; summary: string; features: string }>>({});
+  const [selectedFeatures, setSelectedFeatures] = useState<any[]>([]);
+  const [selectedGoal, setSelectedGoal] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
-
-  // Load from localStorage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('vibe-architect-state');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.notes) {
-          // General logic: Ensure child notes are in the same folder as their parents
-          const notesMap = new Map<string, Note>(parsed.notes.map((n: Note) => [n.id, n]));
-          const fixedNotes = parsed.notes.map((n: Note) => {
-            if (n.parentNoteId) {
-              const parent = notesMap.get(n.parentNoteId);
-              if (parent && parent.folder !== n.folder) {
-                return { ...n, folder: parent.folder };
-              }
-            }
-            return n;
-          });
-          setState({ ...parsed, notes: fixedNotes });
-        }
-      } catch (e) {
-        console.error('Failed to load state from localStorage', e);
-      }
-    }
-  }, []);
 
   // Save to localStorage on change
   useEffect(() => {
@@ -599,18 +612,37 @@ export const Dashboard: React.FC = () => {
     if (!queryToSearch.trim()) return;
     
     setIsSearchingExternal(true);
-    setRefinedGoals([]); // Clear goals when searching
+    setSelectedGoal(queryToSearch);
     
     try {
-      // Query Optimization for GitHub Search (especially for non-English queries)
-      let optimizedQuery = queryToSearch;
+      let allRepos: { full_name: string; html_url: string; description: string }[] = [];
       const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(queryToSearch);
       
       if (isKorean) {
-        const translated = await translateQueryForGithub(queryToSearch);
-        if (translated) {
-          optimizedQuery = translated;
+        const { queries, suggestedRepos } = await translateQueryForGithub(queryToSearch);
+        
+        // 1. Fetch suggested repos directly
+        if (suggestedRepos && suggestedRepos.length > 0) {
+          const details = await Promise.all(
+            suggestedRepos.map(name => fetchGithubRepoDetails(name, state.githubToken))
+          );
+          allRepos = [...allRepos, ...details.filter((r): r is any => r !== null)];
         }
+
+        // 2. Search using multiple queries until we have enough results
+        for (const q of queries) {
+          if (allRepos.length >= 5) break;
+          try {
+            const searchResults = await searchGithubRepos(q, state.githubToken);
+            // Avoid duplicates
+            const newResults = searchResults.filter(r => !allRepos.some(existing => existing.full_name === r.full_name));
+            allRepos = [...allRepos, ...newResults];
+          } catch (e) {
+            console.error(`Search failed for query: ${q}`, e);
+          }
+        }
+      } else {
+        allRepos = await searchGithubRepos(queryToSearch, state.githubToken);
       }
 
       if (!state.githubToken) {
@@ -618,16 +650,20 @@ export const Dashboard: React.FC = () => {
         setTimeout(() => setProcessStatus(null), 3000);
       }
 
-      const repos = await searchGithubRepos(optimizedQuery, state.githubToken);
-      setExternalRepos(repos);
+      const top3Repos = allRepos.slice(0, 3);
+      setExternalRepos(top3Repos);
       
-      if (repos.length === 0) {
+      if (top3Repos.length > 0) {
+        setTransferStep(2);
+        const summaryResult = await summarizeReposShort(top3Repos, queryToSearch);
+        setRepoSummaries(summaryResult.summaries);
+      } else {
         setProcessStatus({ message: '검색 결과가 없습니다. 다른 키워드로 시도해보세요.' });
         setTimeout(() => setProcessStatus(null), 3000);
       }
     } catch (e) {
       console.error(e);
-      setProcessStatus({ message: 'GitHub 검색 중 오류가 발생했습니다. 토큰을 확인하거나 잠시 후 다시 시도해주세요.' });
+      setProcessStatus({ message: 'GitHub 검색 중 오류가 발생했습니다.' });
       setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsSearchingExternal(false);
@@ -637,7 +673,8 @@ export const Dashboard: React.FC = () => {
   const handleRefineGoals = async () => {
     if (!externalSearchQuery.trim()) return;
     setIsRefiningGoals(true);
-    setExternalRepos([]); // Clear previous results
+    setExternalRepos([]);
+    setTransferStep(1);
     try {
       const goals = await refineSearchGoal(externalSearchQuery);
       setRefinedGoals(goals);
@@ -653,6 +690,7 @@ export const Dashboard: React.FC = () => {
   const handleAnalyzeRepo = async (repoUrl: string) => {
     setSelectedExternalRepo(repoUrl);
     setIsAnalyzingRepo(true);
+    setTransferStep(3);
     setProcessStatus({ message: '레포지토리 분석 중 (README 및 파일 트리)...' });
     try {
       const fileTree = await fetchGithubFiles(repoUrl, state.githubToken);
@@ -664,38 +702,52 @@ export const Dashboard: React.FC = () => {
           readme = await fetchGithubFileContent(repoUrl, 'readme.md', state.githubToken);
         } catch (e2) {}
       }
-      
-      const { features } = await summarizeRepoFeatures(repoUrl, fileTree, readme, featureInput || "핵심 로직 추출");
-      setRepoFeatures(features);
+
+      const result = await summarizeRepoFeatures(repoUrl, fileTree, readme, selectedGoal || externalSearchQuery);
+      setRepoFeatures(result.features.slice(0, 3)); // Limit to 3 features
     } catch (e) {
       console.error(e);
-      alert('레포지토리 분석 실패');
+      setProcessStatus({ message: '레포지토리 분석 중 오류가 발생했습니다.' });
+      setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsAnalyzingRepo(false);
       setProcessStatus(null);
     }
   };
 
-  const handleTranspileFeature = async (feature: { title: string; relatedFiles: string[] }) => {
-    if (!selectedExternalRepo) return;
+  const handleTranspileFeature = async (featuresToTranspile: any[]) => {
+    if (featuresToTranspile.length === 0 || !selectedExternalRepo) return;
+    
     setIsTranspiling(true);
-    setProcessStatus({ message: `"${feature.title}" 로직 추출 및 이식 중...` });
+    setTransferStep(4);
+    setProcessStatus({ message: `${featuresToTranspile.length}개 기능 선별 이식 중...` });
+    
     try {
-      const externalCodes = await Promise.all(
-        feature.relatedFiles.map(async (path) => ({
-          path,
-          content: await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken)
-        }))
+      // Collect all related files for all selected features
+      const allRelatedFiles = Array.from(new Set(featuresToTranspile.flatMap(f => f.relatedFiles)));
+      
+      const fileContents = await Promise.all(
+        allRelatedFiles.map(async (path) => {
+          try {
+            const content = await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken);
+            return { path, content };
+          } catch (e) {
+            console.error(`Failed to fetch ${path}`, e);
+            return null;
+          }
+        })
       );
 
-      const { newNotes, updatedGcm } = await transpileExternalLogic(
-        feature.title,
-        externalCodes,
+      const validContents = fileContents.filter((c): c is { path: string; content: string } => c !== null);
+      
+      const result = await transpileExternalLogic(
+        featuresToTranspile.map(f => f.title),
+        validContents,
         state.gcm,
         state.notes
       );
 
-      const newNotesWithIds = newNotes.map(n => ({
+      const newNotesWithIds = result.newNotes.map(n => ({
         ...n,
         id: Math.random().toString(36).substr(2, 9),
         status: 'Planned' as const
@@ -704,20 +756,29 @@ export const Dashboard: React.FC = () => {
       setState(prev => ({
         ...prev,
         notes: alignChildFolders([...prev.notes, ...newNotesWithIds]),
-        gcm: updatedGcm
+        gcm: result.updatedGcm
       }));
 
-      alert(`"${feature.title}" 로직이 성공적으로 이식되었습니다.`);
-      setRepoFeatures([]);
-      setSelectedExternalRepo(null);
-      setExternalRepos([]);
-      setExternalSearchQuery('');
+      setProcessStatus({ message: '이식이 완료되었습니다!' });
+      setTimeout(() => setProcessStatus(null), 3000);
+      
+      // Reset transfer state after success
+      setTimeout(() => {
+        setTransferStep(1);
+        setSelectedExternalRepo(null);
+        setRepoFeatures([]);
+        setExternalRepos([]);
+        setRefinedGoals([]);
+        setSelectedFeatures([]);
+      }, 3500);
+
     } catch (e) {
       console.error(e);
-      alert('로직 이식 실패');
+      setProcessStatus({ message: '이식 중 오류가 발생했습니다.' });
+      setTimeout(() => setProcessStatus(null), 3000);
+      setTransferStep(3);
     } finally {
       setIsTranspiling(false);
-      setProcessStatus(null);
     }
   };
 
@@ -906,6 +967,11 @@ export const Dashboard: React.FC = () => {
           refinedGoals={refinedGoals}
           isRefiningGoals={isRefiningGoals}
           handleRefineGoals={handleRefineGoals}
+          transferStep={transferStep}
+          setTransferStep={setTransferStep}
+          repoSummaries={repoSummaries}
+          selectedFeatures={selectedFeatures}
+          setSelectedFeatures={setSelectedFeatures}
         />
       )}
 

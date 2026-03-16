@@ -27,9 +27,23 @@ const parseMetadata = (yaml: string) => {
 
 export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedNoteId, darkMode }) => {
   const fgRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [featureOnly, setFeatureOnly] = useState(false);
   const [currentView, setCurrentView] = useState<ViewMode>('DOMAIN');
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver(entries => {
+      if (entries[0]) {
+        const { width, height } = entries[0].contentRect;
+        setDimensions({ width, height });
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const graphData = useMemo(() => {
     // Helper to calculate links between notes
@@ -181,7 +195,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
   };
 
   return (
-    <div className="w-full h-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden">
+    <div ref={containerRef} className="w-full h-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden">
       <div className="absolute top-4 left-4 flex gap-2 z-10">
         {selectedDomain && (
           <button
@@ -237,68 +251,72 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         )}
       </div>
 
-      <ForceGraph2D
-        ref={fgRef}
-        graphData={graphData}
-        nodeLabel={(node: any) => `${node.name}\n${node.summary}`}
-        nodeColor={nodeColor}
-        nodeRelSize={6}
-        linkDirectionalArrowLength={3}
-        linkDirectionalArrowRelPos={1}
-        linkCurvature={0.1}
-        linkColor={(link: any) => {
-          if (link.type === 'related' || link.type === 'domain-link') return darkMode ? '#475569' : '#94a3b8';
-          return darkMode ? '#334155' : '#cbd5e1';
-        }}
-        onNodeClick={handleNodeClick}
-        nodeCanvasObject={(node: any, ctx, globalScale) => {
-          const label = node.name;
-          const fontSize = (node.type === 'domain' ? 14 : 12) / globalScale;
-          ctx.font = `${node.type === 'domain' ? 'bold ' : ''}${fontSize}px Inter, sans-serif`;
-          const textWidth = ctx.measureText(label).width;
-          const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
+      {dimensions.width > 0 && dimensions.height > 0 && (
+        <ForceGraph2D
+          ref={fgRef}
+          width={dimensions.width}
+          height={dimensions.height}
+          graphData={graphData}
+          nodeLabel={(node: any) => `${node.name}\n${node.summary}`}
+          nodeColor={nodeColor}
+          nodeRelSize={6}
+          linkDirectionalArrowLength={3}
+          linkDirectionalArrowRelPos={1}
+          linkCurvature={0.1}
+          linkColor={(link: any) => {
+            if (link.type === 'related' || link.type === 'domain-link') return darkMode ? '#475569' : '#94a3b8';
+            return darkMode ? '#334155' : '#cbd5e1';
+          }}
+          onNodeClick={handleNodeClick}
+          nodeCanvasObject={(node: any, ctx, globalScale) => {
+            const label = node.name || '';
+            const fontSize = (node.type === 'domain' ? 14 : 12) / globalScale;
+            ctx.font = `${node.type === 'domain' ? 'bold ' : ''}${fontSize}px Inter, sans-serif`;
+            const textWidth = ctx.measureText(label).width;
+            const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
 
-          ctx.fillStyle = darkMode ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.9)';
-          
-          if (node.type === 'domain') {
-            // Rounded rect for domains
-            const r = 4 / globalScale;
-            const x = node.x - bckgDimensions[0] / 2;
-            const y = node.y - bckgDimensions[1] / 2;
-            const w = bckgDimensions[0];
-            const h = bckgDimensions[1];
-            ctx.beginPath();
-            ctx.moveTo(x + r, y);
-            ctx.lineTo(x + w - r, y);
-            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-            ctx.lineTo(x + w, y + h - r);
-            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-            ctx.lineTo(x + r, y + h);
-            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-            ctx.lineTo(x, y + r);
-            ctx.quadraticCurveTo(x, y, x + r, y);
-            ctx.closePath();
-            ctx.fill();
-            ctx.strokeStyle = nodeColor(node);
-            ctx.lineWidth = 1 / globalScale;
-            ctx.stroke();
-          } else {
-            ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
-          }
+            ctx.fillStyle = darkMode ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.9)';
+            
+            if (node.type === 'domain') {
+              // Rounded rect for domains
+              const r = 4 / globalScale;
+              const x = node.x - bckgDimensions[0] / 2;
+              const y = node.y - bckgDimensions[1] / 2;
+              const w = bckgDimensions[0];
+              const h = bckgDimensions[1];
+              ctx.beginPath();
+              ctx.moveTo(x + r, y);
+              ctx.lineTo(x + w - r, y);
+              ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+              ctx.lineTo(x + w, y + h - r);
+              ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+              ctx.lineTo(x + r, y + h);
+              ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+              ctx.lineTo(x, y + r);
+              ctx.quadraticCurveTo(x, y, x + r, y);
+              ctx.closePath();
+              ctx.fill();
+              ctx.strokeStyle = nodeColor(node);
+              ctx.lineWidth = 1 / globalScale;
+              ctx.stroke();
+            } else {
+              ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+            }
 
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = nodeColor(node);
-          ctx.fillText(label, node.x, node.y);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = nodeColor(node);
+            ctx.fillText(label, node.x, node.y);
 
-          node.__bckgDimensions = bckgDimensions;
-        }}
-        nodePointerAreaPaint={(node: any, color, ctx) => {
-          ctx.fillStyle = color;
-          const bckgDimensions = node.__bckgDimensions;
-          bckgDimensions && ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
-        }}
-      />
+            node.__bckgDimensions = bckgDimensions;
+          }}
+          nodePointerAreaPaint={(node: any, color, ctx) => {
+            ctx.fillStyle = color;
+            const bckgDimensions = node.__bckgDimensions;
+            bckgDimensions && ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+          }}
+        />
+      )}
       <div className="absolute bottom-4 left-4 flex flex-col gap-2 text-[10px] text-slate-500 dark:text-slate-400 bg-white/80 dark:bg-slate-900/80 p-3 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm">
         <div className="font-semibold mb-1 border-b border-slate-200 dark:border-slate-700 pb-1">범례</div>
         {currentView === 'DOMAIN' && !selectedDomain ? (

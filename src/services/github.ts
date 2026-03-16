@@ -114,3 +114,29 @@ export const searchGithubRepos = async (
     throw error;
   }
 };
+
+export const fetchGithubRepoDetails = async (
+  full_name: string,
+  token?: string
+): Promise<{ full_name: string; html_url: string; description: string } | null> => {
+  const apiUrl = `https://api.github.com/repos/${full_name}`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+  };
+  if (token) {
+    headers.Authorization = `token ${token}`;
+  }
+  try {
+    const response = await fetch(apiUrl, { headers });
+    if (!response.ok) return null;
+    const item = await response.json();
+    return {
+      full_name: item.full_name,
+      html_url: item.html_url,
+      description: item.description,
+    };
+  } catch (error) {
+    console.error(`Failed to fetch repo details for ${full_name}:`, error);
+    return null;
+  }
+};

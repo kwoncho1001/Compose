@@ -1007,7 +1007,7 @@ Return JSON:
 };
 
 export const transpileExternalLogic = async (
-  featureTitle: string,
+  featureTitles: string[],
   externalCodes: { path: string; content: string }[],
   currentGcm: GCM,
   existingNotes: Note[]
@@ -1016,33 +1016,31 @@ export const transpileExternalLogic = async (
   updatedGcm: GCM 
 }> => {
   const prompt = `
-당신은 '대화형 선별 이식(Interactive Selective Transfer)' 전문가입니다. 
-외부 프로젝트의 핵심 로직을 분석하여, 우리 프로젝트의 도메인 언어와 변수 체계(GCM)에 맞게 재구성한 설계도를 생성하십시오.
-
-대상 기능: ${featureTitle}
-외부 소스 코드:
-${externalCodes.map(c => `File: ${c.path}\nContent:\n${c.content.slice(0, 5000)}`).join('\n---\n')}
-
-우리 프로젝트 GCM:
-${JSON.stringify(currentGcm)}
-
-기존 노트 목록 (참고용):
-${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
-
-작업 지침:
-1. **변수 정문화 이식**: 외부 코드의 알고리즘 뼈대는 유지하되, 모든 변수명, 클래스명, 함수명은 우리 프로젝트의 GCM 및 도메인 구조에 맞춰 치환하십시오.
-   - 예: 외부 'input_array' -> 우리 'problemList'
-   - 예: 외부 'GradeManager' -> 우리 '학생 실력 추적' 도메인 내 로직
-2. **도메인 중심 분류**: 우리 프로젝트의 도메인 폴더 구조에 맞게 노트를 생성하십시오. ('Imported' 사용 금지)
-3. **상세 설계**: 'content'는 시스템 지침의 4개 섹션 구조를 따라야 하며, 알고리즘을 우리 프로젝트의 문맥으로 상세히 설명하십시오.
-4. **연결성**: 기존 노트들과 논리적으로 연결될 수 있도록 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
-
-Return JSON:
-{
-  "newNotes": [ array of notes matching the schema ],
-  "updatedGcm": { "entities": {...}, "variables": {...} }
-}
-`;
+  당신은 '대화형 선별 이식(Interactive Selective Transfer)' 전문가입니다. 
+  외부 프로젝트의 핵심 로직을 분석하여, 우리 프로젝트의 도메인 언어와 변수 체계(GCM)에 맞게 재구성한 설계도를 생성하십시오.
+  
+  대상 기능들: ${featureTitles.join(', ')}
+  외부 소스 코드:
+  ${externalCodes.map(c => `File: ${c.path}\nContent:\n${c.content.slice(0, 5000)}`).join('\n---\n')}
+  
+  우리 프로젝트 GCM:
+  ${JSON.stringify(currentGcm)}
+  
+  기존 노트 목록 (참고용):
+  ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
+  
+  작업 지침:
+  1. **변수 정문화 이식**: 외부 코드의 알고리즘 뼈대는 유지하되, 모든 변수명, 클래스명, 함수명은 우리 프로젝트의 GCM 및 도메인 구조에 맞춰 치환하십시오.
+  2. **도메인 중심 분류**: 우리 프로젝트의 도메인 폴더 구조에 맞게 노트를 생성하십시오.
+  3. **상세 설계**: 'content'는 시스템 지침의 4개 섹션 구조를 따라야 하며, 알고리즘을 우리 프로젝트의 문맥으로 상세히 설명하십시오.
+  4. **연결성**: 기존 노트들과 논리적으로 연결될 수 있도록 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
+  
+  Return JSON:
+  {
+    "newNotes": [ array of notes matching the schema ],
+    "updatedGcm": { "entities": {...}, "variables": {...} }
+  }
+  `;
 
   const response = await ai.models.generateContent({
     model: MODEL_NAME,
@@ -1077,17 +1075,41 @@ Return JSON:
   };
 };
 
-export const translateQueryForGithub = async (query: string): Promise<string> => {
+export const translateQueryForGithub = async (query: string): Promise<{ queries: string[], suggestedRepos: string[] }> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `Translate the following Korean technical feature description into 3-5 English keywords for GitHub repository search. Return ONLY the keywords separated by spaces.
-      Query: "${query}"`,
+      contents: `사용자의 다음 요구사항을 만족하는 GitHub 레포지토리를 찾기 위한 최적의 검색 전략을 생성하십시오.
+      
+      요구사항: "${query}"
+      
+      가이드라인:
+      1. googleSearch 도구를 사용하여 해당 기능을 구현한 유명한 오픈소스 프로젝트들을 찾으십시오.
+      2. 검색에 사용할 최적화된 쿼리들을 생성하십시오 (가장 구체적인 것부터 범용적인 것까지).
+      3. 직접적으로 연관된 유명 레포지토리의 'owner/repo' 형식을 알고 있다면 제안하십시오.
+      
+      출력 형식 (JSON):
+      {
+        "queries": ["query1", "query2"],
+        "suggestedRepos": ["owner/repo1", "owner/repo2"]
+      }`,
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            queries: { type: Type.ARRAY, items: { type: Type.STRING } },
+            suggestedRepos: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["queries", "suggestedRepos"]
+        }
+      }
     });
-    return response.text.trim();
+    return safeJsonParse(response.text || "{\"queries\":[], \"suggestedRepos\":[]}");
   } catch (err) {
     console.error('Translation failed:', err);
-    return '';
+    return { queries: [], suggestedRepos: [] };
   }
 };
 
@@ -1095,13 +1117,13 @@ export const refineSearchGoal = async (query: string): Promise<string[]> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `사용자가 입력한 투박한 키워드를 바탕으로, GitHub에서 검색하기에 적합하고 구체적인 '기능 구현 목표' 문장 3가지를 생성하십시오. 
-      각 문장은 해당 기능의 핵심 기술적 요소(예: 캔버스, 필기 인식, 실시간 동기화 등)를 포함하여 전문적인 느낌이 나도록 작성하십시오.
+      contents: `사용자가 입력한 키워드를 바탕으로, GitHub에서 검색하기에 적합한 '기능 중심의 설명' 3가지를 생성하십시오. 
+      전문 용어나 라이브러리 이름보다는 사용자가 체감할 수 있는 '기능적 가치'와 '사용자 경험' 위주로 작성하십시오.
       
       입력 키워드: "${query}"
       
       출력 형식 (JSON Array):
-      ["문장1", "문장2", "문장3"]`,
+      ["설명1", "설명2", "설명3"]`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -1114,5 +1136,59 @@ export const refineSearchGoal = async (query: string): Promise<string[]> => {
   } catch (err) {
     console.error('Refining goals failed:', err);
     return [];
+  }
+};
+
+export const summarizeReposShort = async (
+  repos: { full_name: string; description: string }[],
+  userGoal: string
+): Promise<{ summaries: Record<string, { nickname: string; summary: string; features: string }> }> => {
+  const prompt = `
+  사용자의 목표: "${userGoal}"
+  
+  다음 GitHub 레포지토리들의 목록을 보고, 각 레포지토리가 사용자의 목표를 어떻게 달성할 수 있는지 분석하십시오.
+  각 레포지토리에 대해 다음 3가지를 작성하십시오:
+  1. nickname: 해당 레포지토리의 핵심 가치를 나타내는 짧은 별명 (예: 필기 최적화의 정석)
+  2. summary: 1문장 요약
+  3. features: 주요 특징 및 참고할 점 (1~2문장)
+  
+  레포지토리 목록:
+  ${JSON.stringify(repos)}
+  
+  출력 형식 (JSON):
+  {
+    "summaries": {
+      "repo_full_name": {
+        "nickname": "...",
+        "summary": "...",
+        "features": "..."
+      }
+    }
+  }
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            summaries: {
+              type: Type.OBJECT,
+              description: "A map where the key is the repo full_name and the value is the structured summary."
+            }
+          },
+          required: ["summaries"]
+        }
+      }
+    });
+
+    return safeJsonParse(response.text || '{"summaries": {}}');
+  } catch (err) {
+    console.error('Summarize repos failed:', err);
+    return { summaries: {} };
   }
 };

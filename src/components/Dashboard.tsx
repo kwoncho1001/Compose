@@ -428,15 +428,19 @@ export const Dashboard: React.FC = () => {
           const { logicUnits } = await decomposeAndMatchCode(file, content, currentNotes);
 
           for (const unit of logicUnits) {
-            if (!unit.isNew && unit.matchedNoteId) {
+            let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
+            
+            // Fallback: If targetNote is not found by ID, try to find by title and folder
+            if (!targetNote && unit.title && unit.folder) {
+              targetNote = currentNotes.find(n => n.title === unit.title && n.folder === unit.folder);
+            }
+
+            if (targetNote) {
               // Update existing note
-              const targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
-              if (targetNote) {
-                setProcessStatus(prev => ({ ...prev!, message: `기존 노트 업데이트 중: ${targetNote.title}` }));
-                const updatedNote = await mergeLogicIntoNote(unit, targetNote);
-                currentNotes = currentNotes.map(n => n.id === updatedNote.id ? updatedNote : n);
-                updateCount++;
-              }
+              setProcessStatus(prev => ({ ...prev!, message: `기존 노트 업데이트 중: ${targetNote!.title}` }));
+              const updatedNote = await mergeLogicIntoNote(unit, targetNote);
+              currentNotes = currentNotes.map(n => n.id === updatedNote.id ? updatedNote : n);
+              updateCount++;
             } else {
               // Create new note
               const newNote: Note = {

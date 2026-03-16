@@ -1076,3 +1076,43 @@ Return JSON:
     updatedGcm: result.updatedGcm || currentGcm,
   };
 };
+
+export const translateQueryForGithub = async (query: string): Promise<string> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: `Translate the following Korean technical feature description into 3-5 English keywords for GitHub repository search. Return ONLY the keywords separated by spaces.
+      Query: "${query}"`,
+    });
+    return response.text.trim();
+  } catch (err) {
+    console.error('Translation failed:', err);
+    return '';
+  }
+};
+
+export const refineSearchGoal = async (query: string): Promise<string[]> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: `사용자가 입력한 투박한 키워드를 바탕으로, GitHub에서 검색하기에 적합하고 구체적인 '기능 구현 목표' 문장 3가지를 생성하십시오. 
+      각 문장은 해당 기능의 핵심 기술적 요소(예: 캔버스, 필기 인식, 실시간 동기화 등)를 포함하여 전문적인 느낌이 나도록 작성하십시오.
+      
+      입력 키워드: "${query}"
+      
+      출력 형식 (JSON Array):
+      ["문장1", "문장2", "문장3"]`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING }
+        }
+      }
+    });
+    return safeJsonParse(response.text || "[]");
+  } catch (err) {
+    console.error('Refining goals failed:', err);
+    return [];
+  }
+};

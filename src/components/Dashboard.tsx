@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { NoteEditor } from './NoteEditor';
 import { GCMViewer } from './GCMViewer';
+import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Note, GCM, AppState } from '../types';
 import Markdown from 'react-markdown';
@@ -18,7 +19,9 @@ import {
   detectMissingLinks,
   analyzeSharedCore,
   summarizeRepoFeatures,
-  transpileExternalLogic
+  transpileExternalLogic,
+  translateQueryForGithub,
+  refineSearchGoal
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos } from '../services/github';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Link as LinkIcon, Search, ChevronRight } from 'lucide-react';
@@ -51,6 +54,7 @@ export const Dashboard: React.FC = () => {
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
   const [showGcm, setShowGcm] = useState(false);
+  const [showExternalTransfer, setShowExternalTransfer] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
@@ -63,6 +67,8 @@ export const Dashboard: React.FC = () => {
   const [isSearchingExternal, setIsSearchingExternal] = useState(false);
   const [isAnalyzingRepo, setIsAnalyzingRepo] = useState(false);
   const [isTranspiling, setIsTranspiling] = useState(false);
+  const [refinedGoals, setRefinedGoals] = useState<string[]>([]);
+  const [isRefiningGoals, setIsRefiningGoals] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
@@ -588,17 +594,59 @@ export const Dashboard: React.FC = () => {
     setLinkSuggestions(prev => prev.filter(l => !(l.fromId === link.fromId && l.toId === link.toId)));
   };
 
-  const handleSearchExternal = async () => {
-    if (!externalSearchQuery.trim()) return;
+  const handleSearchExternal = async (customQuery?: string) => {
+    const queryToSearch = customQuery || externalSearchQuery;
+    if (!queryToSearch.trim()) return;
+    
     setIsSearchingExternal(true);
+    setRefinedGoals([]); // Clear goals when searching
+    
     try {
-      const repos = await searchGithubRepos(externalSearchQuery, state.githubToken);
+      // Query Optimization for GitHub Search (especially for non-English queries)
+      let optimizedQuery = queryToSearch;
+      const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(queryToSearch);
+      
+      if (isKorean) {
+        const translated = await translateQueryForGithub(queryToSearch);
+        if (translated) {
+          optimizedQuery = translated;
+        }
+      }
+
+      if (!state.githubToken) {
+        setProcessStatus({ message: 'GitHub 토큰이 설정되지 않아 검색 속도가 제한될 수 있습니다.' });
+        setTimeout(() => setProcessStatus(null), 3000);
+      }
+
+      const repos = await searchGithubRepos(optimizedQuery, state.githubToken);
       setExternalRepos(repos);
+      
+      if (repos.length === 0) {
+        setProcessStatus({ message: '검색 결과가 없습니다. 다른 키워드로 시도해보세요.' });
+        setTimeout(() => setProcessStatus(null), 3000);
+      }
     } catch (e) {
       console.error(e);
-      alert('GitHub 검색 중 오류가 발생했습니다.');
+      setProcessStatus({ message: 'GitHub 검색 중 오류가 발생했습니다. 토큰을 확인하거나 잠시 후 다시 시도해주세요.' });
+      setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsSearchingExternal(false);
+    }
+  };
+
+  const handleRefineGoals = async () => {
+    if (!externalSearchQuery.trim()) return;
+    setIsRefiningGoals(true);
+    setExternalRepos([]); // Clear previous results
+    try {
+      const goals = await refineSearchGoal(externalSearchQuery);
+      setRefinedGoals(goals);
+    } catch (e) {
+      console.error(e);
+      setProcessStatus({ message: '키워드 정제 중 오류가 발생했습니다.' });
+      setTimeout(() => setProcessStatus(null), 3000);
+    } finally {
+      setIsRefiningGoals(false);
     }
   };
 
@@ -710,14 +758,39 @@ export const Dashboard: React.FC = () => {
             </button>
             <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
-              onClick={() => setShowGcm(!showGcm)}
+              onClick={() => {
+                setShowExternalTransfer(!showExternalTransfer);
+                if (!showExternalTransfer) {
+                  setShowGcm(false);
+                  setRightSidebarOpen(false);
+                }
+              }}
+              className={`p-2 rounded-full transition-colors ${showExternalTransfer ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              title="외부 레퍼런스 선별 이식"
+            >
+              <Github className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => {
+                setShowGcm(!showGcm);
+                if (!showGcm) {
+                  setShowExternalTransfer(false);
+                  setRightSidebarOpen(false);
+                }
+              }}
               className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               title="GCM 보기"
             >
               <Database className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+              onClick={() => {
+                setRightSidebarOpen(!rightSidebarOpen);
+                if (!rightSidebarOpen) {
+                  setShowGcm(false);
+                  setShowExternalTransfer(false);
+                }
+              }}
               className={`p-2 rounded-full transition-colors ${rightSidebarOpen ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               title="도구함 열기"
             >
@@ -812,6 +885,29 @@ export const Dashboard: React.FC = () => {
 
       {/* GCM Viewer */}
       {showGcm && <GCMViewer gcm={state.gcm} />}
+
+      {/* External Reference Transfer Sidebar */}
+      {showExternalTransfer && (
+        <ExternalTransferSidebar 
+          externalSearchQuery={externalSearchQuery}
+          setExternalSearchQuery={setExternalSearchQuery}
+          externalRepos={externalRepos}
+          isSearchingExternal={isSearchingExternal}
+          handleSearchExternal={handleSearchExternal}
+          selectedExternalRepo={selectedExternalRepo}
+          setSelectedExternalRepo={setSelectedExternalRepo}
+          isAnalyzingRepo={isAnalyzingRepo}
+          repoFeatures={repoFeatures}
+          handleAnalyzeRepo={handleAnalyzeRepo}
+          isTranspiling={isTranspiling}
+          handleTranspileFeature={handleTranspileFeature}
+          setRepoFeatures={setRepoFeatures}
+          onClose={() => setShowExternalTransfer(false)}
+          refinedGoals={refinedGoals}
+          isRefiningGoals={isRefiningGoals}
+          handleRefineGoals={handleRefineGoals}
+        />
+      )}
 
       {/* 오른쪽 사이드바: 도구 및 제안 통합 */}
       {rightSidebarOpen && (
@@ -927,84 +1023,6 @@ export const Dashboard: React.FC = () => {
                 onChange={handleTextFileUpload}
                 className="hidden"
               />
-            </div>
-
-            {/* 외부 레퍼런스 선별 이식 */}
-            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <Github className="w-3 h-3" /> 외부 레퍼런스 선별 이식
-              </h3>
-              
-              {!selectedExternalRepo ? (
-                <div className="space-y-2">
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      placeholder="레퍼런스 검색 (예: 'grade analysis')"
-                      value={externalSearchQuery}
-                      onChange={(e) => setExternalSearchQuery(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSearchExternal()}
-                      className="flex-1 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-2 py-1.5 text-[11px] dark:text-white"
-                    />
-                    <button
-                      onClick={handleSearchExternal}
-                      disabled={isSearchingExternal || !externalSearchQuery.trim()}
-                      className="p-1.5 bg-slate-100 dark:bg-slate-800 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50"
-                    >
-                      {isSearchingExternal ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                    </button>
-                  </div>
-                  
-                  {externalRepos.length > 0 && (
-                    <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
-                      {externalRepos.map(repo => (
-                        <button
-                          key={repo.full_name}
-                          onClick={() => handleAnalyzeRepo(`https://github.com/${repo.full_name}`)}
-                          className="w-full text-left p-2 rounded border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 group transition-colors"
-                        >
-                          <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 truncate">{repo.full_name}</div>
-                          <div className="text-[9px] text-slate-400 line-clamp-1">{repo.description}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-md border border-indigo-100 dark:border-indigo-800/50">
-                    <div className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 truncate max-w-[180px]">
-                      {selectedExternalRepo.replace('https://github.com/', '')}
-                    </div>
-                    <button onClick={() => { setSelectedExternalRepo(null); setRepoFeatures([]); }} className="text-[9px] text-slate-400 hover:text-slate-600 underline">변경</button>
-                  </div>
-
-                  {isAnalyzingRepo ? (
-                    <div className="flex flex-col items-center py-4 gap-2">
-                      <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
-                      <span className="text-[10px] text-slate-400">핵심 기능 메뉴 생성 중...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="text-[10px] font-bold text-slate-500">이식할 기능을 선택하세요:</div>
-                      {repoFeatures.map(feature => (
-                        <div key={feature.id} className="p-2 border border-slate-100 dark:border-slate-800 rounded-md hover:border-indigo-200 dark:hover:border-indigo-800 transition-colors">
-                          <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200">{feature.title}</div>
-                          <div className="text-[10px] text-slate-500 mb-2">{feature.description}</div>
-                          <button
-                            onClick={() => handleTranspileFeature(feature)}
-                            disabled={isTranspiling}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1"
-                          >
-                            {isTranspiling ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <ChevronRight className="w-2.5 h-2.5" />}
-                            선별 이식 실행
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* AI 제안 및 분석 결과 */}

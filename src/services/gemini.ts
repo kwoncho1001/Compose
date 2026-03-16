@@ -31,7 +31,9 @@ const systemInstruction = `
       - 4.4. 상호 연동성 및 의존성 (Dependencies)
 7. [중요] 요약(summary) 규칙: 'summary'는 "Imported from..."과 같은 출처 정보가 아니라, 해당 모듈이 시스템에서 수행하는 실제 기능을 1-2문장의 한국어로 설명해야 합니다.
 8. [중요] 폴더 및 명칭 규칙:
-   - 'Imported' 폴더는 임시 저장소입니다. 모든 핵심 모듈은 반드시 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 적절한 카테고리로 재배치하십시오.
+   - 'Imported' 폴더는 절대 사용하지 마십시오.
+   - 'Core', 'Feature', 'Shared', 'UI', 'Logic'과 같은 기술 계층 명칭 대신, '학생 실력 추적', '문제 풀이 공간', '문제 난이도 측정', '문제 스캔'과 같이 실제 기능을 나타내는 도메인(Domain) 단위로 폴더를 구성하십시오.
+   - 모든 노드는 해당 기능이 속한 비즈니스 영역 폴더로 즉시 분류되어야 합니다.
    - 제목에서 'Main_', 'ㄴ.', '1.' 등의 불필요한 접두어를 제거하고, 기능의 본질을 나타내는 명확한 한국어 명칭을 사용하십시오.
    - [중요] 노트 제목에 'ㄱ, ㄴ, ㄷ' 또는 '1, 2, 3' 등의 숫자를 붙여 순서를 매기지 마십시오.
    - 시스템의 위계질서를 폴더 이름이 아닌 'componentType'과 'relatedNoteIds'로 표현하십시오.
@@ -108,7 +110,7 @@ Task:
 5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
 6. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
 7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
-8. [중요] 폴더명에서 'Imported'를 사용하지 말고, 'Core', 'Feature', 'Shared', 'UI', 'Logic' 중 적절한 것을 선택하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
+8. [중요] 폴더명에서 'Imported'를 사용하지 마십시오. 'Core', 'UI', 'Logic' 등 기술 계층 명칭 대신 '학생 실력 추적', '문제 풀이 공간' 등 실제 기능/도메인 단위의 폴더명을 사용하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
 
 Return JSON:
 {
@@ -163,7 +165,7 @@ Current GCM: ${JSON.stringify(currentGcm)}
 1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. parentNoteId와 relatedNoteIds를 적절히 설정하여 마인드맵 관계를 형성하십시오. (반드시 ID 사용)
 2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다. (ID 절대 보존)
 3. GCM을 업데이트합니다.
-4. [중요] 'Imported' 폴더 사용을 금지하고, 제목에서 불필요한 접두어를 제거하십시오.
+4. [중요] 'Imported' 폴더 및 기술 계층(Core, UI 등) 폴더 사용을 금지하고, 도메인/기능 중심의 폴더명을 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
 
 Return JSON:
 {
@@ -224,11 +226,33 @@ Return JSON:
     yamlMetadata: mainFeature.yamlMetadata,
   };
 
+  // Sanitize relatedNoteIds for both new and updated notes
+  const sanitizedNewNotes = sanitizeNotes([mainNote, ...(step2Result.newDetailNotes || [])], existingNotes);
+  const sanitizedUpdatedNotes = sanitizeNotes(step2Result.updatedDetailNotes || [], existingNotes);
+
   return {
-    newNotes: [mainNote, ...(step2Result.newDetailNotes || [])],
-    updatedNotes: step2Result.updatedDetailNotes || [],
+    newNotes: sanitizedNewNotes,
+    updatedNotes: sanitizedUpdatedNotes,
     updatedGcm: step2Result.updatedGcm || currentGcm,
   };
+};
+
+// Utility to sanitize relatedNoteIds (convert titles to IDs if needed)
+const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
+  const allNotesMap = new Map(allNotes.map(n => [n.id, n]));
+  const titleToIdMap = new Map(allNotes.map(n => [n.title, n.id]));
+  
+  return updatedNotes.map(note => {
+    if (!note.relatedNoteIds) return note;
+    
+    const sanitizedIds = note.relatedNoteIds.map((idOrTitle: string) => {
+      if (allNotesMap.has(idOrTitle)) return idOrTitle;
+      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
+      return idOrTitle;
+    }).filter((id: any) => id && typeof id === 'string');
+    
+    return { ...note, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
+  });
 };
 
 export const optimizeBlueprint = async (
@@ -255,7 +279,7 @@ export const optimizeBlueprint = async (
 당신은 시스템 아키텍처 최적화 전문가입니다. 현재의 설계도(노트 목록 및 GCM)를 분석하여 최적화 계획을 세우십시오.
 
 작업 목표:
-1. **폴더 강제 재배치**: 'Imported' 폴더에 있는 모든 노트를 내용 분석 결과에 따라 'Core', 'Feature', 'UI', 'Shared', 'Logic' 폴더로 강제 재배분하십시오. 더 이상 'Imported' 폴더에 노드가 남지 않도록 계획하십시오.
+1. **폴더 기능 단위 재배치**: 'Imported' 폴더 및 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 완전히 제거하십시오. 모든 노트를 '학생 실력 추적', '문제 풀이 공간', '문제 난이도 측정', '문제 스캔'과 같이 실제 사용자 기능 단위로 재분류하십시오.
 2. **명칭 표준화**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
 3. **업데이트 대상 식별**: 내용 수정, 용어 통일, 메타데이터 보강, 또는 마인드맵 연결(relatedNoteIds) 강화가 필요한 노트를 식별합니다.
 4. **삭제 대상 식별**: 중복되거나, 더 이상 필요 없거나, 다른 노트에 통합되어야 할 '유령' 노트를 식별합니다.
@@ -330,7 +354,7 @@ ${JSON.stringify(chunkNotes)}
 
 작업 규칙:
 1. **ID 보존**: 제공된 'id'를 절대 변경하지 말고 그대로 반환하십시오.
-2. **폴더 강제 이동**: 'Imported' 폴더에 있다면 반드시 'Core', 'Feature', 'Shared', 'UI', 'Logic' 중 가장 적합한 곳으로 변경하십시오.
+2. **폴더 도메인 재배치**: 'Imported' 또는 기술 계층(Core, UI 등) 폴더에 있다면 반드시 '학생 실력 추적', '문제 풀이 공간' 등 실제 기능 단위의 도메인 폴더로 변경하십시오.
 3. **명칭 정제**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 완전히 제거하고 명확한 한국어 제목으로 수정하십시오.
 4. **메타데이터 분리**: 모든 메타데이터는 'yamlMetadata' 필드에만 넣으십시오.
 5. **본문 구조**: 모든 'content'는 시스템 지침의 4개 섹션 구조를 유지해야 합니다.
@@ -382,24 +406,8 @@ ${JSON.stringify(chunkNotes)}
     }
   }
 
-  // Post-process: Sanitize relatedNoteIds (ensure they are IDs, not titles)
-  const allNotesMap = new Map(notes.map(n => [n.id, n]));
-  const titleToIdMap = new Map(notes.map(n => [n.title, n.id]));
-  
-  const sanitizedUpdatedNotes = allUpdatedNotes.map(note => {
-    if (!note.relatedNoteIds) return note;
-    
-    const sanitizedIds = note.relatedNoteIds.map(idOrTitle => {
-      // If it's already a valid ID, keep it
-      if (allNotesMap.has(idOrTitle)) return idOrTitle;
-      // If it's a title, try to resolve it
-      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
-      // Otherwise, it might be a new ID or a broken link, keep it for now but filter out later if needed
-      return idOrTitle;
-    }).filter(id => id && typeof id === 'string');
-    
-    return { ...note, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
-  });
+  // Post-process: Sanitize relatedNoteIds
+  const sanitizedUpdatedNotes = sanitizeNotes(allUpdatedNotes, notes);
 
   return {
     updatedNotes: sanitizedUpdatedNotes,
@@ -678,7 +686,7 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.
 작업:
 1. 코드의 핵심 로직과 역할을 분석하여 제목(title)과 요약(summary)을 작성합니다. (불필요한 접두어 제거)
 2. 상세 기술 명세(content)를 Markdown 형식으로 작성합니다. (한국어 필수, 줄바꿈 필수)
-3. 적절한 폴더(folder)를 지정합니다. ('Imported' 폴더 사용 금지. 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 사용)
+3. 적절한 폴더(folder)를 지정합니다. ('Imported' 또는 기술 계층 명칭 사용 금지. '학생 실력 추적', '문제 풀이 공간' 등 도메인 중심 폴더 사용)
 4. 기존 노트 중 이 코드와 논리적으로 연결된 것이 있다면 relatedNoteIds에 포함시킵니다. AI가 스스로 판단하여 자동으로 연결하십시오. (반드시 ID 사용)
 5. Metadata(yamlMetadata)를 작성합니다:
    - version: 1.0.0
@@ -701,7 +709,9 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
     },
   });
 
-  return safeJsonParse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}");
+  const sanitized = sanitizeNotes([result], existingNotes);
+  return sanitized[0];
 };
 
 export const generateSubModules = async (
@@ -737,7 +747,7 @@ Task:
 2. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다. (반드시 ID 사용)
 3. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
 4. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
-5. [중요] 'Imported' 폴더 사용을 금지하고, 'Core', 'Feature', 'Shared', 'UI', 'Logic' 등 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
+5. [중요] 'Imported' 또는 기술 계층 폴더 사용을 금지하고, 도메인/기능 중심의 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
 
 Return JSON:
 {
@@ -766,8 +776,10 @@ Return JSON:
   });
 
   const result = safeJsonParse(response.text);
+  const sanitizedNewNotes = sanitizeNotes(result.newNotes || [], existingNotes);
+
   return {
-    newNotes: result.newNotes || [],
+    newNotes: sanitizedNewNotes,
     updatedGcm: result.updatedGcm || currentGcm
   };
 };
@@ -930,5 +942,137 @@ export const validateYamlMetadata = (content: string): { isValid: boolean; error
   return {
     isValid: errors.length === 0,
     errors
+  };
+};
+
+export const summarizeRepoFeatures = async (
+  repoName: string,
+  fileTree: string[],
+  readmeContent: string,
+  userGoal: string
+): Promise<{ features: { id: number; title: string; description: string; relatedFiles: string[] }[] }> => {
+  const prompt = `
+당신은 오픈소스 분석 전문가입니다. 외부 GitHub 레포지토리의 구조와 README를 분석하여, 사용자가 원하는 목표에 부합하는 핵심 기능 리스트(메뉴)를 추출하십시오.
+
+레포지토리: ${repoName}
+사용자 목표: "${userGoal}"
+README 일부:
+${readmeContent.slice(0, 5000)}
+
+파일 트리 (일부):
+${JSON.stringify(fileTree.slice(0, 200))}
+
+작업:
+1. 사용자의 목표와 관련된 핵심 기능 3~5개를 식별합니다.
+2. 각 기능에 대해 명확한 제목, 설명, 그리고 해당 기능을 구현하는 핵심 파일 경로 목록을 포함하십시오.
+3. 모든 설명은 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "features": [
+    { "id": 1, "title": "기능 제목", "description": "기능 설명", "relatedFiles": ["path/to/file1.ts", "path/to/file2.ts"] }
+  ]
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          features: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.NUMBER },
+                title: { type: Type.STRING },
+                description: { type: Type.STRING },
+                relatedFiles: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ["id", "title", "description", "relatedFiles"],
+            },
+          },
+        },
+        required: ["features"],
+      },
+    },
+  });
+
+  return safeJsonParse(response.text || '{"features": []}');
+};
+
+export const transpileExternalLogic = async (
+  featureTitle: string,
+  externalCodes: { path: string; content: string }[],
+  currentGcm: GCM,
+  existingNotes: Note[]
+): Promise<{ 
+  newNotes: Omit<Note, 'id' | 'status'>[]; 
+  updatedGcm: GCM 
+}> => {
+  const prompt = `
+당신은 '대화형 선별 이식(Interactive Selective Transfer)' 전문가입니다. 
+외부 프로젝트의 핵심 로직을 분석하여, 우리 프로젝트의 도메인 언어와 변수 체계(GCM)에 맞게 재구성한 설계도를 생성하십시오.
+
+대상 기능: ${featureTitle}
+외부 소스 코드:
+${externalCodes.map(c => `File: ${c.path}\nContent:\n${c.content.slice(0, 5000)}`).join('\n---\n')}
+
+우리 프로젝트 GCM:
+${JSON.stringify(currentGcm)}
+
+기존 노트 목록 (참고용):
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
+
+작업 지침:
+1. **변수 정문화 이식**: 외부 코드의 알고리즘 뼈대는 유지하되, 모든 변수명, 클래스명, 함수명은 우리 프로젝트의 GCM 및 도메인 구조에 맞춰 치환하십시오.
+   - 예: 외부 'input_array' -> 우리 'problemList'
+   - 예: 외부 'GradeManager' -> 우리 '학생 실력 추적' 도메인 내 로직
+2. **도메인 중심 분류**: 우리 프로젝트의 도메인 폴더 구조에 맞게 노트를 생성하십시오. ('Imported' 사용 금지)
+3. **상세 설계**: 'content'는 시스템 지침의 4개 섹션 구조를 따라야 하며, 알고리즘을 우리 프로젝트의 문맥으로 상세히 설명하십시오.
+4. **연결성**: 기존 노트들과 논리적으로 연결될 수 있도록 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
+
+Return JSON:
+{
+  "newNotes": [ array of notes matching the schema ],
+  "updatedGcm": { "entities": {...}, "variables": {...} }
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          newNotes: { type: Type.ARRAY, items: noteSchema },
+          updatedGcm: {
+            type: Type.OBJECT,
+            properties: {
+              entities: { type: Type.OBJECT },
+              variables: { type: Type.OBJECT },
+            },
+            required: ["entities", "variables"],
+          },
+        },
+        required: ["newNotes", "updatedGcm"],
+      },
+    },
+  });
+
+  const result = safeJsonParse(response.text || "{}");
+  const sanitized = sanitizeNotes(result.newNotes || [], existingNotes);
+
+  return {
+    newNotes: sanitized,
+    updatedGcm: result.updatedGcm || currentGcm,
   };
 };

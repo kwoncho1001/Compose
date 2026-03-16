@@ -16,10 +16,12 @@ import {
   generateNoteFromCode,
   suggestGcmUpdates,
   detectMissingLinks,
-  analyzeSharedCore
+  analyzeSharedCore,
+  summarizeRepoFeatures,
+  transpileExternalLogic
 } from '../services/gemini';
-import { fetchGithubFiles, fetchGithubFileContent } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Link as LinkIcon } from 'lucide-react';
+import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos } from '../services/github';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Link as LinkIcon, Search, ChevronRight } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -52,6 +54,16 @@ export const Dashboard: React.FC = () => {
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
+  
+  // External Reference Transfer State
+  const [externalSearchQuery, setExternalSearchQuery] = useState('');
+  const [externalRepos, setExternalRepos] = useState<{ full_name: string; html_url: string; description: string }[]>([]);
+  const [selectedExternalRepo, setSelectedExternalRepo] = useState<string | null>(null);
+  const [repoFeatures, setRepoFeatures] = useState<{ id: number; title: string; description: string; relatedFiles: string[] }[]>([]);
+  const [isSearchingExternal, setIsSearchingExternal] = useState(false);
+  const [isAnalyzingRepo, setIsAnalyzingRepo] = useState(false);
+  const [isTranspiling, setIsTranspiling] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -183,9 +195,9 @@ export const Dashboard: React.FC = () => {
         const newNote: Note = {
           id: Math.random().toString(36).substr(2, 9),
           title: title,
-          folder: 'Imported',
+          folder: '미분류',
           content: content,
-          summary: `Imported from ${file.name}`,
+          summary: `파일에서 가져옴: ${file.name}`,
           status: 'Planned',
           yamlMetadata: `type: imported\nsource: ${file.name}`
         };
@@ -576,6 +588,91 @@ export const Dashboard: React.FC = () => {
     setLinkSuggestions(prev => prev.filter(l => !(l.fromId === link.fromId && l.toId === link.toId)));
   };
 
+  const handleSearchExternal = async () => {
+    if (!externalSearchQuery.trim()) return;
+    setIsSearchingExternal(true);
+    try {
+      const repos = await searchGithubRepos(externalSearchQuery, state.githubToken);
+      setExternalRepos(repos);
+    } catch (e) {
+      console.error(e);
+      alert('GitHub 검색 중 오류가 발생했습니다.');
+    } finally {
+      setIsSearchingExternal(false);
+    }
+  };
+
+  const handleAnalyzeRepo = async (repoUrl: string) => {
+    setSelectedExternalRepo(repoUrl);
+    setIsAnalyzingRepo(true);
+    setProcessStatus({ message: '레포지토리 분석 중 (README 및 파일 트리)...' });
+    try {
+      const fileTree = await fetchGithubFiles(repoUrl, state.githubToken);
+      let readme = '';
+      try {
+        readme = await fetchGithubFileContent(repoUrl, 'README.md', state.githubToken);
+      } catch (e) {
+        try {
+          readme = await fetchGithubFileContent(repoUrl, 'readme.md', state.githubToken);
+        } catch (e2) {}
+      }
+      
+      const { features } = await summarizeRepoFeatures(repoUrl, fileTree, readme, featureInput || "핵심 로직 추출");
+      setRepoFeatures(features);
+    } catch (e) {
+      console.error(e);
+      alert('레포지토리 분석 실패');
+    } finally {
+      setIsAnalyzingRepo(false);
+      setProcessStatus(null);
+    }
+  };
+
+  const handleTranspileFeature = async (feature: { title: string; relatedFiles: string[] }) => {
+    if (!selectedExternalRepo) return;
+    setIsTranspiling(true);
+    setProcessStatus({ message: `"${feature.title}" 로직 추출 및 이식 중...` });
+    try {
+      const externalCodes = await Promise.all(
+        feature.relatedFiles.map(async (path) => ({
+          path,
+          content: await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken)
+        }))
+      );
+
+      const { newNotes, updatedGcm } = await transpileExternalLogic(
+        feature.title,
+        externalCodes,
+        state.gcm,
+        state.notes
+      );
+
+      const newNotesWithIds = newNotes.map(n => ({
+        ...n,
+        id: Math.random().toString(36).substr(2, 9),
+        status: 'Planned' as const
+      }));
+
+      setState(prev => ({
+        ...prev,
+        notes: alignChildFolders([...prev.notes, ...newNotesWithIds]),
+        gcm: updatedGcm
+      }));
+
+      alert(`"${feature.title}" 로직이 성공적으로 이식되었습니다.`);
+      setRepoFeatures([]);
+      setSelectedExternalRepo(null);
+      setExternalRepos([]);
+      setExternalSearchQuery('');
+    } catch (e) {
+      console.error(e);
+      alert('로직 이식 실패');
+    } finally {
+      setIsTranspiling(false);
+      setProcessStatus(null);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden transition-colors duration-200">
       {/* Sidebar */}
@@ -590,162 +687,65 @@ export const Dashboard: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Navigation / Input Area */}
-        <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-4 shadow-sm z-10 flex flex-col gap-4 transition-colors duration-200">
-          
-          {/* Top Row: Input & Global Actions */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 mr-4">
-              <button
-                onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
-                className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
-                title={leftSidebarOpen ? "사이드바 접기" : "사이드바 펴기"}
-              >
-                <PanelLeft className={`w-5 h-5 ${leftSidebarOpen ? 'text-indigo-500' : ''}`} />
-              </button>
-            </div>
-            <div className="flex-1 max-w-2xl flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="구축하고 싶은 기능을 입력하세요 (예: '로그인 시스템')"
-                value={featureInput}
-                onChange={(e) => setFeatureInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
-                className="flex-1 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent dark:text-white"
-                disabled={isDecomposing}
-              />
-              <button
-                onClick={handleDecompose}
-                disabled={isDecomposing || !featureInput.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isDecomposing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                기능 분해
-              </button>
-            </div>
-
-            <div className="flex items-center gap-4 ml-8">
-              <button
-                onClick={() => setViewMode(viewMode === 'editor' ? 'mindmap' : 'editor')}
-                className={`p-2 rounded-full transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                title={viewMode === 'mindmap' ? "에디터 보기" : "마인드맵 보기"}
-              >
-                <Layers className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-                className={`p-2 rounded-full transition-colors ${rightSidebarOpen ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                title={rightSidebarOpen ? "제안 사이드바 닫기" : "제안 사이드바 열기"}
-              >
-                <PanelRight className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setShowGcm(!showGcm)}
-                className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                title={showGcm ? "GCM 숨기기" : "GCM 보기"}
-              >
-                <Database className="w-4 h-4" />
-              </button>
-              <div className="flex items-center gap-2 border-r border-slate-200 dark:border-slate-700 pr-4">
-                <button
-                  onClick={handleExport}
-                  className="text-slate-600 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
-                  title="프로젝트 내보내기"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-slate-600 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
-                  title="프로젝트 가져오기"
-                >
-                  <Upload className="w-4 h-4" />
-                </button>
-                <input
-                  type="file"
-                  accept=".json"
-                  ref={fileInputRef}
-                  onChange={handleImport}
-                  className="hidden"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="GitHub 레포지토리 URL"
-                  value={state.githubRepo}
-                  onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
-                  className="w-48 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
-                />
-                <input
-                  type="password"
-                  placeholder="PAT (선택 사항)"
-                  value={state.githubToken}
-                  onChange={(e) => setState({ ...state, githubToken: e.target.value })}
-                  className="w-32 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-slate-500 dark:text-white"
-                />
-              </div>
-              <button
-                onClick={handleSyncGithub}
-                disabled={isSyncing}
-                className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
-              >
-                {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Github className="w-4 h-4" />}
-                GitHub와 동기화
-              </button>
-            </div>
+        {/* 슬림해진 상단 헤더 */}
+        <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 shadow-sm z-10 flex items-center justify-between transition-colors duration-200">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
+              className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+              title={leftSidebarOpen ? "사이드바 접기" : "사이드바 펴기"}
+            >
+              <PanelLeft className={`w-5 h-5 ${leftSidebarOpen ? 'text-indigo-500' : ''}`} />
+            </button>
+            <h1 className="text-lg font-bold text-slate-800 dark:text-white ml-2">Vibe-Architect</h1>
           </div>
 
-          {/* Bottom Row: Tools */}
           <div className="flex items-center gap-3">
             <button
-              onClick={() => textFileInputRef.current?.click()}
-              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
+              onClick={() => setViewMode(viewMode === 'editor' ? 'mindmap' : 'editor')}
+              className={`p-2 rounded-md flex items-center gap-2 text-xs font-medium transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
             >
-              <FileUp className="w-3 h-3" />
-              텍스트 파일 업로드 (.md, .txt)
-            </button>
-            <input
-              type="file"
-              multiple
-              accept=".md,.txt,.yaml"
-              ref={textFileInputRef}
-              onChange={handleTextFileUpload}
-              className="hidden"
-            />
-            <button
-              onClick={handleOptimizeBlueprint}
-              disabled={isSyncing || state.notes.length === 0}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-all shadow-md shadow-indigo-500/20"
-            >
-              {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-              설계도 최적화
+              <Layers className="w-4 h-4" />
+              {viewMode === 'mindmap' ? '에디터 보기' : '마인드맵 보기'}
             </button>
             <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
-              onClick={handleSuggestGcm}
-              disabled={state.notes.length === 0}
-              className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 hover:bg-indigo-100 dark:hover:bg-indigo-800/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
+              onClick={() => setShowGcm(!showGcm)}
+              className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              title="GCM 보기"
             >
-              <Sparkles className="w-3 h-3" />
-              GCM 추천
+              <Database className="w-4 h-4" />
             </button>
             <button
-              onClick={handleDetectLinks}
-              disabled={state.notes.length === 0}
-              className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 hover:bg-amber-100 dark:hover:bg-amber-800/50 text-amber-700 dark:text-amber-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
+              onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+              className={`p-2 rounded-full transition-colors ${rightSidebarOpen ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              title="도구함 열기"
             >
-              <LinkIcon className="w-3 h-3" />
-              연결점 탐색
+              <PanelRight className="w-4 h-4" />
             </button>
-            <button
-              onClick={handleAnalyzeSharedCore}
-              disabled={state.notes.length === 0}
-              className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-100 dark:hover:bg-rose-800/50 text-rose-700 dark:text-rose-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-colors"
-            >
-              <Layers className="w-3 h-3" />
-              Shared Core 분석
-            </button>
+            <div className="flex items-center gap-2 ml-2">
+              <button
+                onClick={handleExport}
+                className="text-slate-500 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
+                title="프로젝트 내보내기"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="text-slate-500 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"
+                title="프로젝트 가져오기"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+              <input
+                type="file"
+                accept=".json"
+                ref={fileInputRef}
+                onChange={handleImport}
+                className="hidden"
+              />
+            </div>
           </div>
         </header>
 
@@ -813,13 +813,13 @@ export const Dashboard: React.FC = () => {
       {/* GCM Viewer */}
       {showGcm && <GCMViewer gcm={state.gcm} />}
 
-      {/* Right Sidebar: Suggestions & Recommendations */}
+      {/* 오른쪽 사이드바: 도구 및 제안 통합 */}
       {rightSidebarOpen && (
         <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 h-full flex flex-col shadow-xl z-20 transition-colors duration-200">
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950/50">
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2 uppercase tracking-tight">
               <Sparkles className="w-4 h-4 text-amber-500" />
-              AI 제안 및 분석
+              프로젝트 제어 및 분석
             </h2>
             <button onClick={() => setRightSidebarOpen(false)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md">
               <X className="w-4 h-4 text-slate-500" />
@@ -827,128 +827,313 @@ export const Dashboard: React.FC = () => {
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
-            {/* Next Step Suggestion */}
-            {nextStepSuggestion && (
+            {/* 섹션 1: 기능 설계 도구 */}
+            <div className="space-y-3">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
+              <div className="flex flex-col gap-2">
+                <input
+                  type="text"
+                  placeholder="추가할 기능 입력..."
+                  value={featureInput}
+                  onChange={(e) => setFeatureInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
+                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
+                />
+                <button
+                  onClick={handleDecompose}
+                  disabled={isDecomposing || !featureInput.trim()}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
+                >
+                  {isDecomposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  기능 분해 실행
+                </button>
+              </div>
+            </div>
+
+            {/* 섹션 2: GitHub 동기화 */}
+            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">코드 동기화</h3>
               <div className="space-y-2">
-                <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                  <Lightbulb className="w-3 h-3 text-amber-500" />
-                  다음 단계 제안
-                </h3>
-                <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/50 p-3 rounded-lg text-sm text-amber-900 dark:text-amber-200 prose prose-sm prose-amber dark:prose-invert max-w-none">
-                  <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
+                <input
+                  type="text"
+                  placeholder="GitHub Repo URL"
+                  value={state.githubRepo}
+                  onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
+                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
+                />
+                <input
+                  type="password"
+                  placeholder="GitHub PAT (선택 사항)"
+                  value={state.githubToken}
+                  onChange={(e) => setState({ ...state, githubToken: e.target.value })}
+                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
+                />
+                <button
+                  onClick={handleSyncGithub}
+                  disabled={isSyncing}
+                  className="w-full bg-slate-800 hover:bg-slate-900 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                >
+                  {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
+                  GitHub와 동기화
+                </button>
+              </div>
+            </div>
+
+            {/* 섹션 3: 분석 도구 모음 */}
+            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">설계 최적화 및 분석</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleOptimizeBlueprint}
+                  disabled={isSyncing || state.notes.length === 0}
+                  className="col-span-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-xs font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-2 shadow-sm"
+                >
+                  {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
+                </button>
+                <button
+                  onClick={handleSuggestGcm}
+                  disabled={state.notes.length === 0}
+                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
+                >
+                  <Database className="w-3 h-3 text-emerald-500" /> GCM 추천
+                </button>
+                <button
+                  onClick={handleDetectLinks}
+                  disabled={state.notes.length === 0}
+                  className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
+                >
+                  <LinkIcon className="w-3 h-3 text-amber-500" /> 연결점 탐색
+                </button>
+                <button
+                  onClick={handleAnalyzeSharedCore}
+                  disabled={state.notes.length === 0}
+                  className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
+                >
+                  <Layers className="w-3 h-3 text-rose-500" /> Shared Core 분석
+                </button>
+              </div>
+              <button
+                onClick={() => textFileInputRef.current?.click()}
+                className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-2 rounded-md text-[10px] font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                <FileUp className="w-3 h-3" />
+                텍스트 파일 업로드 (.md, .txt)
+              </button>
+              <input
+                type="file"
+                multiple
+                accept=".md,.txt,.yaml"
+                ref={textFileInputRef}
+                onChange={handleTextFileUpload}
+                className="hidden"
+              />
+            </div>
+
+            {/* 외부 레퍼런스 선별 이식 */}
+            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <Github className="w-3 h-3" /> 외부 레퍼런스 선별 이식
+              </h3>
+              
+              {!selectedExternalRepo ? (
+                <div className="space-y-2">
+                  <div className="flex gap-1">
+                    <input
+                      type="text"
+                      placeholder="레퍼런스 검색 (예: 'grade analysis')"
+                      value={externalSearchQuery}
+                      onChange={(e) => setExternalSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSearchExternal()}
+                      className="flex-1 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-2 py-1.5 text-[11px] dark:text-white"
+                    />
+                    <button
+                      onClick={handleSearchExternal}
+                      disabled={isSearchingExternal || !externalSearchQuery.trim()}
+                      className="p-1.5 bg-slate-100 dark:bg-slate-800 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {isSearchingExternal ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                    </button>
+                  </div>
+                  
+                  {externalRepos.length > 0 && (
+                    <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                      {externalRepos.map(repo => (
+                        <button
+                          key={repo.full_name}
+                          onClick={() => handleAnalyzeRepo(`https://github.com/${repo.full_name}`)}
+                          className="w-full text-left p-2 rounded border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 group transition-colors"
+                        >
+                          <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 truncate">{repo.full_name}</div>
+                          <div className="text-[9px] text-slate-400 line-clamp-1">{repo.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
-
-            {/* GCM Suggestions */}
-            {gcmSuggestions && (gcmSuggestions.suggestedEntities.length > 0 || Object.keys(gcmSuggestions.suggestedVariables).length > 0) && (
-              <div className="space-y-3">
-                <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                  <Database className="w-3 h-3 text-emerald-500" />
-                  GCM 추천 엔진
-                </h3>
-                
-                {gcmSuggestions.suggestedEntities.map(entity => (
-                  <div key={entity.name} className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800/50 p-3 rounded-lg space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">{entity.name} ({entity.type})</span>
-                      <button 
-                        onClick={() => applyGcmSuggestion('entity', entity)}
-                        className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded hover:bg-emerald-700"
-                      >
-                        추가
-                      </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded-md border border-indigo-100 dark:border-indigo-800/50">
+                    <div className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 truncate max-w-[180px]">
+                      {selectedExternalRepo.replace('https://github.com/', '')}
                     </div>
-                    <p className="text-[10px] text-emerald-700 dark:text-emerald-400">{entity.description}</p>
+                    <button onClick={() => { setSelectedExternalRepo(null); setRepoFeatures([]); }} className="text-[9px] text-slate-400 hover:text-slate-600 underline">변경</button>
                   </div>
-                ))}
 
-                {Object.entries(gcmSuggestions.suggestedVariables).map(([key, value]) => (
-                  <div key={key} className="bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-800/50 p-3 rounded-lg space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-mono font-bold text-indigo-800 dark:text-indigo-300">{key}</span>
-                      <button 
-                        onClick={() => applyGcmSuggestion('variable', { key, value })}
-                        className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded hover:bg-indigo-700"
-                      >
-                        추가
-                      </button>
+                  {isAnalyzingRepo ? (
+                    <div className="flex flex-col items-center py-4 gap-2">
+                      <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                      <span className="text-[10px] text-slate-400">핵심 기능 메뉴 생성 중...</span>
                     </div>
-                    <p className="text-[10px] text-indigo-700 dark:text-indigo-400">{value}</p>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold text-slate-500">이식할 기능을 선택하세요:</div>
+                      {repoFeatures.map(feature => (
+                        <div key={feature.id} className="p-2 border border-slate-100 dark:border-slate-800 rounded-md hover:border-indigo-200 dark:hover:border-indigo-800 transition-colors">
+                          <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200">{feature.title}</div>
+                          <div className="text-[10px] text-slate-500 mb-2">{feature.description}</div>
+                          <button
+                            onClick={() => handleTranspileFeature(feature)}
+                            disabled={isTranspiling}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-1 rounded text-[10px] font-bold flex items-center justify-center gap-1"
+                          >
+                            {isTranspiling ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <ChevronRight className="w-2.5 h-2.5" />}
+                            선별 이식 실행
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
-            {/* Link Suggestions */}
-            {linkSuggestions.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                  <LinkIcon className="w-3 h-3 text-blue-500" />
-                  누락된 연결점 탐색
-                </h3>
-                {linkSuggestions.map((link, idx) => {
-                  const fromNote = state.notes.find(n => n.id === link.fromId);
-                  const toNote = state.notes.find(n => n.id === link.toId);
-                  if (!fromNote || !toNote) return null;
+            {/* AI 제안 및 분석 결과 */}
+            <div className="pt-2 space-y-6 border-t border-slate-100 dark:border-slate-800">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">AI 분석 및 제안</h3>
+              
+              {/* Next Step Suggestion */}
+              {nextStepSuggestion && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                    <Lightbulb className="w-3 h-3 text-amber-500" />
+                    다음 단계 제안
+                  </h3>
+                  <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/50 p-3 rounded-lg text-sm text-amber-900 dark:text-amber-200 prose prose-sm prose-amber dark:prose-invert max-w-none">
+                    <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
+                  </div>
+                </div>
+              )}
+
+              {/* GCM Suggestions */}
+              {gcmSuggestions && (gcmSuggestions.suggestedEntities.length > 0 || Object.keys(gcmSuggestions.suggestedVariables).length > 0) && (
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                    <Database className="w-3 h-3 text-emerald-500" />
+                    GCM 추천 엔진
+                  </h3>
                   
-                  return (
-                    <div key={idx} className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50 p-3 rounded-lg space-y-2">
+                  {gcmSuggestions.suggestedEntities.map(entity => (
+                    <div key={entity.name} className="bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800/50 p-3 rounded-lg space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-blue-800 dark:text-blue-300 truncate max-w-[150px]">
-                          {fromNote.title} → {toNote.title}
-                        </span>
+                        <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300">{entity.name} ({entity.type})</span>
                         <button 
-                          onClick={() => applyLinkSuggestion(link)}
-                          className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700"
+                          onClick={() => applyGcmSuggestion('entity', entity)}
+                          className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded hover:bg-emerald-700"
                         >
-                          연결
+                          추가
                         </button>
                       </div>
-                      <p className="text-[10px] text-blue-700 dark:text-blue-400">{link.reason}</p>
+                      <p className="text-[10px] text-emerald-700 dark:text-emerald-400">{entity.description}</p>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  ))}
 
-            {/* Shared Core Suggestions */}
-            {sharedCoreSuggestions.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                  <Layers className="w-3 h-3 text-rose-500" />
-                  Shared Core 격상 제안
-                </h3>
-                {sharedCoreSuggestions.map((suggestion, idx) => {
-                  const note = state.notes.find(n => n.id === suggestion.noteId);
-                  if (!note) return null;
-                  
-                  return (
-                    <div key={idx} className="bg-rose-50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-800/50 p-3 rounded-lg space-y-2">
+                  {Object.entries(gcmSuggestions.suggestedVariables).map(([key, value]) => (
+                    <div key={key} className="bg-indigo-50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-800/50 p-3 rounded-lg space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-rose-800 dark:text-rose-300 truncate max-w-[150px]">
-                          {note.title}
-                        </span>
+                        <span className="text-xs font-mono font-bold text-indigo-800 dark:text-indigo-300">{key}</span>
                         <button 
-                          onClick={() => applySharedCorePromotion(suggestion.noteId)}
-                          className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded hover:bg-rose-700"
+                          onClick={() => applyGcmSuggestion('variable', { key, value })}
+                          className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded hover:bg-indigo-700"
                         >
-                          격상
+                          추가
                         </button>
                       </div>
-                      <p className="text-[10px] text-rose-700 dark:text-rose-400">{suggestion.reason}</p>
+                      <p className="text-[10px] text-indigo-700 dark:text-indigo-400">{value}</p>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
 
-            {!nextStepSuggestion && !gcmSuggestions && linkSuggestions.length === 0 && sharedCoreSuggestions.length === 0 && (
-              <div className="text-center py-12">
-                <Sparkles className="w-8 h-8 text-slate-200 mx-auto mb-3" />
-                <p className="text-xs text-slate-400">현재 분석된 제안이 없습니다.<br/>상단 도구를 사용하여 분석을 시작하세요.</p>
-              </div>
-            )}
+              {/* Link Suggestions */}
+              {linkSuggestions.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                    <LinkIcon className="w-3 h-3 text-blue-500" />
+                    누락된 연결점 탐색
+                  </h3>
+                  {linkSuggestions.map((link, idx) => {
+                    const fromNote = state.notes.find(n => n.id === link.fromId);
+                    const toNote = state.notes.find(n => n.id === link.toId);
+                    if (!fromNote || !toNote) return null;
+                    
+                    return (
+                      <div key={idx} className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50 p-3 rounded-lg space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-blue-800 dark:text-blue-300 truncate max-w-[150px]">
+                            {fromNote.title} → {toNote.title}
+                          </span>
+                          <button 
+                            onClick={() => applyLinkSuggestion(link)}
+                            className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700"
+                          >
+                            연결
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-blue-700 dark:text-blue-400">{link.reason}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Shared Core Suggestions */}
+              {sharedCoreSuggestions.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                    <Layers className="w-3 h-3 text-rose-500" />
+                    Shared Core 격상 제안
+                  </h3>
+                  {sharedCoreSuggestions.map((suggestion, idx) => {
+                    const note = state.notes.find(n => n.id === suggestion.noteId);
+                    if (!note) return null;
+                    
+                    return (
+                      <div key={idx} className="bg-rose-50 dark:bg-rose-900/10 border border-rose-100 dark:border-rose-800/50 p-3 rounded-lg space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-rose-800 dark:text-rose-300 truncate max-w-[150px]">
+                            {note.title}
+                          </span>
+                          <button 
+                            onClick={() => applySharedCorePromotion(suggestion.noteId)}
+                            className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded hover:bg-rose-700"
+                          >
+                            격상
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-rose-700 dark:text-rose-400">{suggestion.reason}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!nextStepSuggestion && !gcmSuggestions && linkSuggestions.length === 0 && sharedCoreSuggestions.length === 0 && (
+                <div className="text-center py-12">
+                  <Sparkles className="w-8 h-8 text-slate-200 mx-auto mb-3" />
+                  <p className="text-xs text-slate-400">현재 분석된 제안이 없습니다.<br/>상단 도구를 사용하여 분석을 시작하세요.</p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

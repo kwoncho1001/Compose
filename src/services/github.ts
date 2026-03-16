@@ -86,3 +86,31 @@ export const fetchGithubFiles = async (
     throw error;
   }
 };
+
+export const searchGithubRepos = async (
+  query: string,
+  token?: string
+): Promise<{ full_name: string; html_url: string; description: string }[]> => {
+  const apiUrl = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+  };
+  if (token) {
+    headers.Authorization = `token ${token}`;
+  }
+  try {
+    const response = await fetch(apiUrl, { headers });
+    if (!response.ok) {
+      throw new Error(`GitHub Search Error: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data.items.map((item: any) => ({
+      full_name: item.full_name,
+      html_url: item.html_url,
+      description: item.description,
+    }));
+  } catch (error) {
+    console.error("Failed to search GitHub repos:", error);
+    throw error;
+  }
+};

@@ -36,7 +36,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         notes
           .filter(n => {
             const meta = parseMetadata(n.yamlMetadata);
-            return n.isMainFeature || meta.componentType === 'Feature' || meta.componentType === 'Core' || parseInt(meta.importance || '0') >= 4;
+            return n.isMainFeature || meta.componentType === 'Feature' || meta.componentType === 'Core';
           })
           .map(n => n.id)
       );
@@ -59,18 +59,16 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
 
     const nodes = filteredNotes.map(note => {
       const meta = parseMetadata(note.yamlMetadata);
-      const importance = parseInt(meta.importance || '3');
       const componentType = meta.componentType || 'Feature';
 
       return {
         id: note.id,
         name: note.title,
-        val: (importance * 2) + (note.isMainFeature ? 5 : 0),
+        val: (note.isMainFeature ? 10 : 6),
         folder: note.folder,
         status: note.status,
         summary: note.summary,
-        componentType,
-        importance
+        componentType
       };
     });
 
@@ -129,7 +127,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           }`}
         >
           {featureOnly ? <Filter className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-          {featureOnly ? '기능 중심 보기' : '전체 보기'}
+          {featureOnly ? '전체 보기로 전환' : '기능 중심 보기로 전환'}
         </button>
       </div>
 

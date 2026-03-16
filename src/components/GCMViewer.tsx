@@ -35,8 +35,8 @@ export const GCMViewer: React.FC<GCMViewerProps> = ({ gcm }) => {
             <p className="text-sm text-slate-400 italic">정의된 엔티티가 없습니다.</p>
           ) : (
             <div className="space-y-4">
-              {Object.values(entities).map((entity) => (
-                <div key={entity.name} className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm">
+              {Object.values(entities).map((entity, idx) => (
+                <div key={entity.name || `entity-${idx}`} className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-800 shadow-sm">
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-medium text-slate-800 dark:text-slate-200">{entity.name}</span>
                     <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-400 px-2 py-0.5 rounded-full font-mono">
@@ -45,8 +45,8 @@ export const GCMViewer: React.FC<GCMViewerProps> = ({ gcm }) => {
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">{entity.description}</p>
                   <div className="space-y-1">
-                    {Object.entries(entity.properties || {}).map(([propName, propType]) => (
-                      <div key={propName} className="flex items-center justify-between text-xs">
+                    {Object.entries(entity.properties || {}).map(([propName, propType], pIdx) => (
+                      <div key={`${entity.name}-${propName}-${pIdx}`} className="flex items-center justify-between text-xs">
                         <span className="text-slate-600 dark:text-slate-400 font-mono">{propName}</span>
                         <span className="text-slate-400 dark:text-slate-500 font-mono">{propType}</span>
                       </div>

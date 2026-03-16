@@ -11,13 +11,25 @@ const systemInstruction = `
 2. 가독성: Markdown 작성 시 단락 구분을 위해 줄바꿈(\\n\\n)을 적절히 사용하십시오.
 3. 그래프 아키텍처: 계층적 폴더보다는 노드 간의 연결(relatedNoteIds)을 최우선으로 고려하십시오.
 4. 메타데이터 표준: yamlMetadata는 항상 다음 형식을 포함해야 합니다:
+   - noteId: [노트의 고유 ID]
    - version: 1.0.0
    - lastUpdated: 2026-03-15
    - tags: [키워드 목록]
    - componentType: Core|UI|Shared|Feature
    - dependencies: [라이브러리 목록]
-   - importance: 1~5
-5. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
+   - relatedNoteIds: [연관된 노트 ID 목록] (마인드맵 연결용)
+5. [중요] 메타데이터 분리: 모든 메타데이터(ID, 버전, 태그, 연결 정보 등)는 반드시 'yamlMetadata' 필드에만 넣으십시오. 'content' 본문에는 마크다운 형식의 설계 내용만 들어가야 하며, 'content' 내부에 'noteId', 'tags', 'relatedNoteIds' 등의 메타데이터 정보를 중복해서 넣는 것을 엄격히 금지합니다.
+6. [중요] 노트 본문(content) 구조: 모든 노트의 'content'는 반드시 다음 4개 섹션을 포함해야 하며, 충분히 상세하게 작성하십시오. 섹션 제목은 반드시 아래 형식을 따르십시오:
+   **1. 모듈의 핵심 역할 (Core Role):** (가장 쉽게 설명)
+   **2. 무엇을 하는가? (What it Does):** (비유나 쉬운 용어 사용)
+   **3. 어떻게 작동하는가? (How it Works - High-Level Flow):** (큰 그림에서 흐름 설명)
+   **4. 구체적인 알고리즘 및 기술 명세 (Detailed Algorithm & Technical Specification):**
+      - 4.1. 데이터 인터페이스 정의 (Data Contract) (Input, Output, State)
+      - 4.2. 단계별 알고리즘 (Step-by-Step Logic) (의사코드 또는 상세 논리 단계)
+      - 4.3. 예외 처리 및 제약 조건 (Edge Cases & Constraints)
+      - 4.4. 상호 연동성 및 의존성 (Dependencies)
+7. [중요] 요약(summary) 규칙: 'summary'는 "Imported from..."과 같은 출처 정보가 아니라, 해당 모듈이 시스템에서 수행하는 실제 기능을 1-2문장의 한국어로 설명해야 합니다.
+8. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
 `;
 
 const noteSchema: Schema = {
@@ -31,7 +43,7 @@ const noteSchema: Schema = {
     relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 ID 목록. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
     yamlMetadata: { 
       type: Type.STRING, 
-      description: "표준화된 YAML: version: 1.0.0, lastUpdated: YYYY-MM-DD, tags: [tag1], componentType: Core|UI|Shared|Feature, dependencies: [lib1], importance: 1-5" 
+      description: "표준화된 YAML: noteId: [id], version: 1.0.0, lastUpdated: YYYY-MM-DD, tags: [tag1], componentType: Core|UI|Shared|Feature, dependencies: [lib1], relatedNoteIds: [id1, id2]" 
     },
   },
   required: ["title", "folder", "content", "summary", "yamlMetadata"],
@@ -39,6 +51,7 @@ const noteSchema: Schema = {
 
 const parseMetadata = (yaml: string): Record<string, string> => {
   const result: Record<string, string> = {};
+  if (!yaml) return result;
   yaml.split('\n').forEach(line => {
     const [key, ...valueParts] = line.split(':');
     if (key && valueParts.length > 0) {
@@ -84,14 +97,16 @@ Task:
 3. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
 4. 모든 노트는 태그(tags)를 통해 성격(UI, Logic, Common 등)을 분류합니다.
 5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오.
+6. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
+7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
 
 Return JSON:
 {
   "title": "한국어 제목",
   "folder": "한국어_폴더_이름",
-  "content": "# 한국어 제목\\n\\n## 핵심 목표\\n내용...\\n\\n## 기술 명세\\n내용...",
-  "summary": "한국어 요약",
-  "yamlMetadata": "version: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]\\ncomponentType: Feature\\ndependencies: []\\nimportance: 3",
+  "content": "시스템 지침의 4개 섹션 구조를 따른 상세 내용",
+  "summary": "한국어 요약 (역할 중심)",
+  "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]\\ncomponentType: Feature\\ndependencies: []\\nrelatedNoteIds: []",
   "reusedNoteIds": ["id1", "id2"],
   "newComponents": ["New Component 1"]
 }
@@ -160,12 +175,18 @@ Return JSON:
           updatedDetailNotes: { 
             type: Type.ARRAY, 
             items: {
-              ...noteSchema,
+              type: Type.OBJECT,
               properties: {
-                ...noteSchema.properties,
-                id: { type: Type.STRING }
+                id: { type: Type.STRING },
+                title: { type: Type.STRING },
+                folder: { type: Type.STRING },
+                content: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                parentNoteId: { type: Type.STRING },
+                relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                yamlMetadata: { type: Type.STRING },
               },
-              required: [...(noteSchema.required || []), "id"]
+              required: ["id", "title", "folder", "content", "summary", "yamlMetadata"],
             } 
           },
           updatedGcm: {
@@ -199,38 +220,58 @@ Return JSON:
   };
 };
 
-export const consolidateNotes = async (notes: Note[], gcm: GCM): Promise<{
-  mergedNotes: Note[];
-  removedNoteIds: string[];
-  updatedGcm: GCM;
+export const optimizeBlueprint = async (
+  notes: Note[],
+  gcm: GCM
+): Promise<{ 
+  updatedNotes: Note[], 
+  deletedNoteIds: string[],
+  updatedGcm: GCM, 
+  report: string 
 }> => {
-  // Limit notes content to avoid huge prompt
   const simplifiedNotes = notes.map(n => ({
     id: n.id,
     title: n.title,
     folder: n.folder,
-    content: n.content.slice(0, 2000), // Truncate very long content for analysis
+    content: n.content.slice(0, 1500), // Slightly more aggressive slicing
+    relatedNoteIds: n.relatedNoteIds,
+    parentNoteId: n.parentNoteId
   }));
 
   const prompt = `
-당신은 시스템 최적화 전문가입니다. 현재 프로젝트의 모든 노트를 분석하여 기능이 겹치거나, 지나치게 파편화된 모듈을 논리적으로 통폐합하십시오.
-특히 여러 기능에서 공통으로 발견되는 패턴(예: 즐겨찾기, 필터링 등)을 감지하면 이를 별도의 'Shared Core' 노드로 격상시키고 관련 노트들을 연결(relatedNoteIds)하십시오.
+당신은 시스템 아키텍처 최적화 전문가입니다. 현재의 설계도(노트 목록 및 GCM)를 분석하여 다음 작업을 수행하십시오:
 
-Notes Summary: ${JSON.stringify(simplifiedNotes)}
-GCM: ${JSON.stringify(gcm)}
+1. **일관성 검사**: 노트 간의 용어 불일치나 논리적 모순을 찾아 수정합니다.
+2. **연결점 자동 형성**: 내용상 연관이 깊지만 연결되지 않은 노드들(relatedNoteIds)을 분석하여 마인드맵 상에서 자동으로 연결하십시오.
+3. **구조 재구축**: 폴더 구조를 논리적으로 재배치합니다.
+4. **중복 제거 및 통합**: 완전히 동일한 기능을 설명하는 노드만 통합하되, **부모-자식 관계가 명확한 모듈화된 노드들은 절대로 하나로 합치지 마십시오.** 모듈성을 유지하는 것이 최우선입니다.
+5. **유령 파일 제거**: 제목이 없거나 내용이 비어있는 쓸데없는 노드들은 삭제 리스트(deletedNoteIds)에 포함하십시오.
+6. [중요] **메타데이터 분리**: 모든 메타데이터(ID, 태그, 연결 정보 등)는 반드시 'yamlMetadata' 필드에만 넣으십시오. 'content' 본문에는 마크다운 형식의 설계 내용만 들어가야 하며, 메타데이터가 중복 포함되어서는 안 됩니다. 또한, 'yamlMetadata'에는 반드시 'noteId: [해당 노트의 ID]'가 포함되어야 합니다.
+7. [중요] **본문 구조**: 모든 'content'는 시스템 지침의 4개 섹션 구조를 유지해야 합니다.
+8. [중요] **요약**: 'summary'는 "Imported from..."과 같은 파일 경로나 소스 정보가 아닌, 기능의 역할을 설명하는 한국어 요약으로 반드시 업데이트하십시오.
+9. **연결성**: 'relatedNoteIds'를 분석하여 논리적으로 연관된 모든 노드들을 연결하십시오.
 
-결과물:
-1. 병합되어 내용이 보강된 노트 목록 (mergedNotes)
-2. 삭제될 중복 노트 ID 목록 (removedNoteIds)
-3. 변경된 GCM (updatedGcm)
+현재 GCM:
+${JSON.stringify(gcm, null, 2)}
+
+노트 목록:
+${JSON.stringify(simplifiedNotes, null, 2)}
+
+작업 규칙:
+- [중요] **변경된 노트만 반환**: 응답 크기 제한을 피하기 위해, 내용이나 메타데이터가 실제로 수정된 노트들만 'updatedNotes' 배열에 포함하십시오. 수정되지 않은 노트는 포함하지 마십시오.
+- 결과물에서 각 노트의 ID는 유지되어야 합니다.
+- 삭제해야 할 노트가 있다면 'deletedNoteIds' 배열에 해당 ID들을 넣으십시오.
+- 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
 {
-  "mergedNotes": [ array of notes ],
-  "removedNoteIds": ["id1", "id2"],
-  "updatedGcm": { ... }
+  "updatedNotes": [ ... 수정된 노트들만 ... ],
+  "deletedNoteIds": [ "id1", "id2" ],
+  "updatedGcm": { ... },
+  "report": "어떤 최적화가 이루어졌는지에 대한 한국어 요약"
 }
 `;
+
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: prompt,
@@ -240,41 +281,61 @@ Return JSON:
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          mergedNotes: { type: Type.ARRAY, items: { type: Type.OBJECT } },
-          removedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-          updatedGcm: { type: Type.OBJECT },
+          updatedNotes: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                title: { type: Type.STRING },
+                folder: { type: Type.STRING },
+                content: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                parentNoteId: { type: Type.STRING },
+                relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                yamlMetadata: { type: Type.STRING },
+              },
+              required: ["id", "title", "folder", "content", "summary", "yamlMetadata"],
+            },
+          },
+          deletedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+          updatedGcm: {
+            type: Type.OBJECT,
+            properties: {
+              entities: { type: Type.OBJECT },
+              variables: { type: Type.OBJECT },
+            },
+            required: ["entities", "variables"],
+          },
+          report: { type: Type.STRING },
         },
-        required: ["mergedNotes", "removedNoteIds", "updatedGcm"],
+        required: ["updatedNotes", "deletedNoteIds", "updatedGcm", "report"],
       },
     },
   });
-  return safeJsonParse(response.text || "{}");
-};
 
-export const refactorFolders = async (notes: Note[]): Promise<Record<string, string>> => {
-  const prompt = `
-다음 노트를 분석하고 매우 효율적이고 논리적인 폴더 트리 구조로 재구성하십시오.
-프로젝트의 아키텍처를 가장 잘 나타내는 동적인 폴더 이름을 한국어로 만드십시오.
-마인드맵 구조를 고려하여, 공통 부품은 '공통' 또는 'Shared' 폴더로 모으는 것을 권장합니다.
+  const result = safeJsonParse(response.text);
+  
+  // Merge updates back into the original notes list
+  const updatedNotesMap = new Map((result.updatedNotes || []).map((n: any) => [n.id, n]));
+  const deletedIds = new Set(result.deletedNoteIds || []);
+  
+  const finalNotes = notes
+    .filter(n => !deletedIds.has(n.id))
+    .map(n => {
+      const update = updatedNotesMap.get(n.id);
+      if (update) {
+        return { ...n, ...(update as any) };
+      }
+      return n;
+    });
 
-노트 목록:
-${JSON.stringify(notes.map(n => ({ id: n.id, title: n.title, currentFolder: n.folder, parentNoteId: n.parentNoteId })), null, 2)}
-
-각 노트 ID를 새로운 한국어 폴더 이름으로 매핑하는 JSON 객체를 반환하십시오.
-`;
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        description: "Dictionary mapping note IDs to their new folder name",
-      },
-    },
-  });
-  return safeJsonParse(response.text || "{}");
+  return {
+    updatedNotes: finalNotes,
+    deletedNoteIds: result.deletedNoteIds || [],
+    updatedGcm: result.updatedGcm || gcm,
+    report: result.report || "최적화가 완료되었습니다."
+  };
 };
 
 export const updateSingleNote = async (
@@ -291,6 +352,12 @@ export const updateSingleNote = async (
   const prompt = `
 Update the specific note based on the user's command.
 Also determine if this change affects the Global Context Map (GCM) and identify any other notes that might conflict or need updates due to this change.
+
+[중요] 지시사항:
+1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
+2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
+3. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
+4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
 
 Target Note:
 ${JSON.stringify(note, null, 2)}
@@ -524,6 +591,12 @@ export const generateNoteFromCode = async (
 마인드맵 구조를 고려하여, 기존 노트들과의 연관 관계(relatedNoteIds)를 찾아 연결하십시오.
 언어 설정: 모든 텍스트는 반드시 한국어로 작성하십시오. 가독성을 위해 줄바꿈을 충분히 사용하십시오.
 
+[중요] 지시사항:
+1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
+2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
+3. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
+4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
+
 파일 이름: ${fileName}
 소스 코드:
 ${fileContent.slice(0, 15000)}
@@ -573,6 +646,12 @@ export const generateSubModules = async (
 목표: 주어진 메인 기능 노트를 분석하여 필요한 하위 구성 요소(Sub-modules)를 상세 설계합니다.
 그래프 원칙: "이 기능 구현을 위해 필요한 모든 논리 노드를 생성하고 관계를 선(relatedNoteIds)으로 연결하라"는 지침을 따르십시오.
 언어 설정: 모든 노트 제목(title)은 반드시 한국어로 작성하십시오.
+
+[중요] 지시사항:
+1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
+2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
+3. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
+4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
 
 메인 기능:
 제목: ${mainNote.title}
@@ -709,7 +788,7 @@ ${notes.map(n => `- ID: ${n.id}, 제목: ${n.title}, 폴더: ${n.folder}, 참조
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-2.5-flash",
     contents: prompt,
     config: {
       systemInstruction,
@@ -739,7 +818,7 @@ ${code}
 `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: "gemini-2.5-flash",
     contents: prompt,
     config: { systemInstruction }
   });
@@ -768,9 +847,12 @@ export const validateYamlMetadata = (content: string): { isValid: boolean; error
     }
   });
 
-  // 필수 필드 체크 (예시: status)
-  if (!yamlStr.includes('status:')) {
-    errors.push("필수 필드 'status'가 누락되었습니다.");
+  // 필수 필드 체크 (예시: relatedNoteIds, noteId)
+  if (!yamlStr.includes('relatedNoteIds:')) {
+    errors.push("마인드맵 연결을 위한 'relatedNoteIds' 필드가 메타데이터에 필요합니다.");
+  }
+  if (!yamlStr.includes('noteId:')) {
+    errors.push("노트 식별을 위한 'noteId' 필드가 메타데이터에 필요합니다.");
   }
 
   return {

@@ -10,10 +10,8 @@ import {
   decomposeFeature, 
   suggestNextSteps, 
   checkConflict, 
-  refactorFolders,
   updateSingleNote,
-  checkConsistency,
-  consolidateNotes,
+  optimizeBlueprint,
   generateSubModules,
   generateNoteFromCode,
   suggestGcmUpdates,
@@ -209,29 +207,24 @@ export const Dashboard: React.FC = () => {
     if (textFileInputRef.current) textFileInputRef.current.value = '';
   };
 
-  const handleAutoConsolidate = async (notesToUse?: Note[], gcmToUse?: GCM) => {
-    setIsCheckingConsistency(true);
-    setProcessStatus({ message: '노트 정리 분석 중...' });
+  const handleOptimizeBlueprint = async () => {
+    if (state.notes.length === 0) return;
+    setIsSyncing(true);
+    setProcessStatus({ message: '설계도 최적화 진행 중 (일관성, 연결점, 구조 재배치)...' });
     try {
-      const { mergedNotes, removedNoteIds, updatedGcm } = await consolidateNotes(
-        notesToUse || state.notes, 
-        gcmToUse || state.gcm
-      );
-      
-      setProcessStatus({ message: '병합된 구조 적용 중...' });
-      setState(prev => {
-        const newNotes = [...prev.notes.filter(n => !removedNoteIds.includes(n.id)), ...mergedNotes];
-        return {
-          ...prev,
-          notes: alignChildFolders(newNotes),
-          gcm: updatedGcm
-        };
-      });
-      alert("불필요한 노트가 정리되었습니다.");
-    } catch (e) {
-      alert(`노트 정리 실패: ${e instanceof Error ? e.message : String(e)}`);
+      const { updatedNotes, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm);
+      setState(prev => ({
+        ...prev,
+        notes: alignChildFolders(updatedNotes),
+        gcm: updatedGcm
+      }));
+      setNextStepSuggestion(report);
+      setRightSidebarOpen(true);
+    } catch (error) {
+      console.error('Optimization failed', error);
+      alert('설계도 최적화 중 오류가 발생했습니다.');
     } finally {
-      setIsCheckingConsistency(false);
+      setIsSyncing(false);
       setProcessStatus(null);
     }
   };
@@ -406,55 +399,6 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const handleRefactorFolders = async () => {
-    if (state.notes.length === 0) return;
-    setIsRefactoring(true);
-    try {
-      const mapping = await refactorFolders(state.notes);
-      setState(prev => {
-        const newNotes = prev.notes.map(n => ({
-          ...n,
-          folder: mapping[n.id] || n.folder
-        }));
-        return {
-          ...prev,
-          notes: alignChildFolders(newNotes)
-        };
-      });
-    } catch (e) {
-      alert('폴더 구조 재구성 실패.');
-    } finally {
-      setIsRefactoring(false);
-    }
-  };
-
-  const handleCheckConsistency = async () => {
-    if (state.notes.length === 0) return;
-    setIsCheckingConsistency(true);
-    try {
-      const conflicts = await checkConsistency(state.notes, state.gcm);
-      setState(prev => ({
-        ...prev,
-        notes: prev.notes.map(n => {
-          if (conflicts[n.id]) {
-            return { ...n, consistencyConflict: conflicts[n.id] };
-          }
-          return { ...n, consistencyConflict: undefined };
-        })
-      }));
-      
-      const conflictCount = Object.keys(conflicts).length;
-      if (conflictCount > 0) {
-        alert(`${conflictCount}개의 일관성 충돌을 발견했습니다. 빨간색으로 강조된 노트를 확인하세요.`);
-      } else {
-        alert('일관성 충돌이 발견되지 않았습니다! 모든 것이 정상입니다.');
-      }
-    } catch (e) {
-      alert('일관성 검사 실패.');
-    } finally {
-      setIsCheckingConsistency(false);
-    }
-  };
 
   const alignChildFolders = (notes: Note[]): Note[] => {
     const notesMap = new Map<string, Note>(notes.map(n => [n.id, n]));
@@ -755,29 +699,12 @@ export const Dashboard: React.FC = () => {
               className="hidden"
             />
             <button
-              onClick={() => handleAutoConsolidate()}
-              disabled={isCheckingConsistency || state.notes.length === 0}
-              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+              onClick={handleOptimizeBlueprint}
+              disabled={isSyncing || state.notes.length === 0}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-all shadow-md shadow-indigo-500/20"
             >
-              {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <Merge className="w-3 h-3" />}
-              노트 통합
-            </button>
-            <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
-            <button
-              onClick={handleRefactorFolders}
-              disabled={isRefactoring || state.notes.length === 0}
-              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
-            >
-              {isRefactoring ? <Loader2 className="w-3 h-3 animate-spin" /> : <FolderTree className="w-3 h-3" />}
-              폴더 구조 재구축
-            </button>
-            <button
-              onClick={handleCheckConsistency}
-              disabled={isCheckingConsistency || state.notes.length === 0}
-              className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
-            >
-              {isCheckingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />}
-              일관성 검사
+              {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              설계도 최적화
             </button>
             <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button

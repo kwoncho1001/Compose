@@ -25,12 +25,24 @@ interface NoteEditorProps {
   darkMode: boolean;
 }
 
+const parseMetadata = (yaml: string) => {
+  const meta: Record<string, string> = {};
+  if (!yaml) return meta;
+  yaml.split('\n').forEach(line => {
+    const [key, ...val] = line.split(':');
+    if (key && val.length > 0) {
+      meta[key.trim()] = val.join(':').trim();
+    }
+  });
+  return meta;
+};
+
 export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdateNote, onTargetedUpdate, onGenerateSubModules, onDeleteNote, darkMode }) => {
   const [isResolving, setIsResolving] = useState(false);
   const [command, setCommand] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingSub, setIsGeneratingSub] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [yamlErrors, setYamlErrors] = useState<string[]>([]);
   
   // Local state for manual editing
@@ -52,16 +64,36 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
 
   useEffect(() => {
     if (note) {
+      // Parse relatedNoteIds from YAML if possible
+      const meta = parseMetadata(note.yamlMetadata);
+      let relatedIdsFromYaml: string[] = [];
+      if (meta && typeof meta.relatedNoteIds === 'string') {
+        try {
+          // Try to parse as array if it looks like one
+          if (meta.relatedNoteIds.startsWith('[') && meta.relatedNoteIds.endsWith(']')) {
+            relatedIdsFromYaml = meta.relatedNoteIds.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
+          } else {
+            relatedIdsFromYaml = meta.relatedNoteIds.split(',').map(s => s.trim()).filter(Boolean);
+          }
+        } catch (e) {
+          console.error("Failed to parse relatedNoteIds from YAML", e);
+        }
+      }
+
+      const combinedRelatedIds = Array.from(new Set([...(note.relatedNoteIds || []), ...relatedIdsFromYaml])).filter(id => 
+        allNotes.some(n => n.id === id)
+      );
+      
       setEditData({
         title: note.title,
         folder: note.folder,
         content: note.content,
         summary: note.summary,
         yamlMetadata: note.yamlMetadata,
-        relatedNoteIds: note.relatedNoteIds || []
+        relatedNoteIds: combinedRelatedIds
       });
     }
-  }, [note?.id]);
+  }, [note?.id, allNotes]);
 
   if (!note) {
     return (
@@ -79,10 +111,23 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
   };
 
   const handleSaveManual = () => {
+    // Sync relatedNoteIds from YAML before saving
+    const meta = parseMetadata(editData.yamlMetadata);
+    let relatedIdsFromYaml: string[] = [];
+    if (meta && typeof meta.relatedNoteIds === 'string') {
+      if (meta.relatedNoteIds.startsWith('[') && meta.relatedNoteIds.endsWith(']')) {
+        relatedIdsFromYaml = meta.relatedNoteIds.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
+      } else {
+        relatedIdsFromYaml = meta.relatedNoteIds.split(',').map(s => s.trim()).filter(Boolean);
+      }
+    }
+
     onUpdateNote({
       ...note,
-      ...editData
+      ...editData,
+      relatedNoteIds: relatedIdsFromYaml.length > 0 ? relatedIdsFromYaml : editData.relatedNoteIds
     });
+    setIsEditing(false);
   };
 
   const handleCodeWins = async () => {
@@ -133,6 +178,16 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
     const validation = validateYamlMetadata(value);
     setYamlErrors(validation.errors);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isEditing) {
+        handleSaveManual();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editData, note]);
 
   const handlePartialMerge = async () => {
     if (!note.conflictInfo) return;
@@ -343,88 +398,52 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
           ))}
         </div>
 
-        {/* Related Notes (Graph Connections) */}
-        <div className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-            <Layers className="w-4 h-4" />
-            연관 노트 (마인드맵 연결)
-          </h2>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {editData.relatedNoteIds.map(id => {
-              const relNote = allNotes.find(n => n.id === id);
-              return (
-                <div key={id} className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full text-xs text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                  <span>{relNote?.title || '알 수 없음'}</span>
-                  <button 
-                    onClick={() => setEditData(prev => ({ ...prev, relatedNoteIds: prev.relatedNoteIds.filter(rid => rid !== id) }))}
-                    className="text-slate-400 hover:text-red-500 transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <select
-            onChange={(e) => {
-              const id = e.target.value;
-              if (id && !editData.relatedNoteIds.includes(id)) {
-                setEditData(prev => ({ ...prev, relatedNoteIds: [...prev.relatedNoteIds, id] }));
-              }
-              e.target.value = "";
-            }}
-            className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 text-sm rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="">연관 노트 추가...</option>
-            {allNotes
-              .filter(n => n.id !== note.id && !editData.relatedNoteIds.includes(n.id))
-              .map(n => (
-                <option key={n.id} value={n.id}>{n.title} ({n.folder})</option>
-              ))
-            }
-          </select>
-        </div>
-
-        {/* Content (Merged User View & AI Spec) */}
+        {/* Content (Obsidian-like Live Preview) */}
         <div className="mb-12">
           <div className="flex items-center justify-between mb-4 border-b border-slate-100 dark:border-slate-800 pb-2">
             <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-200">
               기능 및 기술 명세
             </h2>
-            <button
-              onClick={() => setShowPreview(!showPreview)}
-              className="flex items-center gap-2 text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-3 py-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-            >
-              {showPreview ? (
-                <>
-                  <Edit3 className="w-3 h-3" /> 편집 모드
-                </>
+            <div className="flex gap-2">
+              {isEditing ? (
+                <button
+                  onClick={handleSaveManual}
+                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                >
+                  <Save className="w-3 h-3" /> 저장 (Esc)
+                </button>
               ) : (
-                <>
-                  <Eye className="w-3 h-3" /> 미리보기
-                </>
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Edit3 className="w-3 h-3" /> 편집
+                </button>
               )}
-            </button>
+            </div>
           </div>
           
-          <div className="relative group">
-            {showPreview ? (
-              <div className="prose prose-slate dark:prose-invert max-w-none prose-pre:bg-slate-900 prose-pre:text-slate-300 min-h-[500px] p-6 bg-slate-50/30 dark:bg-slate-900/30 rounded-xl border border-slate-100 dark:border-slate-800/50">
-                <Markdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]} rehypePlugins={[rehypeKatex]}>{editData.content}</Markdown>
-              </div>
-            ) : (
-              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500 transition-all">
+          <div className="min-h-[600px] relative group">
+            {isEditing ? (
+              <div className="border border-indigo-500 dark:border-indigo-400 rounded-xl overflow-hidden shadow-lg transition-all">
                 <CodeMirror
                   value={editData.content}
                   height="600px"
                   theme={darkMode ? vscodeDark : vscodeLight}
-                  extensions={[
-                    markdown({ base: markdownLanguage, codeLanguages: languages }),
-                    EditorView.lineWrapping
-                  ]}
+                  extensions={[markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping]}
                   onChange={onContentChange}
+                  autoFocus
                   className="text-sm"
                 />
+              </div>
+            ) : (
+              <div 
+                onClick={() => setIsEditing(true)}
+                className="border border-transparent hover:border-slate-200 dark:hover:border-slate-800 rounded-xl p-6 bg-slate-50/30 dark:bg-slate-900/30 cursor-text prose prose-indigo dark:prose-invert max-w-none transition-all"
+              >
+                <Markdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  {editData.content || '*내용이 없습니다. 클릭하여 편집하세요.*'}
+                </Markdown>
               </div>
             )}
           </div>

@@ -29,47 +29,127 @@ import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTr
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
-export const Dashboard: React.FC = () => {
-  const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem('vibe-architect-state');
-    let initialState: AppState = {
-      notes: [],
-      gcm: { entities: {}, variables: {} },
-      githubRepo: '',
-      githubToken: process.env.GIthub_Token || '',
-    };
+import { db, auth, handleFirestoreError, OperationType } from '../firebase';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer } from 'firebase/firestore';
+import { Auth } from './Auth';
 
-    if (saved) {
+export const Dashboard: React.FC = () => {
+  const [state, setState] = useState<AppState>({
+    notes: [],
+    gcm: { entities: {}, variables: {} },
+    githubRepo: '',
+    githubToken: process.env.Github_Token || '',
+  });
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const projectId = 'default-project';
+  const userId = auth.currentUser?.uid;
+
+  // Validate connection to Firestore
+  useEffect(() => {
+    async function testConnection() {
       try {
-        const parsed = JSON.parse(saved);
-        if (parsed.notes) {
-          const notesMap = new Map<string, Note>(parsed.notes.map((n: Note) => [n.id, n]));
-          const fixedNotes = parsed.notes.map((n: Note) => {
-            if (n.parentNoteId) {
-              const parent = notesMap.get(n.parentNoteId);
-              if (parent && parent.folder !== n.folder) {
-                return { ...n, folder: parent.folder };
-              }
-            }
-            return n;
-          });
-          initialState = { 
-            ...parsed, 
-            notes: fixedNotes,
-            githubToken: parsed.githubToken || process.env.Github_Token || '' 
-          };
-        } else {
-          initialState = { 
-            ...parsed, 
-            githubToken: parsed.githubToken || process.env.Github_Token || '' 
-          };
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
         }
-      } catch (e) {
-        console.error('Failed to parse saved state', e);
       }
     }
-    return initialState;
-  });
+    testConnection();
+  }, []);
+
+  // Firebase Sync
+  useEffect(() => {
+    if (!userId) return;
+
+    const projectRef = doc(db, 'users', userId, 'projects', projectId);
+    const notesRef = collection(db, 'users', userId, 'projects', projectId, 'notes');
+
+    const unsubscribeProject = onSnapshot(projectRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setState(prev => ({
+          ...prev,
+          gcm: data.gcm || prev.gcm,
+          githubRepo: data.githubRepo || prev.githubRepo,
+          githubToken: data.githubToken || prev.githubToken
+        }));
+      } else {
+        setDoc(projectRef, {
+          id: projectId,
+          name: 'Default Project',
+          gcm: { entities: {}, variables: {} },
+          lastUpdated: new Date().toISOString()
+        }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
+      }
+    }, (e) => handleFirestoreError(e, OperationType.GET, projectRef.path));
+
+    const unsubscribeNotes = onSnapshot(notesRef, (querySnap) => {
+      const notesList: Note[] = [];
+      querySnap.forEach((doc) => {
+        notesList.push(doc.data() as Note);
+      });
+      
+      // Sort notes to maintain consistency
+      notesList.sort((a, b) => a.title.localeCompare(b.title));
+
+      setState(prev => ({ ...prev, notes: notesList }));
+      setIsInitialLoading(false);
+    }, (e) => handleFirestoreError(e, OperationType.GET, notesRef.path));
+
+    return () => {
+      unsubscribeProject();
+      unsubscribeNotes();
+    };
+  }, [userId]);
+
+  // Helper to sync changes to Firestore
+  const syncProject = async (updates: Partial<AppState>) => {
+    if (!userId) return;
+    const projectRef = doc(db, 'users', userId, 'projects', projectId);
+    try {
+      await setDoc(projectRef, {
+        ...updates,
+        lastUpdated: new Date().toISOString()
+      }, { merge: true });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, projectRef.path);
+    }
+  };
+
+  const syncNote = async (note: Note) => {
+    if (!userId) return;
+    const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', note.id);
+    try {
+      await setDoc(noteRef, note);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
+    }
+  };
+
+  const deleteNoteFromFirestore = async (noteId: string) => {
+    if (!userId) return;
+    const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', noteId);
+    try {
+      await deleteDoc(noteRef);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
+    }
+  };
+
+  const saveNotesToFirestore = async (notes: Note[]) => {
+    if (!userId) return;
+    const batch = writeBatch(db);
+    notes.forEach(note => {
+      const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', note.id);
+      batch.set(noteRef, note);
+    });
+    try {
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
+    }
+  };
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
   const [darkMode, setDarkMode] = useState(() => {
@@ -132,11 +212,7 @@ export const Dashboard: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Save to localStorage on change
-  useEffect(() => {
-    localStorage.setItem('vibe-architect-state', JSON.stringify(state));
-  }, [state]);
-
+  // Theme effect
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -146,6 +222,17 @@ export const Dashboard: React.FC = () => {
       localStorage.setItem('vibe-architect-theme', 'light');
     }
   }, [darkMode]);
+
+  if (isInitialLoading && userId) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+          <p className="text-slate-600 dark:text-slate-400 font-medium">데이터를 불러오는 중...</p>
+        </div>
+      </div>
+    );
+  }
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -165,6 +252,12 @@ export const Dashboard: React.FC = () => {
       try {
         const importedState = JSON.parse(event.target?.result as string);
         if (importedState.notes) {
+          saveNotesToFirestore(importedState.notes);
+          syncProject({
+            gcm: importedState.gcm,
+            githubRepo: importedState.githubRepo,
+            githubToken: importedState.githubToken
+          });
           setState(importedState);
           showAlert('가져오기 성공', '프로젝트를 성공적으로 불러왔습니다.', 'success');
         }
@@ -191,19 +284,21 @@ export const Dashboard: React.FC = () => {
         status: 'Planned' as const,
       }));
 
-      setState((prev) => {
-        const existingNotesMap = new Map(prev.notes.map(n => [n.id, n]));
-        updatedNotes.forEach(un => {
-          existingNotesMap.set(un.id, un);
-        });
-
-        const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotesWithIds];
-        return {
-          ...prev,
-          notes: combinedNotes,
-          gcm: updatedGcm,
-        };
+      const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
+      updatedNotes.forEach(un => {
+        existingNotesMap.set(un.id, un);
       });
+
+      const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotesWithIds];
+      
+      saveNotesToFirestore(combinedNotes);
+      syncProject({ gcm: updatedGcm });
+
+      setState((prev) => ({
+        ...prev,
+        notes: combinedNotes,
+        gcm: updatedGcm,
+      }));
       setFeatureInput('');
       
       if (newNotesWithIds.length > 0) {
@@ -247,6 +342,7 @@ export const Dashboard: React.FC = () => {
     }
 
     if (newNotes.length > 0) {
+      saveNotesToFirestore(newNotes);
       setState(prev => ({
         ...prev,
         notes: [...prev.notes, ...newNotes]
@@ -265,6 +361,10 @@ export const Dashboard: React.FC = () => {
     try {
       const { updatedNotes, deletedNoteIds, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm);
       
+      saveNotesToFirestore(updatedNotes);
+      deletedNoteIds.forEach(id => deleteNoteFromFirestore(id));
+      syncProject({ gcm: updatedGcm });
+
       setState(prev => {
         const existingNotesMap = new Map(prev.notes.map(n => [n.id, n]));
         
@@ -307,11 +407,14 @@ export const Dashboard: React.FC = () => {
         status: 'Planned' as const,
       }));
 
+      const combinedNotes = [...state.notes, ...newNotesWithIds];
+      saveNotesToFirestore(combinedNotes);
+      syncProject({ gcm: updatedGcm });
+
       setState(prev => {
-        const newNotes = [...prev.notes, ...newNotesWithIds];
         return {
           ...prev,
-          notes: newNotes,
+          notes: combinedNotes,
           gcm: updatedGcm
         };
       });
@@ -336,6 +439,7 @@ export const Dashboard: React.FC = () => {
       status: 'Planned',
       yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
     };
+    syncNote(newNote);
     setState(prev => ({
       ...prev,
       notes: [...prev.notes, newNote]
@@ -355,6 +459,7 @@ export const Dashboard: React.FC = () => {
       status: 'Planned',
       yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
     };
+    syncNote(newNote);
     setState(prev => ({
       ...prev,
       notes: [...prev.notes, newNote]
@@ -371,6 +476,7 @@ export const Dashboard: React.FC = () => {
       confirmText: '삭제',
       cancelText: '취소',
       onConfirm: () => {
+        deleteNoteFromFirestore(noteId);
         setState(prev => ({
           ...prev,
           notes: prev.notes.filter(n => n.id !== noteId)
@@ -461,6 +567,8 @@ export const Dashboard: React.FC = () => {
         }
       }
 
+      saveNotesToFirestore(currentNotes);
+      
       setState(prev => ({ ...prev, notes: currentNotes }));
       
       const { suggestion } = await suggestNextSteps(currentNotes, files);
@@ -483,6 +591,7 @@ export const Dashboard: React.FC = () => {
 
 
   const handleUpdateNote = (updatedNote: Note) => {
+    syncNote(updatedNote);
     setState((prev) => {
       const newNotes = prev.notes.map((n) => (n.id === updatedNote.id ? updatedNote : n));
       return {
@@ -503,6 +612,15 @@ export const Dashboard: React.FC = () => {
         state.gcm,
         state.notes
       );
+
+      saveNotesToFirestore([updatedNote, ...state.notes.filter(n => affectedNoteIds.includes(n.id)).map(n => ({
+        ...n,
+        consistencyConflict: {
+          description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
+          suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
+        }
+      }))]);
+      syncProject({ gcm: updatedGcm });
 
       setState(prev => ({
         ...prev,
@@ -537,9 +655,11 @@ export const Dashboard: React.FC = () => {
       setNextStepSuggestion(suggestion);
       
       if (Object.keys(updatedStatuses).length > 0) {
+        const updatedNotes = state.notes.map(n => updatedStatuses[n.id] ? { ...n, status: updatedStatuses[n.id] } : n);
+        saveNotesToFirestore(updatedNotes);
         setState(prev => ({
           ...prev,
-          notes: prev.notes.map(n => updatedStatuses[n.id] ? { ...n, status: updatedStatuses[n.id] } : n)
+          notes: updatedNotes
         }));
       }
       setRightSidebarOpen(true);
@@ -756,6 +876,8 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            <Auth />
+            <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={() => setViewMode(viewMode === 'editor' ? 'mindmap' : 'editor')}
               className={`p-2 rounded-md flex items-center gap-2 text-xs font-medium transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
@@ -966,14 +1088,22 @@ export const Dashboard: React.FC = () => {
                   type="text"
                   placeholder="Github Repo URL"
                   value={state.githubRepo}
-                  onChange={(e) => setState({ ...state, githubRepo: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setState({ ...state, githubRepo: val });
+                    syncProject({ githubRepo: val });
+                  }}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
                 />
                 <input
                   type="password"
                   placeholder="Github PAT (선택 사항)"
                   value={state.githubToken}
-                  onChange={(e) => setState({ ...state, githubToken: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setState({ ...state, githubToken: val });
+                    syncProject({ githubToken: val });
+                  }}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
                 />
                 <button

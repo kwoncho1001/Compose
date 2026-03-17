@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "Note": {
+      "title": "Note",
+      "description": "A design note representing a feature or module",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "folder": { "type": "string" },
+        "content": { "type": "string" },
+        "summary": { "type": "string" },
+        "parentNoteId": { "type": "string" },
+        "relatedNoteIds": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string" },
+        "githubLink": { "type": "string" },
+        "lastUpdated": { "type": "string" },
+        "yamlMetadata": { "type": "string" },
+        "isMainFeature": { "type": "boolean" }
+      },
+      "required": ["id", "title", "folder", "content", "summary", "status", "yamlMetadata"]
+    },
+    "GCM": {
+      "title": "Global Context Map",
+      "description": "Global state and entities shared across the project",
+      "type": "object",
+      "properties": {
+        "entities": { "type": "object" },
+        "variables": { "type": "object" }
+      }
+    },
+    "Project": {
+      "title": "Project",
+      "description": "A collection of notes and global context",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "githubRepo": { "type": "string" },
+        "githubToken": { "type": "string" },
+        "gcm": { "$ref": "GCM" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["id", "name", "gcm"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "Project",
+      "description": "User projects"
+    },
+    "/users/{userId}/projects/{projectId}/notes/{noteId}": {
+      "schema": "Note",
+      "description": "Notes within a project"
+    }
+  }
+}

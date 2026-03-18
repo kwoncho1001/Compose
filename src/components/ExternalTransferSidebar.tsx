@@ -24,6 +24,7 @@ interface ExternalTransferSidebarProps {
   repoSummaries: Record<string, { nickname: string; summary: string; features: string }>;
   selectedFeatures: any[];
   setSelectedFeatures: (features: any[]) => void;
+  analysisProgress: { current: number; total: number; message: string } | null;
 }
 
 export const ExternalTransferSidebar: React.FC<ExternalTransferSidebarProps> = ({
@@ -48,7 +49,8 @@ export const ExternalTransferSidebar: React.FC<ExternalTransferSidebarProps> = (
   setTransferStep,
   repoSummaries,
   selectedFeatures,
-  setSelectedFeatures
+  setSelectedFeatures,
+  analysisProgress
 }) => {
   const toggleFeatureSelection = (feature: any) => {
     if (selectedFeatures.find(f => f.title === feature.title)) {
@@ -202,9 +204,24 @@ export const ExternalTransferSidebar: React.FC<ExternalTransferSidebarProps> = (
             {isAnalyzingRepo ? (
               <div className="flex flex-col items-center py-12 gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-                <div className="text-center">
+                <div className="text-center w-full px-4">
                   <p className="text-xs font-bold text-slate-600 dark:text-slate-300">레포지토리 분석 중...</p>
-                  <p className="text-[10px] text-slate-400 mt-1">README 및 파일 구조를 파악하고 있습니다.</p>
+                  <p className="text-[10px] text-slate-400 mt-1">{analysisProgress?.message || 'README 및 파일 구조를 파악하고 있습니다.'}</p>
+                  
+                  {analysisProgress && (
+                    <div className="mt-4 space-y-1.5">
+                      <div className="flex justify-between text-[9px] font-mono text-slate-400">
+                        <span>진행률</span>
+                        <span>{Math.round((analysisProgress.current / analysisProgress.total) * 100)}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-indigo-500 transition-all duration-500" 
+                          style={{ width: `${(analysisProgress.current / analysisProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -273,15 +290,30 @@ export const ExternalTransferSidebar: React.FC<ExternalTransferSidebarProps> = (
               </div>
             </div>
             
-            <div className="text-center space-y-2">
+            <div className="text-center space-y-2 w-full px-4">
               <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
                 {isTranspiling ? '도메인 맞춤형 이식 진행 중' : '이식 완료!'}
               </h3>
               <p className="text-[10px] text-slate-500 dark:text-slate-400 max-w-[200px] mx-auto leading-relaxed">
                 {isTranspiling 
-                  ? '선택한 기능의 로직을 분석하여 현재 프로젝트의 GCM 및 도메인 구조에 맞게 변환하고 있습니다.' 
+                  ? (analysisProgress?.message || '선택한 기능의 로직을 분석하여 현재 프로젝트의 GCM 및 도메인 구조에 맞게 변환하고 있습니다.')
                   : '선택한 기능들이 새로운 노트로 성공적으로 생성되었습니다. GCM 변수들도 함께 업데이트되었습니다.'}
               </p>
+
+              {isTranspiling && analysisProgress && (
+                <div className="mt-6 space-y-2">
+                  <div className="flex justify-between text-[9px] font-mono text-slate-400">
+                    <span>처리 중</span>
+                    <span>{analysisProgress.current} / {analysisProgress.total}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden border border-slate-200 dark:border-slate-700">
+                    <div 
+                      className="h-full bg-indigo-600 transition-all duration-500 shadow-[0_0_10px_rgba(79,70,229,0.5)]" 
+                      style={{ width: `${(analysisProgress.current / analysisProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {!isTranspiling && (

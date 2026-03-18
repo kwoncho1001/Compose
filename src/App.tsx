@@ -8,12 +8,13 @@ import { Dashboard } from './components/Dashboard';
 import { Auth } from './components/Auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { auth } from './firebase';
-import { User } from 'firebase/auth';
+import { User, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((u) => {
@@ -22,6 +23,24 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  const handleLogin = async () => {
+    if (isLoggingIn) return;
+    
+    setIsLoggingIn(true);
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error: any) {
+      if (error.code === 'auth/cancelled-popup-request' || error.code === 'auth/popup-closed-by-user') {
+        console.warn('Login popup was closed or cancelled.');
+      } else {
+        console.error('Login failed', error);
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -33,7 +52,11 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      {!user ? <Auth /> : <Dashboard />}
+      {!user ? (
+        <Auth onLogin={handleLogin} isLoggingIn={isLoggingIn} />
+      ) : (
+        <Dashboard />
+      )}
     </ErrorBoundary>
   );
 }

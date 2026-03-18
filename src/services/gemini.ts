@@ -91,7 +91,8 @@ const safeJsonParse = (text: string) => {
 export const decomposeFeature = async (
   featureRequest: string,
   currentGcm: GCM,
-  existingNotes: Note[]
+  existingNotes: Note[],
+  githubContext?: { repoName: string; files: string[]; readme?: string }
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedNotes: Note[];
@@ -101,17 +102,24 @@ export const decomposeFeature = async (
   // Step 1: Main Feature Design & Reuse Analysis
   const step1Prompt = `
 목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
+또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
 
 기존 노트 목록 (요약):
 ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })))}
+
+${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
+${JSON.stringify(githubContext.files.slice(0, 100))}
+
+${githubContext.readme ? `README.md 내용:
+${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
 
 User Request: "${featureRequest}"
 
 Task:
 1. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
-2. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
-3. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
-4. 모든 노트는 태그(tags)를 통해 성격(UI, Logic, Common 등)을 분류합니다.
+2. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
+3. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
+4. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
 5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
 6. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
 7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
@@ -160,19 +168,22 @@ Return JSON:
 
   const step2Prompt = `
 목표: [[메인 기능 노트]]의 하위 모듈에 대한 '핵심 기능', '역할', '구현 로직', '데이터 규약'을 하나의 통합 문서(content)에 상세히 정의합니다.
+Github 저장소의 코드 구조를 참고하여 실제 구현과 정합성을 맞춥니다.
 
 Main Feature: ${mainFeature.title}
 Main Feature Summary: ${mainFeature.summary}
 New Components to detail: ${mainFeature.newComponents.join(', ')}
 Existing Notes to update: ${JSON.stringify(reusedNotesContent.map(n => ({ id: n.id, title: n.title, content: n.content.slice(0, 1000) })))}
 Current GCM: ${JSON.stringify(currentGcm)}
+${githubContext ? `Github 파일 목록: ${JSON.stringify(githubContext.files.slice(0, 100))}` : ''}
 
 지시사항:
-1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. **[중요] 수직적 계층 구조**: 신규 기능들은 반드시 메인 기능 노트를 부모(parentNoteId)로 설정하거나, 논리적으로 상위인 노트를 찾아 'parentNoteId'를 설정하십시오. 수평적 나열을 엄격히 금지합니다.
+1. 신규 컴포넌트에 대해서는 새로운 상세 노트를 작성합니다. **[중요] 수직적 계층 구조**: 신규 기능들은 반드시 메인 기능 노트를 부모(parentNoteId)로 설정하거나, 논리적으로 상위인 노트를 찾아 'parentNoteId'를 설정하십시오.
 2. 기존 노트(Reused)에 대해서는 기존 내용을 보강하여 업데이트된 노트를 작성합니다. (ID 절대 보존)
-3. GCM을 업데이트합니다.
-4. [중요] 폴더 도메인 통합: 모든 기능은 "상위범주/하위범주" 형태의 folder 속성을 가져야 합니다. '디지털 캔버스', '디지털 학습캔버스' 등 유사한 명칭의 폴더를 생성하지 말고, 기존의 대표 도메인 폴더로 통합하십시오. 'Imported' 및 기술 계층 폴더 사용을 금지합니다.
-5. 제목에서 불필요한 접두어를 제거하고 명확한 한국어 명칭을 사용하십시오.
+3. Github 파일 목록을 참고하여, 각 모듈이 어떤 파일과 연관될지 'yamlMetadata'의 'tags'나 'content'에 언급하십시오.
+4. GCM을 업데이트합니다.
+5. [중요] 폴더 도메인 통합: 모든 기능은 "상위범주/하위범주" 형태의 folder 속성을 가져야 합니다.
+6. 제목에서 불필요한 접두어를 제거하고 명확한 한국어 명칭을 사용하십시오.
 
 Return JSON:
 {
@@ -288,9 +299,9 @@ export const optimizeBlueprint = async (
 작업 목표:
 1. **폴더 및 도메인 통합**: 모든 노트의 'folder' 속성을 "상위범주/하위범주" 형태(예: "1. 시스템 인프라/데이터 보안")로 재작성하여 계층화하십시오. 유사한 명칭의 폴더들은 하나의 대표 도메인 폴더로 통합하십시오. 파편화된 폴더 구조를 완전히 제거하십시오.
 2. **수직적 계층 구조(Hierarchy) 재구축**: 수평적으로 나열된 파편화된 노트들을 분석하여, 상위 개념의 노트를 찾아 그 아래로 하위 기능들을 'parentNoteId'를 사용하여 엮어 "통합"하십시오. 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오.
-3. **불필요한 기술 중심 폴더 제거**: 'Imported', 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 제거하고 실제 사용자 기능 단위로 재분류하십시오.
-4. **명칭 표준화**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
-5. **업데이트 및 통합**: 중복되거나 유사한 내용을 담은 노트들은 하나로 통합하고, 상세 내용은 통합된 노트의 'Detailed Algorithm' 섹션에 수직적으로 깊이 있게 기술하십시오.
+3. **노트 통합 원칙**: 중복되거나 유사한 내용을 담은 노트들은 하나로 통합하십시오. 이때, **AI가 내용을 새로 작성하는 것이 아니라, 기존 노트들의 'content'를 단순히 이어붙여(Concatenate) 통합하십시오.** 통합된 노트의 'status'는 반드시 **'Temporary Merge'**로 설정하십시오.
+4. **불필요한 기술 중심 폴더 제거**: 'Imported', 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 제거하고 실제 사용자 기능 단위로 재분류하십시오.
+5. **명칭 표준화**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
 6. **GCM 최적화**: 노트들의 변화에 맞춰 전역 컨텍스트 맵(GCM)의 엔티티와 변수를 업데이트하거나 정제합니다.
 7. **연결성 복구**: 끊어진 'relatedNoteIds' 관계를 분석하여 다시 연결하고, 새로운 논리적 연결을 찾아 계획에 반영합니다. (반드시 ID 기반 연결)
 
@@ -364,7 +375,8 @@ ${JSON.stringify(chunkNotes)}
 1. **ID 보존**: 제공된 'id'를 절대 변경하지 말고 그대로 반환하십시오.
 2. **폴더 도메인 통합 및 재배치**: 모든 노트의 'folder' 속성은 "상위범주/하위범주" 형태를 가져야 합니다. 유사한 명칭의 폴더는 대표 도메인으로 통합하십시오. 파편화된 폴더 구조를 허용하지 않습니다.
 3. **수직적 계층 구조 적용**: 파편화된 세부 기능들은 상위 기능 노트를 찾아 'parentNoteId'를 설정함으로써 수직적 계층 구조를 형성하십시오. 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오.
-4. **명칭 정제**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 완전히 제거하고 명확한 한국어 제목으로 수정하십시오.
+4. **노트 통합 및 이어붙이기**: 통합 대상인 노트들은 내용을 새로 작성하지 말고, **기존 내용들을 순서대로 이어붙여(Concatenate) 'content'를 구성하십시오.** 통합된 결과 노트의 'status'는 반드시 **'Temporary Merge'**여야 합니다.
+5. **명칭 정제**: 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 완전히 제거하고 명확한 한국어 제목으로 수정하십시오.
 4. **메타데이터 분리**: 모든 메타데이터는 'yamlMetadata' 필드에만 넣으십시오.
 5. **본문 구조**: 모든 'content'는 시스템 지침의 4개 섹션 구조를 유지해야 합니다.
 6. **요약**: 'summary'는 기능의 역할을 설명하는 한국어 요약으로 업데이트하십시오.
@@ -396,11 +408,12 @@ ${JSON.stringify(chunkNotes)}
                   folder: { type: Type.STRING },
                   content: { type: Type.STRING },
                   summary: { type: Type.STRING },
+                  status: { type: Type.STRING },
                   parentNoteId: { type: Type.STRING },
                   relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                   yamlMetadata: { type: Type.STRING },
                 },
-                required: ["id", "title", "folder", "content", "summary", "yamlMetadata"],
+                required: ["id", "title", "folder", "content", "summary", "status", "yamlMetadata"],
               },
             },
           },
@@ -759,7 +772,9 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.
 3. **매칭 판단 (엄격한 기준)**: 
    - **기존 노트 업데이트 절대 우선**: 기존 시스템에 이미 존재하는 기능의 연장선이거나, 세부 구현이거나, 연관된 로직이라면 반드시 해당 노트의 ID를 'matchedNoteId'로 지정하고 'isNew'를 false로 설정하십시오.
    - **새 노트 생성 극도 억제**: 기존 아키텍처에 아예 존재하지 않는 완전히 새로운 도메인의 독립적인 기능일 때만 예외적으로 'isNew'를 true로 설정하십시오. 쓸데없이 노트를 분할하여 새로 만들지 마십시오. 기존 노트에 통합하는 것을 최우선으로 하십시오.
-4. **결과 작성**: 각 기능 단위에 대해 새로운 노트 형식(title, folder, content, summary, yamlMetadata)을 생성하되, 'content'는 시스템 지침의 4개 섹션 구조를 따르십시오.
+4. **미세 차이점 분석 (Deep Comparison)**: 기존 노트와 코드를 대조할 때, 단순히 '기능이 같다'가 아니라 '구현 방식, 변수명, 예외 처리 로직'이 하나라도 다르면 그 차이점을 'matchReason'에 상세히 기술하십시오.
+5. **누락된 명세 식별**: 기존 노트(Vault)에는 선언되어 있지만 코드에는 없는 기능, 혹은 반대로 코드에는 있지만 노트에는 없는 세부 로직을 반드시 찾아내십시오.
+6. **결과 작성**: 각 기능 단위에 대해 새로운 노트 형식(title, folder, content, summary, yamlMetadata)을 생성하되, 'content'는 시스템 지침의 4개 섹션 구조를 따르십시오.
 
 [주의]
 - 'Imported' 폴더를 사용하지 마십시오.
@@ -878,7 +893,8 @@ Return JSON:
 export const generateSubModules = async (
   mainNote: Note,
   currentGcm: GCM,
-  existingNotes: Note[]
+  existingNotes: Note[],
+  githubContext?: { repoName: string; files: string[]; readme?: string }
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedGcm: GCM 
@@ -886,6 +902,8 @@ export const generateSubModules = async (
   const prompt = `
 용도: 메인 기능의 하위 모듈 상세 설계 (마인드맵 기반)
 목표: 주어진 메인 기능 노트를 분석하여 필요한 하위 구성 요소(Sub-modules)를 상세 설계합니다.
+또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
+
 그래프 원칙: "이 기능 구현을 위해 필요한 모든 논리 노드를 생성하고 관계를 선(relatedNoteIds)으로 연결하라"는 지침을 따르십시오.
 언어 설정: 모든 노트 제목(title)은 반드시 한국어로 작성하십시오.
 
@@ -903,12 +921,19 @@ export const generateSubModules = async (
 기존 노트 목록 (중복 방지 및 연결용):
 ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
 
+${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
+${JSON.stringify(githubContext.files.slice(0, 100))}
+
+${githubContext.readme ? `README.md 내용:
+${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
+
 Task:
 1. 메인 기능을 구현하기 위해 필요한 하위 모듈(UI 컴포넌트, API, 데이터 모델 등)을 식별합니다.
-2. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다. (반드시 ID 사용)
-3. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
-4. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
-5. [중요] 'Imported' 또는 기술 계층 폴더 사용을 금지하고, 도메인/기능 중심의 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
+2. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
+3. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다. (반드시 ID 사용)
+4. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
+5. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
+6. [중요] 'Imported' 또는 기술 계층 폴더 사용을 금지하고, 도메인/기능 중심의 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
 
 Return JSON:
 {
@@ -1128,7 +1153,7 @@ export const summarizeRepoFeatures = async (
   userGoal: string
 ): Promise<{ features: { id: number; title: string; description: string; relatedFiles: string[] }[] }> => {
   const prompt = `
-당신은 오픈소스 분석 전문가입니다. 외부 Github 레포지토리의 구조와 README를 분석하여, 사용자가 원하는 목표에 부합하는 핵심 기능 리스트(메뉴)를 추출하십시오.
+당신은 오픈소스 분석 전문가입니다. 외부 Github 레포지토리의 구조와 README를 분석하여, 시스템의 전체 모듈 구조와 모든 독립적인 기능 단위를 식별하십시오.
 
 레포지토리: ${repoName}
 사용자 목표: "${userGoal}"
@@ -1136,12 +1161,13 @@ README 일부:
 ${readmeContent.slice(0, 5000)}
 
 파일 트리 (일부):
-${JSON.stringify(fileTree.slice(0, 200))}
+${JSON.stringify(fileTree.slice(0, 500))}
 
 작업:
-1. 사용자의 목표와 관련된 핵심 기능 3~5개를 식별합니다.
-2. 각 기능에 대해 명확한 제목, 설명, 그리고 해당 기능을 구현하는 핵심 파일 경로 목록을 포함하십시오.
-3. 모든 설명은 한국어로 작성하십시오.
+1. 레포지토리의 전체 파일 구조와 로직을 샅샅이 분석하여, 모든 독립적인 기능 단위와 모듈을 식별하십시오.
+2. 개수 제한 없이 시스템을 구성하는 모든 세부 요소를 리스트업하십시오.
+3. 각 기능에 대해 명확한 제목, 설명, 그리고 해당 기능을 구현하는 핵심 파일 경로 목록을 포함하십시오.
+4. 모든 설명은 한국어로 작성하십시오.
 
 Return JSON:
 {

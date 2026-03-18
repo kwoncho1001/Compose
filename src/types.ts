@@ -1,4 +1,4 @@
-export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required';
+export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required' | 'Temporary Merge';
 
 export interface Note {
   id: string;
@@ -42,4 +42,7 @@ export interface AppState {
   gcm: GCM;
   githubRepo: string;
   githubToken: string;
+  lastSyncedAt?: string;
+  lastSyncedSha?: string;
+  fileSyncLogs?: Record<string, string>;
 }

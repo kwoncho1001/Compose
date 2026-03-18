@@ -1,9 +1,14 @@
 import React from 'react';
 import { auth } from '../firebase';
-import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
-import { LogIn, LogOut, User } from 'lucide-react';
+import { signOut } from 'firebase/auth';
+import { LogIn, LogOut, User, Loader2 } from 'lucide-react';
 
-export const Auth: React.FC = () => {
+interface AuthProps {
+  onLogin?: () => void;
+  isLoggingIn?: boolean;
+}
+
+export const Auth: React.FC<AuthProps> = ({ onLogin, isLoggingIn }) => {
   const [user, setUser] = React.useState(auth.currentUser);
 
   React.useEffect(() => {
@@ -12,15 +17,6 @@ export const Auth: React.FC = () => {
     });
     return () => unsubscribe();
   }, []);
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error('Login failed', error);
-    }
-  };
 
   const handleLogout = async () => {
     try {
@@ -42,11 +38,16 @@ export const Auth: React.FC = () => {
             계층형 설계도와 AI를 활용한 시스템 아키텍처 설계 도구입니다. 시작하려면 로그인하세요.
           </p>
           <button
-            onClick={handleLogin}
-            className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-200 dark:shadow-none"
+            onClick={onLogin}
+            disabled={isLoggingIn}
+            className={`w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-200 dark:shadow-none ${isLoggingIn ? 'opacity-70 cursor-not-allowed' : ''}`}
           >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-            Google로 로그인
+            {isLoggingIn ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+            )}
+            {isLoggingIn ? '로그인 중...' : 'Google로 로그인'}
           </button>
         </div>
       </div>

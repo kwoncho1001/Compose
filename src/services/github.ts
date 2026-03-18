@@ -140,3 +140,78 @@ export const fetchGithubRepoDetails = async (
     return null;
   }
 };
+
+export const fetchLatestCommitSha = async (
+  repoUrl: string,
+  token?: string
+): Promise<string> => {
+  if (!repoUrl) return '';
+  const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (!match) throw new Error("Invalid Github repository URL.");
+  const [, owner, repo] = match;
+
+  // Try main branch first
+  let apiUrl = `https://api.github.com/repos/${owner}/${repo}/commits/main`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+  };
+  if (token) {
+    headers.Authorization = `token ${token}`;
+  }
+
+  try {
+    let response = await fetch(apiUrl, { headers });
+    if (!response.ok && response.status === 404) {
+      // Try master branch
+      apiUrl = `https://api.github.com/repos/${owner}/${repo}/commits/master`;
+      response = await fetch(apiUrl, { headers });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Github API Error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.sha;
+  } catch (error) {
+    console.error("Failed to fetch latest commit SHA:", error);
+    throw error;
+  }
+};
+
+export const fetchChangedFilesSince = async (
+  repoUrl: string,
+  baseSha: string,
+  token?: string
+): Promise<{ path: string; status: string }[]> => {
+  if (!repoUrl || !baseSha) return [];
+  const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (!match) throw new Error("Invalid Github repository URL.");
+  const [, owner, repo] = match;
+
+  const headSha = await fetchLatestCommitSha(repoUrl, token);
+  if (headSha === baseSha) return [];
+
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/compare/${baseSha}...${headSha}`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+  };
+  if (token) {
+    headers.Authorization = `token ${token}`;
+  }
+
+  try {
+    const response = await fetch(apiUrl, { headers });
+    if (!response.ok) {
+      throw new Error(`Github API Error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    // status can be 'added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'
+    if (!data.files) return [];
+    return data.files.map((f: any) => ({ path: f.filename, status: f.status }));
+  } catch (error) {
+    console.error("Failed to fetch changed files:", error);
+    throw error;
+  }
+};

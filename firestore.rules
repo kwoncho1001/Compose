@@ -46,28 +46,26 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        ((request.auth.token.email == "kwoncho1001@gmail.com" && request.auth.token.email_verified == true) ||
-         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+        (request.auth.token.email == "kwoncho1001@gmail.com" && request.auth.token.email_verified == true);
     }
 
     function isValidProject(data) {
-      return data.id is string &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
-             data.gcm is map &&
+      return (!('id' in data) || data.id is string) &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 1000)) &&
+             (!('gcm' in data) || data.gcm is map) &&
              (!('githubRepo' in data) || data.githubRepo is string) &&
              (!('githubToken' in data) || data.githubToken is string) &&
              (!('lastUpdated' in data) || data.lastUpdated is string);
     }
 
     function isValidNote(data) {
-      return data.id is string &&
-             data.title is string && data.title.size() > 0 && data.title.size() <= 500 &&
-             data.folder is string && data.folder.size() > 0 && data.folder.size() <= 500 &&
-             data.content is string && data.content.size() <= 200000 &&
-             data.summary is string && data.summary.size() <= 5000 &&
-             data.status is string &&
-             data.yamlMetadata is string && data.yamlMetadata.size() <= 20000 &&
+      return (!('id' in data) || data.id is string) &&
+             (!('title' in data) || (data.title is string && data.title.size() <= 2000)) &&
+             (!('folder' in data) || (data.folder is string && data.folder.size() <= 2000)) &&
+             (!('content' in data) || (data.content is string && data.content.size() <= 1000000)) &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 50000)) &&
+             (!('status' in data) || data.status is string) &&
+             (!('yamlMetadata' in data) || (data.yamlMetadata is string && data.yamlMetadata.size() <= 100000)) &&
              (!('parentNoteId' in data) || data.parentNoteId == null || data.parentNoteId is string) &&
              (!('relatedNoteIds' in data) || data.relatedNoteIds == null || data.relatedNoteIds is list) &&
              (!('githubLink' in data) || data.githubLink == null || data.githubLink is string) &&

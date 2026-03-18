@@ -739,10 +739,11 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
   return sanitized[0];
 };
 
-export const decomposeAndMatchCode = async (
+export const updateCodeSnapshot = async (
   fileName: string,
   fileContent: string,
-  existingNotes: Note[]
+  existingSnapshotNotes: Note[],
+  fileSha: string
 ): Promise<{
   logicUnits: {
     title: string;
@@ -751,33 +752,31 @@ export const decomposeAndMatchCode = async (
     summary: string;
     yamlMetadata: string;
     matchedNoteId?: string;
-    matchReason?: string;
     isNew: boolean;
   }[]
 }> => {
   const prompt = `
-당신은 시스템 역공학 및 아키텍처 매칭 전문가입니다. 제공된 소스 코드를 분석하여 이를 독립적인 '기능(Logic/Feature)' 단위로 분해하고, 기존 노트들과 대조하여 가장 적절한 매칭 대상을 찾으십시오.
+당신은 소스 코드 분석 및 문서화 전문가입니다. 제공된 소스 코드를 분석하여 '코드 스냅샷(Code Snapshot)' 노트를 생성하거나 업데이트하십시오.
+코드 스냅샷은 "실제 코드는 현재 이렇게 짜여 있어"라는 현실(Reality)을 담는 전용 보관소입니다.
 
 [분석 대상 코드]
 파일 이름: ${fileName}
+파일 SHA: ${fileSha}
 소스 코드:
 ${fileContent.slice(0, 15000)}
 
-[기존 노트 목록 (요약)]
-${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
+[기존 코드 스냅샷 노트 목록 (요약)]
+${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
 
 [작업 지침]
-1. **기능 분해**: 소스 코드를 논리적으로 독립된 기능 단위(예: 로그인 로직, 데이터 필터링 알고리즘, UI 렌더링 컴포넌트 등)로 쪼갭니다.
-2. **유사도 매칭 (가장 중요)**: 각 기능 단위에 대해 기존 노트 목록 중 내용이나 목적이 **조금이라도 비슷한 노트가 있다면 무조건 기존 노트에 매칭**시키십시오. 파일 경로나 이름보다는 **'알고리즘의 본질'**과 **'기능적 역할'**을 기준으로 판단하십시오.
-3. **매칭 판단 (엄격한 기준)**: 
-   - **기존 노트 업데이트 절대 우선**: 기존 시스템에 이미 존재하는 기능의 연장선이거나, 세부 구현이거나, 연관된 로직이라면 반드시 해당 노트의 ID를 'matchedNoteId'로 지정하고 'isNew'를 false로 설정하십시오.
-   - **새 노트 생성 극도 억제**: 기존 아키텍처에 아예 존재하지 않는 완전히 새로운 도메인의 독립적인 기능일 때만 예외적으로 'isNew'를 true로 설정하십시오. 쓸데없이 노트를 분할하여 새로 만들지 마십시오. 기존 노트에 통합하는 것을 최우선으로 하십시오.
-4. **미세 차이점 분석 (Deep Comparison)**: 기존 노트와 코드를 대조할 때, 단순히 '기능이 같다'가 아니라 '구현 방식, 변수명, 예외 처리 로직'이 하나라도 다르면 그 차이점을 'matchReason'에 상세히 기술하십시오.
-5. **누락된 명세 식별**: 기존 노트(Vault)에는 선언되어 있지만 코드에는 없는 기능, 혹은 반대로 코드에는 있지만 노트에는 없는 세부 로직을 반드시 찾아내십시오.
-6. **결과 작성**: 각 기능 단위에 대해 새로운 노트 형식(title, folder, content, summary, yamlMetadata)을 생성하되, 'content'는 시스템 지침의 4개 섹션 구조를 따르십시오.
+1. **기능 분해**: 소스 코드를 논리적으로 독립된 기능 단위로 쪼갭니다.
+2. **유사도 매칭**: 각 기능 단위에 대해 기존 '코드 스냅샷' 노트 중 내용이나 목적이 같은 노트가 있다면 기존 노트에 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
+3. **새 노트 생성**: 기존 스냅샷에 없는 새로운 기능이라면 'isNew': true로 설정하십시오.
+4. **출처 명시**: 각 노트의 'content'나 'yamlMetadata'에 이 코드가 어느 파일(${fileName})에서 왔는지 반드시 명시하십시오. 여러 파일에 걸친 기능이라면 기존 노트 내용에 이 파일의 정보를 추가로 기록하도록 내용을 작성하십시오.
+5. **폴더 지정**: 모든 노트의 'folder'는 반드시 "Code Snapshot/하위범주" 형태로 지정하십시오. (예: "Code Snapshot/UI 컴포넌트")
+6. **결과 작성**: 각 기능 단위에 대해 노트 형식을 생성하십시오.
 
 [주의]
-- 'Imported' 폴더를 사용하지 마십시오.
 - 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
@@ -785,12 +784,11 @@ Return JSON:
   "logicUnits": [
     {
       "title": "기능 제목",
-      "folder": "상위범주/하위범주 형태의 폴더",
-      "content": "상세 기술 명세 (4개 섹션 구조)",
+      "folder": "Code Snapshot/하위범주",
+      "content": "실제 코드 구현에 대한 상세 설명 및 출처 파일(${fileName}) 명시",
       "summary": "역할 중심 요약",
-      "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\n...",
+      "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\n...",
       "matchedNoteId": "기존_노트_ID (있는 경우)",
-      "matchReason": "매칭 이유 (한국어)",
       "isNew": boolean
     }
   ]
@@ -817,7 +815,6 @@ Return JSON:
                 summary: { type: Type.STRING },
                 yamlMetadata: { type: Type.STRING },
                 matchedNoteId: { type: Type.STRING },
-                matchReason: { type: Type.STRING },
                 isNew: { type: Type.BOOLEAN },
               },
               required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew"],
@@ -833,7 +830,7 @@ Return JSON:
 };
 
 export const mergeLogicIntoNote = async (
-  logicUnit: { title: string; content: string; summary: string },
+  logicUnit: { title: string; content: string; summary: string; yamlMetadata?: string },
   targetNote: Note
 ): Promise<Note> => {
   const prompt = `
@@ -843,23 +840,27 @@ export const mergeLogicIntoNote = async (
 [기존 노트]
 제목: ${targetNote.title}
 내용: ${targetNote.content}
+메타데이터: ${targetNote.yamlMetadata || ''}
 
 [새로운 코드 분석 결과]
 제목: ${logicUnit.title}
 내용: ${logicUnit.content}
 요약: ${logicUnit.summary}
+새 메타데이터: ${logicUnit.yamlMetadata || ''}
 
 [작업 지침]
 1. **내용 통합**: 기존 설계의 핵심 개념을 유지하면서, 코드에서 발견된 구체적인 알고리즘과 데이터 흐름을 반영하여 'Detailed Algorithm & Technical Specification' 섹션을 보강하십시오. 단순히 내용을 이어 붙이지 말고, 중복을 제거하고 논리적으로 자연스럽게 융합하십시오.
 2. **충돌 처리**: 기존 설계와 실제 코드가 다를 경우, 두 방식을 비교 설명하거나 더 나은 방식을 채택하여 상세히 기술하십시오.
 3. **구조 유지**: 업데이트된 'content'는 반드시 시스템 지침의 4개 섹션 구조를 엄격히 따라야 합니다.
 4. **요약 업데이트**: 통합된 기능을 잘 나타내도록 'summary'를 갱신하십시오.
-5. 모든 텍스트는 한국어로 작성하십시오.
+5. **메타데이터 병합**: 기존 메타데이터와 새 메타데이터를 병합하십시오. 특히 'sourceFiles' 배열에 새 파일이 있다면 추가하고, 'sourceVersion'을 최신으로 갱신하십시오.
+6. 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
 {
   "content": "통합된 상세 내용 (Markdown)",
-  "summary": "통합된 요약 (한국어)"
+  "summary": "통합된 요약 (한국어)",
+  "yamlMetadata": "병합된 YAML 메타데이터"
 }
 `;
 
@@ -874,8 +875,9 @@ Return JSON:
         properties: {
           content: { type: Type.STRING },
           summary: { type: Type.STRING },
+          yamlMetadata: { type: Type.STRING },
         },
-        required: ["content", "summary"],
+        required: ["content", "summary", "yamlMetadata"],
       },
     },
   });
@@ -885,6 +887,7 @@ Return JSON:
     ...targetNote,
     content: result.content || targetNote.content,
     summary: result.summary || targetNote.summary,
+    yamlMetadata: result.yamlMetadata || targetNote.yamlMetadata,
     status: 'Done',
     lastUpdated: new Date().toISOString().split('T')[0]
   };

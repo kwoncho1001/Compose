@@ -15,8 +15,7 @@ import {
   updateSingleNote,
   optimizeBlueprint,
   generateSubModules,
-  generateNoteFromCode,
-  decomposeAndMatchCode,
+  updateCodeSnapshot,
   mergeLogicIntoNote,
   summarizeRepoFeatures,
   transpileExternalLogic,
@@ -24,8 +23,8 @@ import {
   refineSearchGoal,
   summarizeReposShort
 } from '../services/gemini';
-import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha, fetchChangedFilesSince } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight } from 'lucide-react';
+import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -48,7 +47,7 @@ export const Dashboard: React.FC = () => {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [githubFiles, setGithubFiles] = useState<string[]>([]);
+  const [githubFiles, setGithubFiles] = useState<{ path: string; sha: string }[]>([]);
   const [githubReadme, setGithubReadme] = useState<string>('');
   const userId = auth.currentUser?.uid;
 
@@ -168,6 +167,7 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const [sidebarMode, setSidebarMode] = useState<'design' | 'snapshots'>('design');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
   const [darkMode, setDarkMode] = useState(() => {
@@ -296,7 +296,7 @@ export const Dashboard: React.FC = () => {
     try {
       const githubContext = state.githubRepo ? {
         repoName: state.githubRepo,
-        files: githubFiles,
+        files: githubFiles.map(f => f.path),
         readme: githubReadme
       } : undefined;
 
@@ -426,7 +426,7 @@ export const Dashboard: React.FC = () => {
     try {
       const githubContext = state.githubRepo ? {
         repoName: state.githubRepo,
-        files: githubFiles,
+        files: githubFiles.map(f => f.path),
         readme: githubReadme
       } : undefined;
 
@@ -521,64 +521,42 @@ export const Dashboard: React.FC = () => {
     });
   };
 
-  const handleSyncGithub = async (isIncremental: boolean = false) => {
+  const handleSyncGithub = async () => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
       return;
     }
 
     setIsSyncing(true);
-    setProcessStatus({ message: isIncremental ? '변경된 파일 목록 가져오는 중...' : 'Github 파일 목록 가져오는 중...' });
+    setSidebarMode('snapshots');
+    setProcessStatus({ message: 'Github 파일 목록 및 버전 확인 중...' });
     try {
-      let filesToProcess: string[] = [];
+      let filesToProcess: { path: string; sha: string }[] = [];
       let latestSha = '';
 
-      if (isIncremental && state.lastSyncedSha) {
-        const changedFiles = await fetchChangedFilesSince(state.githubRepo, state.lastSyncedSha, state.githubToken);
-        const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
-        filesToProcess = changedFiles
-          .filter(f => f.status !== 'removed')
-          .map(f => f.path)
-          .filter(file => 
-            sourceExtensions.some(ext => file.endsWith(ext)) &&
-            !file.includes('node_modules') &&
-            !file.includes('.git') &&
-            !file.includes('dist') &&
-            !file.includes('build')
-          );
-        
-        if (filesToProcess.length === 0) {
-          showAlert('알림', '변경된 소스 파일이 없습니다.', 'info');
-          setIsSyncing(false);
-          setProcessStatus(null);
-          return;
+      const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
+      setGithubFiles(files);
+      latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken);
+      
+      // Try to fetch README.md
+      const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md');
+      if (readmeFile) {
+        try {
+          const content = await fetchGithubFileContent(state.githubRepo, readmeFile.path, state.githubToken);
+          setGithubReadme(content);
+        } catch (e) {
+          console.warn("Failed to fetch README.md", e);
         }
-        latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken);
-      } else {
-        const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
-        setGithubFiles(files);
-        latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken);
-        
-        // Try to fetch README.md
-        const readmeFile = files.find(f => f.toLowerCase() === 'readme.md');
-        if (readmeFile) {
-          try {
-            const content = await fetchGithubFileContent(state.githubRepo, readmeFile, state.githubToken);
-            setGithubReadme(content);
-          } catch (e) {
-            console.warn("Failed to fetch README.md", e);
-          }
-        }
-
-        const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
-        filesToProcess = files.filter(file => 
-          sourceExtensions.some(ext => file.endsWith(ext)) &&
-          !file.includes('node_modules') &&
-          !file.includes('.git') &&
-          !file.includes('dist') &&
-          !file.includes('build')
-        );
       }
+
+      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
+      filesToProcess = files.filter(file => 
+        sourceExtensions.some(ext => file.path.endsWith(ext)) &&
+        !file.path.includes('node_modules') &&
+        !file.path.includes('.git') &&
+        !file.path.includes('dist') &&
+        !file.path.includes('build')
+      );
 
       if (filesToProcess.length === 0) {
         showAlert('알림', '분석할 소스 파일이 없습니다.', 'info');
@@ -589,7 +567,7 @@ export const Dashboard: React.FC = () => {
 
       // Filter out files already processed for this latestSha to support resuming
       const filesActuallyToProcess = filesToProcess.filter(f => 
-        state.fileSyncLogs?.[f] !== latestSha
+        state.fileSyncLogs?.[f.path] !== f.sha
       );
 
       if (filesActuallyToProcess.length === 0) {
@@ -618,14 +596,15 @@ export const Dashboard: React.FC = () => {
       for (let i = 0; i < filesActuallyToProcess.length; i++) {
         const file = filesActuallyToProcess[i];
         setProcessStatus({ 
-          message: `${file} 분석 및 기능 분해 중 (${i + 1}/${filesActuallyToProcess.length})...`,
+          message: `${file.path} 분석 및 코드 스냅샷 생성 중 (${i + 1}/${filesActuallyToProcess.length})...`,
           current: i + 1,
           total: filesActuallyToProcess.length
         });
 
         try {
-          const content = await fetchGithubFileContent(state.githubRepo, file, state.githubToken);
-          const { logicUnits } = await decomposeAndMatchCode(file, content, currentNotes);
+          const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken);
+          const snapshotNotes = currentNotes.filter(n => n.folder.startsWith('Code Snapshot'));
+          const { logicUnits } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha);
           const touchedNotes: Note[] = [];
 
           for (const unit of logicUnits) {
@@ -638,7 +617,7 @@ export const Dashboard: React.FC = () => {
 
             if (targetNote) {
               // Update existing note
-              setProcessStatus(prev => ({ ...prev!, message: `기존 노트 업데이트 중: ${targetNote!.title}` }));
+              setProcessStatus(prev => ({ ...prev!, message: `기존 스냅샷 업데이트 중: ${targetNote!.title}` }));
               const updatedNote = await mergeLogicIntoNote(unit, targetNote);
               currentNotes = currentNotes.map(n => n.id === updatedNote.id ? updatedNote : n);
               touchedNotes.push(updatedNote);
@@ -665,7 +644,7 @@ export const Dashboard: React.FC = () => {
             await saveNotesToFirestore(touchedNotes);
           }
           
-          currentLogs[file] = latestSha;
+          currentLogs[file.path] = file.sha;
           const now = new Date().toISOString();
           await syncProject({ 
             fileSyncLogs: currentLogs,
@@ -681,7 +660,7 @@ export const Dashboard: React.FC = () => {
           }));
 
         } catch (e) {
-          console.error(`Failed to process file ${file}:`, e);
+          console.error(`Failed to process file ${file.path}:`, e);
         }
       }
 
@@ -695,12 +674,12 @@ export const Dashboard: React.FC = () => {
         lastSyncedSha: latestSha
       }));
       
-      const { suggestion } = await suggestNextSteps(currentNotes, filesActuallyToProcess);
+      const { suggestion } = await suggestNextSteps(currentNotes, filesActuallyToProcess.map(f => f.path));
       setNextStepSuggestion(suggestion);
 
       showAlert(
-        isIncremental ? '증분 동기화 완료' : '전수 조사 완료', 
-        `분석 완료: ${updateCount}개 노트 업데이트, ${newCount}개 새 기능 노트 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
+        'GitHub 최신 코드 반영 완료', 
+        `분석 완료: ${updateCount}개 스냅샷 업데이트, ${newCount}개 새 스냅샷 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
         'success'
       );
 
@@ -891,7 +870,7 @@ export const Dashboard: React.FC = () => {
         } catch (e2) {}
       }
 
-      const result = await summarizeRepoFeatures(repoUrl, fileTree, readme, selectedGoal || externalSearchQuery);
+      const result = await summarizeRepoFeatures(repoUrl, fileTree.map(f => f.path), readme, selectedGoal || externalSearchQuery);
       setRepoFeatures(result.features); // No longer slicing to 3
     } catch (e) {
       console.error(e);
@@ -997,11 +976,50 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden transition-colors duration-200">
+      {/* Sidebar Rail - Desktop */}
+      <div className="hidden lg:flex w-16 bg-slate-900 border-r border-slate-800 flex-col items-center py-4 gap-4 z-30">
+        <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/20">
+          <span className="text-white font-bold text-lg">VA</span>
+        </div>
+        
+        <button
+          onClick={() => setSidebarMode('design')}
+          className={`p-3 rounded-xl transition-all duration-200 ${sidebarMode === 'design' ? 'bg-indigo-500/20 text-indigo-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
+          title="설계도 (Design)"
+        >
+          <FileText className="w-6 h-6" />
+        </button>
+        
+        <button
+          onClick={() => setSidebarMode('snapshots')}
+          className={`p-3 rounded-xl transition-all duration-200 ${sidebarMode === 'snapshots' ? 'bg-emerald-500/20 text-emerald-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
+          title="코드 스냅샷 (Code Snapshot)"
+        >
+          <FolderTree className="w-6 h-6" />
+        </button>
+        
+        <div className="mt-auto flex flex-col gap-4">
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-3 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-xl transition-all"
+          >
+            {darkMode ? <Sun className="w-6 h-6" /> : <Moon className="w-6 h-6" />}
+          </button>
+        </div>
+      </div>
+
       {/* Sidebar - Desktop */}
       <div className={`hidden lg:block transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-72' : 'w-0'}`}>
         {isSidebarOpen && (
           <Sidebar
-            notes={state.notes}
+            notes={state.notes.filter(n => 
+              sidebarMode === 'snapshots' 
+                ? n.folder?.startsWith('Code Snapshot') 
+                : !n.folder?.startsWith('Code Snapshot')
+            )}
+            title={sidebarMode === 'snapshots' ? 'Code Snapshot' : 'Design Notes'}
+            sidebarMode={sidebarMode}
+            onModeChange={setSidebarMode}
             projects={projects}
             currentProjectId={currentProjectId}
             onSelectProject={setCurrentProjectId}
@@ -1021,7 +1039,14 @@ export const Dashboard: React.FC = () => {
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
           <div className="absolute inset-y-0 left-0 w-72 shadow-2xl animate-in slide-in-from-left duration-300">
             <Sidebar
-              notes={state.notes}
+              notes={state.notes.filter(n => 
+                sidebarMode === 'snapshots' 
+                  ? n.folder?.startsWith('Code Snapshot') 
+                  : !n.folder?.startsWith('Code Snapshot')
+              )}
+              title={sidebarMode === 'snapshots' ? 'Code Snapshot' : 'Design Notes'}
+              sidebarMode={sidebarMode}
+              onModeChange={setSidebarMode}
               projects={projects}
               currentProjectId={currentProjectId}
               onSelectProject={(id) => {
@@ -1315,24 +1340,15 @@ export const Dashboard: React.FC = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2">
                   <button
-                    onClick={() => handleSyncGithub(false)}
+                    onClick={() => handleSyncGithub()}
                     disabled={isSyncing}
-                    className="bg-slate-800 hover:bg-slate-900 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
-                    title="모든 파일을 처음부터 다시 분석합니다."
-                  >
-                    {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                    전수 조사
-                  </button>
-                  <button
-                    onClick={() => handleSyncGithub(true)}
-                    disabled={isSyncing || !state.lastSyncedSha}
-                    className={`py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all ${!state.lastSyncedSha ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
-                    title={state.lastSyncedSha ? "변경된 파일만 분석합니다." : "전수 조사를 먼저 실행해주세요."}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                    title="변경된 파일만 분석하여 코드 스냅샷을 업데이트합니다."
                   >
                     {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
-                    부분 조사
+                    GitHub 최신 코드 반영
                   </button>
                 </div>
               </div>

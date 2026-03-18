@@ -45,7 +45,7 @@ export const fetchGithubFileContent = async (
 export const fetchGithubFiles = async (
   repoUrl: string,
   token?: string
-): Promise<string[]> => {
+): Promise<{ path: string; sha: string }[]> => {
   if (!repoUrl) return [];
 
   // Parse repoUrl: https://github.com/owner/repo
@@ -73,14 +73,14 @@ export const fetchGithubFiles = async (
         const masterResponse = await fetch(masterUrl, { headers });
         if (masterResponse.ok) {
           const data = await masterResponse.json();
-          return data.tree.map((item: any) => item.path);
+          return data.tree.filter((item: any) => item.type === 'blob').map((item: any) => ({ path: item.path, sha: item.sha }));
         }
       }
       throw new Error(`Github API Error: ${response.statusText}`);
     }
 
     const data = await response.json();
-    return data.tree.map((item: any) => item.path);
+    return data.tree.filter((item: any) => item.type === 'blob').map((item: any) => ({ path: item.path, sha: item.sha }));
   } catch (error) {
     console.error("Failed to fetch Github files:", error);
     throw error;
@@ -179,39 +179,3 @@ export const fetchLatestCommitSha = async (
   }
 };
 
-export const fetchChangedFilesSince = async (
-  repoUrl: string,
-  baseSha: string,
-  token?: string
-): Promise<{ path: string; status: string }[]> => {
-  if (!repoUrl || !baseSha) return [];
-  const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-  if (!match) throw new Error("Invalid Github repository URL.");
-  const [, owner, repo] = match;
-
-  const headSha = await fetchLatestCommitSha(repoUrl, token);
-  if (headSha === baseSha) return [];
-
-  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/compare/${baseSha}...${headSha}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github.v3+json",
-  };
-  if (token) {
-    headers.Authorization = `token ${token}`;
-  }
-
-  try {
-    const response = await fetch(apiUrl, { headers });
-    if (!response.ok) {
-      throw new Error(`Github API Error: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    // status can be 'added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'
-    if (!data.files) return [];
-    return data.files.map((f: any) => ({ path: f.filename, status: f.status }));
-  } catch (error) {
-    console.error("Failed to fetch changed files:", error);
-    throw error;
-  }
-};

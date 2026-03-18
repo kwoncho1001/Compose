@@ -1,9 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus, ShieldAlert, X, PanelLeft, PanelRight, Trash2, ChevronRight, ChevronDown, Merge, Database } from 'lucide-react';
+import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus, ShieldAlert, X, PanelLeft, PanelRight, Trash2, ChevronRight, ChevronDown, Merge, Database, FolderTree } from 'lucide-react';
 import { Note } from '../types';
 
 interface SidebarProps {
   notes: Note[];
+  title?: string;
+  sidebarMode?: 'design' | 'snapshots';
+  onModeChange?: (mode: 'design' | 'snapshots') => void;
   projects: { id: string; name: string }[];
   currentProjectId: string;
   onSelectProject: (id: string) => void;
@@ -46,6 +49,9 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
   notes = [], 
+  title = 'Vibe-Architect',
+  sidebarMode,
+  onModeChange,
   projects = [],
   currentProjectId,
   onSelectProject,
@@ -253,20 +259,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <div className="w-72 bg-slate-900 dark:bg-slate-950 text-slate-300 h-full flex flex-col border-r border-slate-800 transition-colors duration-200">
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-white flex items-center gap-2">
-          <div className="w-6 h-6 bg-indigo-500 rounded-md flex items-center justify-center">
-            <span className="text-white text-xs font-bold">VA</span>
+        <div className="flex items-center gap-3">
+          <div className={`w-8 h-8 ${title === 'Code Snapshot' ? 'bg-emerald-500' : 'bg-indigo-500'} rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/10`}>
+            <span className="text-white text-sm font-bold">{title === 'Code Snapshot' ? 'CS' : 'VA'}</span>
           </div>
-          Vibe-Architect
-        </h1>
+          <h1 className="text-base font-bold text-white tracking-tight">
+            {title}
+          </h1>
+        </div>
         <div className="flex items-center gap-1">
-          <button 
-            onClick={onAddNote}
-            className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
-            title="새 노트 추가"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          {onModeChange && (
+            <div className="flex items-center bg-slate-800 rounded-md p-0.5 mr-2 lg:hidden">
+              <button
+                onClick={() => onModeChange('design')}
+                className={`p-1.5 rounded-md transition-colors ${sidebarMode === 'design' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => onModeChange('snapshots')}
+                className={`p-1.5 rounded-md transition-colors ${sidebarMode === 'snapshots' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {title !== 'Code Snapshot' && (
+            <button 
+              onClick={onAddNote}
+              className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
+              title="새 노트 추가"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
           {onClose && (
             <button 
               onClick={onClose}
@@ -278,52 +304,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Vault Switcher */}
-      <div className="p-4 border-b border-slate-800">
-        <div className="flex items-center justify-between mb-2">
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-            <Database className="w-3 h-3" />
-            Vaults (Projects)
-          </label>
-          <button 
-            onClick={() => setIsCreatingProject(true)}
-            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            New
-          </button>
-        </div>
-        
-        {isCreatingProject ? (
-          <div className="flex gap-1">
-            <input 
-              autoFocus
-              className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
-              placeholder="Vault name..."
-              value={newProjectName}
-              onChange={e => setNewProjectName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && newProjectName) {
-                  onCreateProject(newProjectName);
-                  setNewProjectName('');
-                  setIsCreatingProject(false);
-                } else if (e.key === 'Escape') {
-                  setIsCreatingProject(false);
-                }
-              }}
-            />
+      {/* Vault Switcher - Only show for Design Notes */}
+      {title !== 'Code Snapshot' && (
+        <div className="p-4 border-b border-slate-800">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Database className="w-3 h-3" />
+              Vaults (Projects)
+            </label>
+            <button 
+              onClick={() => setIsCreatingProject(true)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              New
+            </button>
           </div>
-        ) : (
-          <select 
-            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
-            value={currentProjectId}
-            onChange={e => onSelectProject(e.target.value)}
-          >
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        )}
-      </div>
+          
+          {isCreatingProject ? (
+            <div className="flex gap-1">
+              <input 
+                autoFocus
+                className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                placeholder="Vault name..."
+                value={newProjectName}
+                onChange={e => setNewProjectName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newProjectName) {
+                    onCreateProject(newProjectName);
+                    setNewProjectName('');
+                    setIsCreatingProject(false);
+                  } else if (e.key === 'Escape') {
+                    setIsCreatingProject(false);
+                  }
+                }}
+              />
+            </div>
+          ) : (
+            <select 
+              className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
+              value={currentProjectId}
+              onChange={e => onSelectProject(e.target.value)}
+            >
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
       
       <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
         {tree.length > 0 ? (

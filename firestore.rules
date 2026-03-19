@@ -67,6 +67,8 @@ service cloud.firestore {
              (!('status' in data) || data.status is string) &&
              (!('yamlMetadata' in data) || (data.yamlMetadata is string && data.yamlMetadata.size() <= 100000)) &&
              (!('parentNoteId' in data) || data.parentNoteId == null || data.parentNoteId is string) &&
+             (!('parentNoteIds' in data) || data.parentNoteIds == null || data.parentNoteIds is list) &&
+             (!('childNoteIds' in data) || data.childNoteIds == null || data.childNoteIds is list) &&
              (!('relatedNoteIds' in data) || data.relatedNoteIds == null || data.relatedNoteIds is list) &&
              (!('githubLink' in data) || data.githubLink == null || data.githubLink is string) &&
              (!('lastUpdated' in data) || data.lastUpdated == null || data.lastUpdated is string) &&
@@ -89,6 +91,10 @@ service cloud.firestore {
           allow create: if (isOwner(userId) || isAdmin()) && isValidNote(request.resource.data);
           allow update: if (isOwner(userId) || isAdmin()) && isValidNote(request.resource.data);
           allow delete: if isOwner(userId) || isAdmin();
+        }
+
+        match /syncLogs/{logId} {
+          allow read, write: if isOwner(userId) || isAdmin();
         }
       }
     }

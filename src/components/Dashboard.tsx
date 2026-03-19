@@ -25,6 +25,7 @@ import {
   parseMetadata
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
+import { subscribeSyncLog, saveSyncLog } from '../services/syncLog';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2 } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -89,7 +90,6 @@ export const Dashboard: React.FC = () => {
           githubToken: data.githubToken || prev.githubToken,
           lastSyncedAt: data.lastSyncedAt || prev.lastSyncedAt,
           lastSyncedSha: data.lastSyncedSha || prev.lastSyncedSha,
-          fileSyncLogs: data.fileSyncLogs || prev.fileSyncLogs || {}
         }));
       } else {
         setDoc(projectRef, {
@@ -114,9 +114,14 @@ export const Dashboard: React.FC = () => {
       setIsInitialLoading(false);
     }, (e) => handleFirestoreError(e, OperationType.GET, notesRef.path));
 
+    const unsubscribeSyncLogs = subscribeSyncLog(userId, currentProjectId, (logs) => {
+      setState(prev => ({ ...prev, fileSyncLogs: logs }));
+    });
+
     return () => {
       unsubscribeProject();
       unsubscribeNotes();
+      unsubscribeSyncLogs();
     };
   }, [userId, currentProjectId]);
 
@@ -610,7 +615,10 @@ export const Dashboard: React.FC = () => {
       
       const remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
       
-      await syncProject({ fileSyncLogs: {}, lastSyncedSha: undefined });
+      if (userId && currentProjectId) {
+        await saveSyncLog(userId, currentProjectId, {});
+      }
+      await syncProject({ lastSyncedSha: undefined });
 
       setState(prev => ({
         ...prev,
@@ -625,6 +633,64 @@ export const Dashboard: React.FC = () => {
       showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
     } finally {
       setProcessStatus(null);
+    }
+  };
+
+  const reconcileNoteRelationships = async (allNotes: Note[]) => {
+    const updatedNotes: Note[] = [];
+    const notesMap = new Map(allNotes.map(n => [n.id, n]));
+
+    for (const parentNote of allNotes) {
+      const meta = parseMetadata(parentNote.yamlMetadata);
+      const childIds = meta.childNoteIds 
+        ? meta.childNoteIds.replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
+        : [];
+
+      // Ensure parentNote has childNoteIds array synced
+      if (JSON.stringify(parentNote.childNoteIds) !== JSON.stringify(childIds)) {
+        parentNote.childNoteIds = childIds;
+        // We don't necessarily need to save the parent just for this if we're focused on children,
+        // but it's good for consistency.
+      }
+
+      for (const childId of childIds) {
+        const childNote = notesMap.get(childId);
+        if (childNote) {
+          const childMeta = parseMetadata(childNote.yamlMetadata);
+          let parentIds = childMeta.parentNoteIds 
+            ? childMeta.parentNoteIds.replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
+            : [];
+
+          if (!parentIds.includes(parentNote.id)) {
+            parentIds.push(parentNote.id);
+            
+            // Update yamlMetadata
+            const newYaml = childNote.yamlMetadata.replace(/parentNoteIds:.*(\n|$)/, '').trim() + 
+                            `\nparentNoteIds: [${parentIds.join(', ')}]`;
+            
+            const updatedChild = { 
+              ...childNote, 
+              yamlMetadata: newYaml,
+              parentNoteId: parentNote.id, // Primary parent (singular)
+              parentNoteIds: parentIds // Multi-parent support (plural)
+            };
+            
+            notesMap.set(childId, updatedChild);
+            updatedNotes.push(updatedChild);
+          }
+        }
+      }
+    }
+
+    if (updatedNotes.length > 0) {
+      await saveNotesToFirestore(updatedNotes);
+      setState(prev => ({
+        ...prev,
+        notes: prev.notes.map(n => {
+          const updated = updatedNotes.find(un => un.id === n.id);
+          return updated || n;
+        })
+      }));
     }
   };
 
@@ -672,9 +738,26 @@ export const Dashboard: React.FC = () => {
         return;
       }
 
+      // [Sync Log Cleanup] Remove files from logs that no longer exist in GitHub
+      let currentLogs = { ...(state.fileSyncLogs || {}) };
+      const githubFilePaths = new Set(files.map(f => f.path));
+      let logsChanged = false;
+      
+      Object.keys(currentLogs).forEach(path => {
+        if (!githubFilePaths.has(path)) {
+          delete currentLogs[path];
+          logsChanged = true;
+        }
+      });
+      
+      if (logsChanged && userId && currentProjectId) {
+        await saveSyncLog(userId, currentProjectId, currentLogs);
+        setState(prev => ({ ...prev, fileSyncLogs: currentLogs }));
+      }
+
       // Filter out files already processed for this latestSha to support resuming
       const filesActuallyToProcess = filesToProcess.filter(f => 
-        state.fileSyncLogs?.[f.path] !== f.sha
+        currentLogs[f.path] !== f.sha
       );
 
       if (filesActuallyToProcess.length === 0) {
@@ -696,7 +779,6 @@ export const Dashboard: React.FC = () => {
       }
 
       let currentNotes = [...state.notes];
-      let currentLogs = { ...(state.fileSyncLogs || {}) };
       let updateCount = 0;
       let newCount = 0;
 
@@ -806,38 +888,12 @@ export const Dashboard: React.FC = () => {
               summary: parent.summary,
               yamlMetadata: parent.yamlMetadata,
               status: 'Done',
+              childNoteIds: childIds // Sync the object property too
             };
             currentNotes.push(finalParent);
             newCount++;
           }
           touchedNotes.push(finalParent);
-
-          // Auto-Link: Add parentNoteId to children
-          for (const childId of childIds) {
-            const childIndex = currentNotes.findIndex(n => n.id === childId);
-            if (childIndex !== -1) {
-              const childNote = { ...currentNotes[childIndex] };
-              const meta = parseMetadata(childNote.yamlMetadata);
-              let parentIds = meta.parentNoteIds ? meta.parentNoteIds.replace(/[\[\]]/g, '').split(',').map(s => s.trim()).filter(Boolean) : [];
-              
-              if (!parentIds.includes(finalParent.id)) {
-                parentIds.push(finalParent.id);
-                // Remove existing parentNoteIds line if exists, then append
-                const newYaml = childNote.yamlMetadata.replace(/parentNoteIds:.*(\n|$)/, '');
-                childNote.yamlMetadata = newYaml.trim() + `\nparentNoteIds: [${parentIds.join(', ')}]`;
-                
-                currentNotes[childIndex] = childNote;
-                
-                // Update in touchedNotes if already there
-                const touchedIndex = touchedNotes.findIndex(n => n.id === childId);
-                if (touchedIndex !== -1) {
-                  touchedNotes[touchedIndex] = childNote;
-                } else {
-                  touchedNotes.push(childNote);
-                }
-              }
-            }
-          }
 
           // 1개 파일 진행이 끝나고 즉시 해당 파일의 로그와 노트를 업데이트
           if (touchedNotes.length > 0) {
@@ -846,8 +902,10 @@ export const Dashboard: React.FC = () => {
           
           currentLogs[file.path] = file.sha;
           const now = new Date().toISOString();
+          if (userId && currentProjectId) {
+            await saveSyncLog(userId, currentProjectId, currentLogs);
+          }
           await syncProject({ 
-            fileSyncLogs: currentLogs,
             lastSyncedAt: now
           });
 
@@ -873,6 +931,10 @@ export const Dashboard: React.FC = () => {
         ...prev, 
         lastSyncedSha: latestSha
       }));
+
+      // [Post-Processing] Reconcile relationships without AI
+      setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
+      await reconcileNoteRelationships(currentNotes);
       
       const { suggestion } = await suggestNextSteps(currentNotes, state.gcm);
       setNextStepSuggestion(suggestion);

@@ -7,6 +7,7 @@ export interface Note {
   content: string;
   summary: string;
   parentNoteId?: string;
+  parentNoteIds?: string[];
   childNoteIds?: string[];
   relatedNoteIds?: string[];
   status: NoteStatus;

@@ -112,7 +112,8 @@ export const decomposeFeature = async (
   featureRequest: string,
   currentGcm: GCM,
   existingNotes: Note[],
-  githubContext?: { repoName: string; files: string[]; readme?: string }
+  githubContext?: { repoName: string; files: string[]; readme?: string },
+  signal?: AbortSignal
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedNotes: Note[];
@@ -178,6 +179,8 @@ Return JSON:
     },
   });
 
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
   const mainFeature = safeJsonParse(step1Response.text);
 
   const step2Prompt = `
@@ -222,6 +225,8 @@ Return JSON:
     },
   });
 
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
   const step2Result = safeJsonParse(step2Response.text);
   
   const mainNote: Omit<Note, 'id' | 'status'> = {
@@ -245,7 +250,8 @@ Return JSON:
 
 export const optimizeBlueprint = async (
   notes: Note[],
-  gcm: GCM
+  gcm: GCM,
+  signal?: AbortSignal
 ): Promise<{ 
   updatedNotes: Note[], 
   deletedNoteIds: string[],
@@ -327,6 +333,8 @@ Return JSON:
       }
     }
   });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text || "{}");
   return {
@@ -411,7 +419,8 @@ export const updateCodeSnapshot = async (
   fileName: string,
   fileContent: string,
   existingSnapshotNotes: Note[],
-  fileSha: string
+  fileSha: string,
+  signal?: AbortSignal
 ): Promise<{
   parent: {
     title: string;
@@ -530,6 +539,8 @@ Return JSON:
     },
   });
 
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
   return safeJsonParse(response.text || '{"parent": {}, "children": []}');
 };
 
@@ -589,7 +600,8 @@ Return JSON:
 
 export const suggestNextSteps = async (
   notes: Note[],
-  gcm: GCM
+  gcm: GCM,
+  signal?: AbortSignal
 ): Promise<{ suggestion: string; updatedStatuses: Record<string, Note['status']> }> => {
   const prompt = `
 당신은 프로젝트 매니저입니다. 현재의 설계도와 코드 스냅샷 상태를 분석하여, 다음에 수행해야 할 가장 중요한 작업들을 제안하십시오.
@@ -629,6 +641,8 @@ Return JSON:
       },
     },
   });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text || '{"suggestion": "", "updatedStatuses": {}}');
   return {
@@ -771,7 +785,8 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
 
 export const mergeLogicIntoNote = async (
   logicUnit: { title: string; content: string; summary: string; yamlMetadata?: string },
-  targetNote: Note
+  targetNote: Note,
+  signal?: AbortSignal
 ): Promise<Note> => {
   const prompt = `
 당신은 코드 통합 전문가입니다. 기존 설계 노트에 새로운 코드 분석 결과(기능 단위)를 통합하여 노트를 업데이트하십시오.
@@ -822,6 +837,8 @@ Return JSON:
     },
   });
 
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
   const result = safeJsonParse(response.text || "{}");
   return {
     ...targetNote,
@@ -837,7 +854,8 @@ export const generateSubModules = async (
   mainNote: Note,
   currentGcm: GCM,
   existingNotes: Note[],
-  githubContext?: { repoName: string; files: string[]; readme?: string }
+  githubContext?: { repoName: string; files: string[]; readme?: string },
+  signal?: AbortSignal
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedGcm: GCM 
@@ -918,6 +936,8 @@ Return JSON:
       },
     }
   });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text);
   const sanitizedNewNotes = sanitizeNotes(result.newNotes || [], existingNotes);

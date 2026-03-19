@@ -11,6 +11,7 @@ interface SidebarProps {
   currentProjectId: string;
   onSelectProject: (id: string) => void;
   onCreateProject: (name: string) => void;
+  onRenameProject?: (id: string, newName: string) => void;
   selectedNoteId: string | null;
   onSelectNote: (id: string) => void;
   onAddNote: () => void;
@@ -58,6 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentProjectId,
   onSelectProject,
   onCreateProject,
+  onRenameProject,
   selectedNoteId, 
   onSelectNote, 
   onAddNote, 
@@ -70,6 +72,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [isRenamingProject, setIsRenamingProject] = useState(false);
+  const [renameProjectName, setRenameProjectName] = useState('');
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
 
@@ -381,12 +385,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Database className="w-3 h-3" />
               Vaults (Projects)
             </label>
-            <button 
-              onClick={() => setIsCreatingProject(true)}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-            >
-              New
-            </button>
+            <div className="flex gap-2">
+              {onRenameProject && !isCreatingProject && !isRenamingProject && (
+                <button 
+                  onClick={() => {
+                    const currentProject = projects.find(p => p.id === currentProjectId);
+                    if (currentProject) {
+                      setRenameProjectName(currentProject.name);
+                      setIsRenamingProject(true);
+                    }
+                  }}
+                  className="text-xs text-slate-400 hover:text-slate-300 transition-colors"
+                >
+                  Rename
+                </button>
+              )}
+              <button 
+                onClick={() => {
+                  setIsCreatingProject(true);
+                  setIsRenamingProject(false);
+                }}
+                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+              >
+                New
+              </button>
+            </div>
           </div>
           
           {isCreatingProject ? (
@@ -404,6 +427,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     setIsCreatingProject(false);
                   } else if (e.key === 'Escape') {
                     setIsCreatingProject(false);
+                  }
+                }}
+              />
+            </div>
+          ) : isRenamingProject ? (
+            <div className="flex gap-1">
+              <input 
+                autoFocus
+                className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                placeholder="Rename vault..."
+                value={renameProjectName}
+                onChange={e => setRenameProjectName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && renameProjectName && onRenameProject) {
+                    onRenameProject(currentProjectId, renameProjectName);
+                    setIsRenamingProject(false);
+                  } else if (e.key === 'Escape') {
+                    setIsRenamingProject(false);
                   }
                 }}
               />

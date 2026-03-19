@@ -1,3 +1,16 @@
+const handleGithubError = async (response: Response) => {
+  let errorMsg = response.statusText || 'Unknown Error';
+  try {
+    const errorData = await response.json();
+    if (errorData.message) {
+      errorMsg = errorData.message;
+    }
+  } catch (e) {
+    // Ignore JSON parse error
+  }
+  throw new Error(`Github API Error: ${response.status} ${errorMsg}`);
+};
+
 export const fetchGithubFileContent = async (
   repoUrl: string,
   path: string,
@@ -23,7 +36,7 @@ export const fetchGithubFileContent = async (
   try {
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) {
-      throw new Error(`Github API Error: ${response.statusText}`);
+      await handleGithubError(response);
     }
 
     const data = await response.json();
@@ -76,7 +89,7 @@ export const fetchGithubFiles = async (
           return data.tree.filter((item: any) => item.type === 'blob').map((item: any) => ({ path: item.path, sha: item.sha }));
         }
       }
-      throw new Error(`Github API Error: ${response.statusText}`);
+      await handleGithubError(response);
     }
 
     const data = await response.json();
@@ -101,7 +114,7 @@ export const searchGithubRepos = async (
   try {
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) {
-      throw new Error(`Github Search Error: ${response.statusText}`);
+      await handleGithubError(response);
     }
     const data = await response.json();
     return data.items.map((item: any) => ({
@@ -168,7 +181,7 @@ export const fetchLatestCommitSha = async (
     }
 
     if (!response.ok) {
-      throw new Error(`Github API Error: ${response.statusText}`);
+      await handleGithubError(response);
     }
 
     const data = await response.json();

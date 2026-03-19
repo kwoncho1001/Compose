@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { NoteEditor } from './NoteEditor';
-import { GCMViewer } from './GCMViewer';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
@@ -31,7 +30,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer } from 'firebase/firestore';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, updateDoc } from 'firebase/firestore';
 import { Auth } from './Auth';
 
 export const Dashboard: React.FC = () => {
@@ -85,13 +84,21 @@ export const Dashboard: React.FC = () => {
         const data = docSnap.data();
         setState(prev => ({
           ...prev,
-          gcm: data.gcm || prev.gcm,
-          githubRepo: data.githubRepo || prev.githubRepo,
-          githubToken: data.githubToken || prev.githubToken,
-          lastSyncedAt: data.lastSyncedAt || prev.lastSyncedAt,
-          lastSyncedSha: data.lastSyncedSha || prev.lastSyncedSha,
+          gcm: data.gcm || { entities: {}, variables: {} },
+          githubRepo: data.githubRepo || '',
+          githubToken: data.githubToken || process.env.Github_Token || '',
+          lastSyncedAt: data.lastSyncedAt || '',
+          lastSyncedSha: data.lastSyncedSha || '',
         }));
       } else {
+        setState(prev => ({
+          ...prev,
+          gcm: { entities: {}, variables: {} },
+          githubRepo: '',
+          githubToken: process.env.Github_Token || '',
+          lastSyncedAt: '',
+          lastSyncedSha: '',
+        }));
         setDoc(projectRef, {
           id: currentProjectId,
           name: currentProjectId === 'default-project' ? 'Default Project' : currentProjectId,
@@ -212,12 +219,30 @@ export const Dashboard: React.FC = () => {
   const [processStatus, setProcessStatus] = useState<{ message: string; current?: number; total?: number } | null>(null);
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
-  const [showGcm, setShowGcm] = useState(false);
   const [showExternalTransfer, setShowExternalTransfer] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
   
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelProcess = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsDecomposing(false);
+    setIsSyncing(false);
+    setIsRefactoring(false);
+    setIsCheckingConsistency(false);
+    setIsSearchingExternal(false);
+    setIsAnalyzingRepo(false);
+    setIsTranspiling(false);
+    setIsRefiningGoals(false);
+    setProcessStatus(null);
+    setAnalysisProgress(null);
+  };
+
   // External Reference Transfer State
   const [externalSearchQuery, setExternalSearchQuery] = useState('');
   const [externalRepos, setExternalRepos] = useState<{ full_name: string; html_url: string; description: string }[]>([]);
@@ -317,6 +342,10 @@ export const Dashboard: React.FC = () => {
   const handleDecompose = async () => {
     if (!featureInput.trim()) return;
 
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setIsDecomposing(true);
     setProcessStatus({ message: 'Analyzing feature request...' });
     try {
@@ -326,8 +355,10 @@ export const Dashboard: React.FC = () => {
         readme: githubReadme
       } : undefined;
 
-      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext);
+      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext, signal);
       
+      if (signal.aborted) return;
+
       setProcessStatus({ message: 'Updating project state...' });
       const newNotesWithIds = newNotes.map((n) => ({
         ...n,
@@ -358,8 +389,12 @@ export const Dashboard: React.FC = () => {
         setSelectedNoteId(updatedNotes[0].id);
       }
     } catch (error) {
-      console.error('Failed to decompose feature:', error);
-      showAlert('오류', `기능 분해에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      if (error instanceof Error && error.message === "Operation cancelled") {
+        console.log('Decompose feature cancelled');
+      } else {
+        console.error('Failed to decompose feature:', error);
+        showAlert('오류', `기능 분해에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      }
     } finally {
       setIsDecomposing(false);
       setProcessStatus(null);
@@ -407,11 +442,18 @@ export const Dashboard: React.FC = () => {
 
   const handleOptimizeBlueprint = async () => {
     if (state.notes.length === 0) return;
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setIsSyncing(true);
     setProcessStatus({ message: '설계도 최적화 진행 중 (일관성, 연결점, 구조 재배치)...' });
     try {
-      const { updatedNotes, deletedNoteIds, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm);
+      const { updatedNotes, deletedNoteIds, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm, signal);
       
+      if (signal.aborted) return;
+
       saveNotesToFirestore(updatedNotes);
       deletedNoteIds.forEach(id => deleteNoteFromFirestore(id));
       syncProject({ gcm: updatedGcm });
@@ -438,8 +480,12 @@ export const Dashboard: React.FC = () => {
       setNextStepSuggestion(report);
       setRightSidebarOpen(true);
     } catch (error) {
-      console.error('Optimization failed', error);
-      showAlert('오류', '설계도 최적화 중 오류가 발생했습니다.', 'error');
+      if (error instanceof Error && error.message === "Operation cancelled") {
+        console.log('Optimize blueprint cancelled');
+      } else {
+        console.error('Optimization failed', error);
+        showAlert('오류', '설계도 최적화 중 오류가 발생했습니다.', 'error');
+      }
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -447,6 +493,10 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleGenerateSubModules = async (mainNote: Note) => {
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setIsDecomposing(true);
     setProcessStatus({ message: `${mainNote.title}의 하위 모듈 생성 중...` });
     try {
@@ -456,8 +506,10 @@ export const Dashboard: React.FC = () => {
         readme: githubReadme
       } : undefined;
 
-      const { newNotes, updatedGcm } = await generateSubModules(mainNote, state.gcm, state.notes, githubContext);
+      const { newNotes, updatedGcm } = await generateSubModules(mainNote, state.gcm, state.notes, githubContext, signal);
       
+      if (signal.aborted) return;
+
       const newNotesWithIds = newNotes.map((n) => ({
         ...n,
         id: Math.random().toString(36).substr(2, 9),
@@ -478,8 +530,12 @@ export const Dashboard: React.FC = () => {
       
       showAlert('생성 완료', `${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`, 'success');
     } catch (error) {
-      console.error('Failed to generate sub-modules:', error);
-      showAlert('오류', `하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      if (error instanceof Error && error.message === "Operation cancelled") {
+        console.log('Generate sub-modules cancelled');
+      } else {
+        console.error('Failed to generate sub-modules:', error);
+        showAlert('오류', `하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      }
     } finally {
       setIsDecomposing(false);
       setProcessStatus(null);
@@ -719,6 +775,10 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setIsSyncing(true);
     setSidebarMode('snapshots');
     setProcessStatus({ message: 'Github 파일 목록 및 버전 확인 중...' });
@@ -727,14 +787,17 @@ export const Dashboard: React.FC = () => {
       let latestSha = '';
 
       const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
+      if (signal.aborted) return;
       setGithubFiles(files);
       latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken);
+      if (signal.aborted) return;
       
       // Try to fetch README.md
       const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md');
       if (readmeFile) {
         try {
           const content = await fetchGithubFileContent(state.githubRepo, readmeFile.path, state.githubToken);
+          if (signal.aborted) return;
           setGithubReadme(content);
         } catch (e) {
           console.warn("Failed to fetch README.md", e);
@@ -836,6 +899,7 @@ export const Dashboard: React.FC = () => {
       let newCount = 0;
 
       for (let i = 0; i < filesActuallyToProcess.length; i++) {
+        if (signal.aborted) return;
         const file = filesActuallyToProcess[i];
         setProcessStatus({ 
           message: `${file.path} 분석 및 코드 스냅샷 생성 중 (${i + 1}/${filesActuallyToProcess.length})...`,
@@ -845,6 +909,7 @@ export const Dashboard: React.FC = () => {
 
         try {
           const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken);
+          if (signal.aborted) return;
           const snapshotNotes = currentNotes.filter(n => n.folder.startsWith('Code Snapshot'));
           
           // Find existing parent to get old child IDs for cleanup
@@ -856,12 +921,14 @@ export const Dashboard: React.FC = () => {
             ? (parseMetadata(existingParent.yamlMetadata).childNoteIds || '').replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
             : [];
 
-          const { parent, children } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha);
+          const { parent, children } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha, signal);
+          if (signal.aborted) return;
           const touchedNotes: Note[] = [];
           const childIds: string[] = [];
 
           // Process children first
           for (const unit of children) {
+            if (signal.aborted) return;
             let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
             
             // Fallback: If targetNote is not found by ID, try to find by title and folder
@@ -873,7 +940,8 @@ export const Dashboard: React.FC = () => {
             if (targetNote) {
               // Update existing note
               setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
-              finalNote = await mergeLogicIntoNote(unit, targetNote);
+              finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
+              if (signal.aborted) return;
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
             } else {
@@ -929,7 +997,8 @@ export const Dashboard: React.FC = () => {
           let finalParent: Note;
           if (targetParent) {
             setProcessStatus(prev => ({ ...prev!, message: `기존 부모 스냅샷 업데이트 중: ${targetParent!.title}` }));
-            finalParent = await mergeLogicIntoNote(parent, targetParent);
+            finalParent = await mergeLogicIntoNote(parent, targetParent, signal);
+            if (signal.aborted) return;
             currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
             updateCount++;
           } else {
@@ -988,6 +1057,7 @@ export const Dashboard: React.FC = () => {
       // [Post-Processing] Reconcile relationships without AI
       setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
       await reconcileNoteRelationships(currentNotes);
+      if (signal.aborted) return;
 
       // [로그] SHA 동기화 장부 생성/업데이트
       const logTitle = '[로그] SHA 동기화 장부';
@@ -1015,7 +1085,8 @@ export const Dashboard: React.FC = () => {
         await saveNotesToFirestore([newLogNote]);
       }
       
-      const { suggestion } = await suggestNextSteps(currentNotes, state.gcm);
+      const { suggestion } = await suggestNextSteps(currentNotes, state.gcm, signal);
+      if (signal.aborted) return;
       setNextStepSuggestion(suggestion);
 
       showAlert(
@@ -1025,8 +1096,12 @@ export const Dashboard: React.FC = () => {
       );
 
     } catch (error) {
-      console.error('Failed to sync with Github:', error);
-      showAlert('오류', 'Github 대조 및 통합 실패. 콘솔에서 상세 내용을 확인하세요.', 'error');
+      if (error instanceof Error && error.message === "Operation cancelled") {
+        console.log('Sync GitHub cancelled');
+      } else {
+        console.error('Failed to sync with Github:', error);
+        showAlert('오류', `Github 대조 및 통합 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      }
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -1171,7 +1246,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (e) {
       console.error(e);
-      setProcessStatus({ message: 'Github 검색 중 오류가 발생했습니다.' });
+      setProcessStatus({ message: `Github 검색 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
       setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsSearchingExternal(false);
@@ -1188,7 +1263,7 @@ export const Dashboard: React.FC = () => {
       setRefinedGoals(goals);
     } catch (e) {
       console.error(e);
-      setProcessStatus({ message: '키워드 정제 중 오류가 발생했습니다.' });
+      setProcessStatus({ message: `키워드 정제 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
       setTimeout(() => setProcessStatus(null), 3000);
     } finally {
       setIsRefiningGoals(false);
@@ -1215,7 +1290,7 @@ export const Dashboard: React.FC = () => {
       setRepoFeatures(result.features); // No longer slicing to 3
     } catch (e) {
       console.error(e);
-      showAlert('오류', '레포지토리 분석 중 오류가 발생했습니다.', 'error');
+      showAlert('오류', `레포지토리 분석 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
       setIsAnalyzingRepo(false);
       setAnalysisProgress(null);
@@ -1291,7 +1366,7 @@ export const Dashboard: React.FC = () => {
 
     } catch (e) {
       console.error(e);
-      setProcessStatus({ message: '이식 중 오류가 발생했습니다.' });
+      setProcessStatus({ message: `이식 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
       setTimeout(() => setProcessStatus(null), 3000);
       setTransferStep(3);
     } finally {
@@ -1310,6 +1385,19 @@ export const Dashboard: React.FC = () => {
         lastUpdated: new Date().toISOString()
       });
       setCurrentProjectId(projectRef.id);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, projectRef.path);
+    }
+  };
+
+  const handleRenameProject = async (id: string, newName: string) => {
+    if (!userId) return;
+    const projectRef = doc(db, 'users', userId, 'projects', id);
+    try {
+      await updateDoc(projectRef, {
+        name: newName,
+        lastUpdated: new Date().toISOString()
+      });
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, projectRef.path);
     }
@@ -1365,6 +1453,7 @@ export const Dashboard: React.FC = () => {
             currentProjectId={currentProjectId}
             onSelectProject={setCurrentProjectId}
             onCreateProject={handleCreateProject}
+            onRenameProject={handleRenameProject}
             selectedNoteId={selectedNoteId}
             onSelectNote={setSelectedNoteId}
             onAddNote={handleAddNote}
@@ -1397,6 +1486,7 @@ export const Dashboard: React.FC = () => {
                 setIsMobileMenuOpen(false);
               }}
               onCreateProject={handleCreateProject}
+              onRenameProject={handleRenameProject}
               selectedNoteId={selectedNoteId}
               onSelectNote={(id) => {
                 setSelectedNoteId(id);
@@ -1453,7 +1543,6 @@ export const Dashboard: React.FC = () => {
               onClick={() => {
                 setShowExternalTransfer(!showExternalTransfer);
                 if (!showExternalTransfer) {
-                  setShowGcm(false);
                   setRightSidebarOpen(false);
                 }
               }}
@@ -1464,22 +1553,8 @@ export const Dashboard: React.FC = () => {
             </button>
             <button
               onClick={() => {
-                setShowGcm(!showGcm);
-                if (!showGcm) {
-                  setShowExternalTransfer(false);
-                  setRightSidebarOpen(false);
-                }
-              }}
-              className={`p-2 rounded-full transition-colors ${showGcm ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-              title="GCM 보기"
-            >
-              <Database className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => {
                 setRightSidebarOpen(!rightSidebarOpen);
                 if (!rightSidebarOpen) {
-                  setShowGcm(false);
                   setShowExternalTransfer(false);
                 }
               }}
@@ -1521,19 +1596,28 @@ export const Dashboard: React.FC = () => {
               <Loader2 className="w-5 h-5 animate-spin" />
               <span className="font-medium">{processStatus.message}</span>
             </div>
-            {processStatus.current !== undefined && processStatus.total !== undefined && (
-              <div className="flex items-center gap-4">
-                <div className="text-xs font-mono bg-indigo-500 px-2 py-1 rounded">
-                  {processStatus.current} / {processStatus.total} 파일
-                </div>
-                <div className="w-48 h-2 bg-indigo-800 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-white transition-all duration-500" 
-                    style={{ width: `${(processStatus.current / processStatus.total) * 100}%` }}
-                  />
-                </div>
-              </div>
-            )}
+            <div className="flex items-center gap-4">
+              {processStatus.current !== undefined && processStatus.total !== undefined && (
+                <>
+                  <div className="text-xs font-mono bg-indigo-500 px-2 py-1 rounded">
+                    {processStatus.current} / {processStatus.total} 파일
+                  </div>
+                  <div className="w-48 h-2 bg-indigo-800 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-white transition-all duration-500" 
+                      style={{ width: `${(processStatus.current / processStatus.total) * 100}%` }}
+                    />
+                  </div>
+                </>
+              )}
+              <button 
+                onClick={handleCancelProcess}
+                className="ml-4 px-3 py-1 bg-white/20 hover:bg-white/30 rounded text-sm font-medium transition-colors flex items-center gap-1"
+              >
+                <X className="w-4 h-4" />
+                중단
+              </button>
+            </div>
           </div>
         )}
 
@@ -1574,9 +1658,6 @@ export const Dashboard: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* GCM Viewer */}
-      {showGcm && <GCMViewer gcm={state.gcm} />}
 
       {/* External Reference Transfer Sidebar */}
       {showExternalTransfer && (
@@ -1654,7 +1735,7 @@ export const Dashboard: React.FC = () => {
                   value={state.githubRepo}
                   onChange={(e) => {
                     const val = e.target.value;
-                    setState({ ...state, githubRepo: val });
+                    setState(prev => ({ ...prev, githubRepo: val }));
                     syncProject({ githubRepo: val });
                   }}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
@@ -1665,7 +1746,7 @@ export const Dashboard: React.FC = () => {
                   value={state.githubToken}
                   onChange={(e) => {
                     const val = e.target.value;
-                    setState({ ...state, githubToken: val });
+                    setState(prev => ({ ...prev, githubToken: val }));
                     syncProject({ githubToken: val });
                   }}
                   className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"

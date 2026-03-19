@@ -389,7 +389,7 @@ export const Dashboard: React.FC = () => {
         setSelectedNoteId(updatedNotes[0].id);
       }
     } catch (error) {
-      if (error instanceof Error && error.message === "Operation cancelled") {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Decompose feature cancelled');
       } else {
         console.error('Failed to decompose feature:', error);
@@ -480,7 +480,7 @@ export const Dashboard: React.FC = () => {
       setNextStepSuggestion(report);
       setRightSidebarOpen(true);
     } catch (error) {
-      if (error instanceof Error && error.message === "Operation cancelled") {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Optimize blueprint cancelled');
       } else {
         console.error('Optimization failed', error);
@@ -530,7 +530,7 @@ export const Dashboard: React.FC = () => {
       
       showAlert('생성 완료', `${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`, 'success');
     } catch (error) {
-      if (error instanceof Error && error.message === "Operation cancelled") {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Generate sub-modules cancelled');
       } else {
         console.error('Failed to generate sub-modules:', error);
@@ -786,17 +786,17 @@ export const Dashboard: React.FC = () => {
       let filesToProcess: { path: string; sha: string }[] = [];
       let latestSha = '';
 
-      const files = await fetchGithubFiles(state.githubRepo, state.githubToken);
+      const files = await fetchGithubFiles(state.githubRepo, state.githubToken, signal);
       if (signal.aborted) return;
       setGithubFiles(files);
-      latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken);
+      latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken, signal);
       if (signal.aborted) return;
       
       // Try to fetch README.md
       const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md');
       if (readmeFile) {
         try {
-          const content = await fetchGithubFileContent(state.githubRepo, readmeFile.path, state.githubToken);
+          const content = await fetchGithubFileContent(state.githubRepo, readmeFile.path, state.githubToken, signal);
           if (signal.aborted) return;
           setGithubReadme(content);
         } catch (e) {
@@ -908,7 +908,7 @@ export const Dashboard: React.FC = () => {
         });
 
         try {
-          const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken);
+          const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken, signal);
           if (signal.aborted) return;
           const snapshotNotes = currentNotes.filter(n => n.folder.startsWith('Code Snapshot'));
           
@@ -926,73 +926,11 @@ export const Dashboard: React.FC = () => {
           const touchedNotes: Note[] = [];
           const childIds: string[] = [];
 
-          // Process children first
-          for (const unit of children) {
-            if (signal.aborted) return;
-            let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
-            
-            // Fallback: If targetNote is not found by ID, try to find by title and folder
-            if (!targetNote && unit.title && unit.folder) {
-              targetNote = currentNotes.find(n => n.title === unit.title && n.folder === unit.folder);
-            }
-
-            let finalNote: Note;
-            if (targetNote) {
-              // Update existing note
-              setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
-              finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
-              if (signal.aborted) return;
-              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
-              updateCount++;
-            } else {
-              // Create new note
-              finalNote = {
-                id: Math.random().toString(36).substr(2, 9),
-                title: unit.title,
-                folder: unit.folder,
-                content: unit.content,
-                summary: unit.summary,
-                yamlMetadata: unit.yamlMetadata,
-                status: 'Done',
-              };
-              currentNotes.push(finalNote);
-              newCount++;
-            }
-            touchedNotes.push(finalNote);
-            childIds.push(finalNote.id);
-          }
-
-          // Cleanup discarded children
-          const discardedChildIds = oldChildIds.filter(id => !childIds.includes(id));
-          for (const id of discardedChildIds) {
-            const noteIndex = currentNotes.findIndex(n => n.id === id);
-            if (noteIndex !== -1) {
-              const discardedNote = { ...currentNotes[noteIndex] };
-              discardedNote.folder = 'Code Snapshot/폐기됨';
-              discardedNote.status = 'Deprecated';
-              
-              // Add discarded tag
-              const meta = parseMetadata(discardedNote.yamlMetadata);
-              let tags = meta.tags ? meta.tags.replace(/[\[\]]/g, '').split(',').map(t => t.trim()) : [];
-              if (!tags.includes('discarded')) {
-                tags.push('discarded');
-                discardedNote.yamlMetadata = discardedNote.yamlMetadata.replace(/tags:.*(\n|$)/, '') + `\ntags: [${tags.join(', ')}]`;
-              }
-              
-              currentNotes[noteIndex] = discardedNote;
-              touchedNotes.push(discardedNote);
-            }
-          }
-
-          // Process parent
+          // 1. Process parent first to get its ID
           let targetParent = currentNotes.find(n => n.id === parent.matchedNoteId);
           if (!targetParent && parent.title && parent.folder) {
             targetParent = currentNotes.find(n => n.title === parent.title && n.folder === parent.folder);
           }
-
-          // Append childNoteIds to parent's yamlMetadata
-          const parentYaml = parent.yamlMetadata + `\nchildNoteIds: [${childIds.join(', ')}]`;
-          parent.yamlMetadata = parentYaml;
 
           let finalParent: Note;
           if (targetParent) {
@@ -1010,12 +948,76 @@ export const Dashboard: React.FC = () => {
               summary: parent.summary,
               yamlMetadata: parent.yamlMetadata,
               status: 'Done',
-              childNoteIds: childIds // Sync the object property too
             };
             currentNotes.push(finalParent);
             newCount++;
           }
-          touchedNotes.push(finalParent);
+          const parentNoteId = finalParent.id;
+
+          // 2. Process children and link to parent
+          for (const unit of children) {
+            if (signal.aborted) return;
+            let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
+            
+            if (!targetNote && unit.title && unit.folder) {
+              targetNote = currentNotes.find(n => n.title === unit.title && n.folder === unit.folder);
+            }
+
+            let finalNote: Note;
+            if (targetNote) {
+              setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
+              finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
+              if (signal.aborted) return;
+              finalNote.parentNoteId = parentNoteId; // Force link
+              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+              updateCount++;
+            } else {
+              finalNote = {
+                id: Math.random().toString(36).substr(2, 9),
+                title: unit.title,
+                folder: unit.folder,
+                content: unit.content,
+                summary: unit.summary,
+                yamlMetadata: unit.yamlMetadata,
+                status: 'Done',
+                parentNoteId: parentNoteId // Link to parent
+              };
+              currentNotes.push(finalNote);
+              newCount++;
+            }
+            touchedNotes.push(finalNote);
+            childIds.push(finalNote.id);
+          }
+
+          // 3. Cleanup discarded children
+          const discardedChildIds = oldChildIds.filter(id => !childIds.includes(id));
+          for (const id of discardedChildIds) {
+            const noteIndex = currentNotes.findIndex(n => n.id === id);
+            if (noteIndex !== -1) {
+              const discardedNote = { ...currentNotes[noteIndex] };
+              discardedNote.folder = 'Code Snapshot/폐기됨';
+              discardedNote.status = 'Deprecated';
+              
+              const meta = parseMetadata(discardedNote.yamlMetadata);
+              let tags = meta.tags ? meta.tags.replace(/[\[\]]/g, '').split(',').map(t => t.trim()) : [];
+              if (!tags.includes('discarded')) {
+                tags.push('discarded');
+                discardedNote.yamlMetadata = discardedNote.yamlMetadata.replace(/tags:.*(\n|$)/, '') + `\ntags: [${tags.join(', ')}]`;
+              }
+              
+              currentNotes[noteIndex] = discardedNote;
+              touchedNotes.push(discardedNote);
+            }
+          }
+
+          // 4. Update parent with childNoteIds and finalize
+          const finalParentWithChildren = {
+            ...finalParent,
+            childNoteIds: childIds,
+            yamlMetadata: finalParent.yamlMetadata.replace(/childNoteIds:.*(\n|$)/, '') + `\nchildNoteIds: [${childIds.join(', ')}]`
+          };
+          currentNotes = currentNotes.map(n => n.id === finalParentWithChildren.id ? finalParentWithChildren : n);
+          touchedNotes.push(finalParentWithChildren);
 
           // 1개 파일 진행이 끝나고 즉시 해당 파일의 로그와 노트를 업데이트
           if (touchedNotes.length > 0) {
@@ -1040,6 +1042,10 @@ export const Dashboard: React.FC = () => {
           }));
 
         } catch (e) {
+          if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+            console.log(`Processing file ${file.path} cancelled`);
+            return;
+          }
           console.error(`Failed to process file ${file.path}:`, e);
         }
       }
@@ -1096,7 +1102,7 @@ export const Dashboard: React.FC = () => {
       );
 
     } catch (error) {
-      if (error instanceof Error && error.message === "Operation cancelled") {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Sync GitHub cancelled');
       } else {
         console.error('Failed to sync with Github:', error);
@@ -1124,13 +1130,20 @@ export const Dashboard: React.FC = () => {
     const targetNote = state.notes.find(n => n.id === noteId);
     if (!targetNote) return;
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     try {
       const { updatedNote, updatedGcm, affectedNoteIds } = await updateSingleNote(
         targetNote,
         command,
         state.gcm,
-        state.notes
+        state.notes,
+        signal
       );
+
+      if (signal.aborted) return;
 
       saveNotesToFirestore([updatedNote, ...state.notes.filter(n => affectedNoteIds.includes(n.id)).map(n => ({
         ...n,
@@ -1159,9 +1172,17 @@ export const Dashboard: React.FC = () => {
           return n;
         })
       }));
-    } catch (e) {
-      console.error(e);
-      throw e;
+    } catch (error) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Targeted update cancelled');
+      } else {
+        console.error('Failed to update note:', error);
+        showAlert('오류', '노트 업데이트에 실패했습니다.', 'error');
+      }
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
 
@@ -1169,8 +1190,15 @@ export const Dashboard: React.FC = () => {
 
   const handleAnalyzeNextSteps = async () => {
     setProcessStatus({ message: '다음 단계 분석 중...' });
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
     try {
-      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, state.gcm);
+      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, state.gcm, signal);
+      
+      if (signal.aborted) return;
+      
       setNextStepSuggestion(suggestion);
       
       if (Object.keys(updatedStatuses).length > 0) {
@@ -1182,10 +1210,17 @@ export const Dashboard: React.FC = () => {
         }));
       }
       setRightSidebarOpen(true);
-    } catch (e) {
-      console.error(e);
-      showAlert('오류', '다음 단계 분석에 실패했습니다.', 'error');
+    } catch (error) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Analyze next steps cancelled');
+      } else {
+        console.error(error);
+        showAlert('오류', '다음 단계 분석에 실패했습니다.', 'error');
+      }
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setProcessStatus(null);
     }
   };
@@ -1197,17 +1232,20 @@ export const Dashboard: React.FC = () => {
     setIsSearchingExternal(true);
     setSelectedGoal(queryToSearch);
     
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
     try {
       let allRepos: { full_name: string; html_url: string; description: string }[] = [];
       const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(queryToSearch);
       
       if (isKorean) {
-        const { queries, suggestedRepos } = await translateQueryForGithub(queryToSearch);
+        const { queries, suggestedRepos } = await translateQueryForGithub(queryToSearch, controller.signal);
         
         // 1. Fetch suggested repos directly
         if (suggestedRepos && suggestedRepos.length > 0) {
           const details = await Promise.all(
-            suggestedRepos.map(name => fetchGithubRepoDetails(name, state.githubToken))
+            suggestedRepos.map(name => fetchGithubRepoDetails(name, state.githubToken, controller.signal))
           );
           allRepos = [...allRepos, ...details.filter((r): r is any => r !== null)];
         }
@@ -1216,16 +1254,17 @@ export const Dashboard: React.FC = () => {
         for (const q of queries) {
           if (allRepos.length >= 5) break;
           try {
-            const searchResults = await searchGithubRepos(q, state.githubToken);
+            const searchResults = await searchGithubRepos(q, state.githubToken, controller.signal);
             // Avoid duplicates
             const newResults = searchResults.filter(r => !allRepos.some(existing => existing.full_name === r.full_name));
             allRepos = [...allRepos, ...newResults];
           } catch (e) {
+            if (e?.message === "Operation cancelled" || e === "Operation cancelled") throw e;
             console.error(`Search failed for query: ${q}`, e);
           }
         }
       } else {
-        allRepos = await searchGithubRepos(queryToSearch, state.githubToken);
+        allRepos = await searchGithubRepos(queryToSearch, state.githubToken, controller.signal);
       }
 
       if (!state.githubToken) {
@@ -1238,18 +1277,25 @@ export const Dashboard: React.FC = () => {
       
       if (top3Repos.length > 0) {
         setTransferStep(2);
-        const summaryResult = await summarizeReposShort(top3Repos, queryToSearch);
+        const summaryResult = await summarizeReposShort(top3Repos, queryToSearch, controller.signal);
         setRepoSummaries(summaryResult.summaries);
       } else {
         setProcessStatus({ message: '검색 결과가 없습니다. 다른 키워드로 시도해보세요.' });
         setTimeout(() => setProcessStatus(null), 3000);
       }
     } catch (e) {
-      console.error(e);
-      setProcessStatus({ message: `Github 검색 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-      setTimeout(() => setProcessStatus(null), 3000);
+      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+        console.log('Search Github cancelled');
+      } else {
+        console.error(e);
+        setProcessStatus({ message: `Github 검색 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
+        setTimeout(() => setProcessStatus(null), 3000);
+      }
     } finally {
       setIsSearchingExternal(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
 
@@ -1258,15 +1304,24 @@ export const Dashboard: React.FC = () => {
     setIsRefiningGoals(true);
     setExternalRepos([]);
     setTransferStep(1);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     try {
-      const goals = await refineSearchGoal(externalSearchQuery);
+      const goals = await refineSearchGoal(externalSearchQuery, controller.signal);
       setRefinedGoals(goals);
     } catch (e) {
-      console.error(e);
-      setProcessStatus({ message: `키워드 정제 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-      setTimeout(() => setProcessStatus(null), 3000);
+      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+        console.log('Refine goals cancelled');
+      } else {
+        console.error(e);
+        setProcessStatus({ message: `키워드 정제 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
+        setTimeout(() => setProcessStatus(null), 3000);
+      }
     } finally {
       setIsRefiningGoals(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
 
@@ -1275,25 +1330,34 @@ export const Dashboard: React.FC = () => {
     setIsAnalyzingRepo(true);
     setTransferStep(3);
     setAnalysisProgress({ current: 0, total: 100, message: '레포지토리 구조 및 README 분석 중...' });
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     try {
-      const fileTree = await fetchGithubFiles(repoUrl, state.githubToken);
+      const fileTree = await fetchGithubFiles(repoUrl, state.githubToken, controller.signal);
       let readme = '';
       try {
-        readme = await fetchGithubFileContent(repoUrl, 'README.md', state.githubToken);
+        readme = await fetchGithubFileContent(repoUrl, 'README.md', state.githubToken, controller.signal);
       } catch (e) {
         try {
-          readme = await fetchGithubFileContent(repoUrl, 'readme.md', state.githubToken);
+          readme = await fetchGithubFileContent(repoUrl, 'readme.md', state.githubToken, controller.signal);
         } catch (e2) {}
       }
 
-      const result = await summarizeRepoFeatures(repoUrl, fileTree.map(f => f.path), readme, selectedGoal || externalSearchQuery);
+      const result = await summarizeRepoFeatures(repoUrl, fileTree.map(f => f.path), readme, selectedGoal || externalSearchQuery, controller.signal);
       setRepoFeatures(result.features); // No longer slicing to 3
     } catch (e) {
-      console.error(e);
-      showAlert('오류', `레포지토리 분석 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+        console.log('Analyze repo cancelled');
+      } else {
+        console.error(e);
+        showAlert('오류', `레포지토리 분석 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      }
     } finally {
       setIsAnalyzingRepo(false);
       setAnalysisProgress(null);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
 
@@ -1302,6 +1366,8 @@ export const Dashboard: React.FC = () => {
     
     setIsTranspiling(true);
     setTransferStep(4);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     
     try {
       // Collect all related files for all selected features
@@ -1319,9 +1385,10 @@ export const Dashboard: React.FC = () => {
         });
         
         try {
-          const content = await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken);
+          const content = await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken, controller.signal);
           validContents.push({ path, content });
         } catch (e) {
+          if (e?.message === "Operation cancelled" || e === "Operation cancelled") throw e;
           console.error(`Failed to fetch ${path}`, e);
         }
       }
@@ -1336,7 +1403,8 @@ export const Dashboard: React.FC = () => {
         featuresToTranspile.map(f => f.title),
         validContents,
         state.gcm,
-        state.notes
+        state.notes,
+        controller.signal
       );
 
       const newNotesWithIds = result.newNotes.map(n => ({
@@ -1365,12 +1433,19 @@ export const Dashboard: React.FC = () => {
       }, 3500);
 
     } catch (e) {
-      console.error(e);
-      setProcessStatus({ message: `이식 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-      setTimeout(() => setProcessStatus(null), 3000);
-      setTransferStep(3);
+      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+        console.log('Transpile feature cancelled');
+      } else {
+        console.error(e);
+        setProcessStatus({ message: `이식 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
+        setTimeout(() => setProcessStatus(null), 3000);
+        setTransferStep(3);
+      }
     } finally {
       setIsTranspiling(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
   };
 

@@ -14,9 +14,11 @@ const handleGithubError = async (response: Response) => {
 export const fetchGithubFileContent = async (
   repoUrl: string,
   path: string,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<string> => {
   if (!repoUrl) return '';
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) {
@@ -34,7 +36,7 @@ export const fetchGithubFileContent = async (
   }
 
   try {
-    const response = await fetch(apiUrl, { headers });
+    const response = await fetch(apiUrl, { headers, signal });
     if (!response.ok) {
       await handleGithubError(response);
     }
@@ -57,9 +59,11 @@ export const fetchGithubFileContent = async (
 
 export const fetchGithubFiles = async (
   repoUrl: string,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<{ path: string; sha: string }[]> => {
   if (!repoUrl) return [];
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   // Parse repoUrl: https://github.com/owner/repo
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
@@ -78,12 +82,12 @@ export const fetchGithubFiles = async (
   }
 
   try {
-    const response = await fetch(apiUrl, { headers });
+    const response = await fetch(apiUrl, { headers, signal });
     if (!response.ok) {
       if (response.status === 404) {
         // Try master branch if main fails
         const masterUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`;
-        const masterResponse = await fetch(masterUrl, { headers });
+        const masterResponse = await fetch(masterUrl, { headers, signal });
         if (masterResponse.ok) {
           const data = await masterResponse.json();
           return data.tree.filter((item: any) => item.type === 'blob').map((item: any) => ({ path: item.path, sha: item.sha }));
@@ -102,9 +106,11 @@ export const fetchGithubFiles = async (
 
 export const searchGithubRepos = async (
   query: string,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<{ full_name: string; html_url: string; description: string }[]> => {
   const apiUrl = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`;
+  if (signal?.aborted) throw new Error("Operation cancelled");
   const headers: Record<string, string> = {
     Accept: "application/vnd.github.v3+json",
   };
@@ -112,7 +118,7 @@ export const searchGithubRepos = async (
     headers.Authorization = `token ${token}`;
   }
   try {
-    const response = await fetch(apiUrl, { headers });
+    const response = await fetch(apiUrl, { headers, signal });
     if (!response.ok) {
       await handleGithubError(response);
     }
@@ -130,9 +136,11 @@ export const searchGithubRepos = async (
 
 export const fetchGithubRepoDetails = async (
   full_name: string,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<{ full_name: string; html_url: string; description: string } | null> => {
   const apiUrl = `https://api.github.com/repos/${full_name}`;
+  if (signal?.aborted) throw new Error("Operation cancelled");
   const headers: Record<string, string> = {
     Accept: "application/vnd.github.v3+json",
   };
@@ -140,7 +148,7 @@ export const fetchGithubRepoDetails = async (
     headers.Authorization = `token ${token}`;
   }
   try {
-    const response = await fetch(apiUrl, { headers });
+    const response = await fetch(apiUrl, { headers, signal });
     if (!response.ok) return null;
     const item = await response.json();
     return {
@@ -156,9 +164,11 @@ export const fetchGithubRepoDetails = async (
 
 export const fetchLatestCommitSha = async (
   repoUrl: string,
-  token?: string
+  token?: string,
+  signal?: AbortSignal
 ): Promise<string> => {
   if (!repoUrl) return '';
+  if (signal?.aborted) throw new Error("Operation cancelled");
   const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) throw new Error("Invalid Github repository URL.");
   const [, owner, repo] = match;
@@ -173,11 +183,11 @@ export const fetchLatestCommitSha = async (
   }
 
   try {
-    let response = await fetch(apiUrl, { headers });
+    let response = await fetch(apiUrl, { headers, signal });
     if (!response.ok && response.status === 404) {
       // Try master branch
       apiUrl = `https://api.github.com/repos/${owner}/${repo}/commits/master`;
-      response = await fetch(apiUrl, { headers });
+      response = await fetch(apiUrl, { headers, signal });
     }
 
     if (!response.ok) {

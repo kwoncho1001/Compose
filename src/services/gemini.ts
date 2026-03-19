@@ -349,7 +349,8 @@ export const updateSingleNote = async (
   note: Note,
   command: string,
   gcm: GCM,
-  allNotes: Note[]
+  allNotes: Note[],
+  signal?: AbortSignal
 ): Promise<{ updatedNote: Note; updatedGcm: GCM; affectedNoteIds: string[] }> => {
   const relevantNotes = allNotes.filter(n => 
     n.id !== note.id && (n.folder === note.folder || parseInt(parseMetadata(n.yamlMetadata).importance || '0') >= 4)
@@ -383,36 +384,48 @@ Return JSON:
   "affectedNoteIds": ["id1", "id2"]
 }
 `;
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          updatedNote: noteSchema,
-          updatedGcm: {
-            type: Type.OBJECT,
-            properties: {
-              entities: { type: Type.OBJECT },
-              variables: { type: Type.OBJECT },
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            updatedNote: noteSchema,
+            updatedGcm: {
+              type: Type.OBJECT,
+              properties: {
+                entities: { type: Type.OBJECT },
+                variables: { type: Type.OBJECT },
+              },
             },
+            affectedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
           },
-          affectedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+          required: ["updatedNote", "updatedGcm", "affectedNoteIds"],
         },
-        required: ["updatedNote", "updatedGcm", "affectedNoteIds"],
       },
-    },
-  });
-  
-  const result = safeJsonParse(response.text || "{}");
-  return {
-    updatedNote: { ...note, ...result.updatedNote },
-    updatedGcm: result.updatedGcm || gcm,
-    affectedNoteIds: result.affectedNoteIds || [],
-  };
+    });
+    
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    const result = safeJsonParse(response.text || "{}");
+    return {
+      updatedNote: { ...note, ...result.updatedNote },
+      updatedGcm: result.updatedGcm || gcm,
+      affectedNoteIds: result.affectedNoteIds || [],
+    };
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Update single note failed:', err);
+    return {
+      updatedNote: note,
+      updatedGcm: gcm,
+      affectedNoteIds: [],
+    };
+  }
 };
 
 export const updateCodeSnapshot = async (
@@ -464,8 +477,7 @@ ${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, sum
 3. **자식 노트 (함수/로직 단위)**:
    - 제목: 실제 함수명 또는 클래스명 (예: checkPassword, getNodeName)
    - 역할: 파일 내의 구체적인 로직 하나하나를 상세히 설명하십시오.
-   - 폴더: "Code Snapshot/해당_도메인/[파일] 부모_노트_제목"
-   - [중요] '상세' 폴더를 생성하지 말고, 부모 노드의 제목을 하위 폴더명으로 사용하십시오.
+   - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오. 절대 하위 폴더('상세' 등)를 임의로 만들지 마십시오.
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
 4. **유사도 매칭**: 각 단위에 대해 기존 '코드 스냅샷' 노트 중 내용이나 목적이 같은 노트가 있다면 기존 노트에 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
 5. **주의**: 'relatedNoteIds'는 사용하지 마십시오. 오직 'sourceFiles'와 'sourceVersion'으로 출처를 증명합니다.
@@ -483,8 +495,8 @@ Return JSON:
   },
   "children": [
     {
-      "title": "[함수] 제목",
-      "folder": "Code Snapshot/.../상세",
+      "title": "함수명",
+      "folder": "Code Snapshot/...", // 부모와 똑같이!
       "content": "구체적인 로직 설명",
       "summary": "함수 역할 요약",
       "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\ntags: [discovered-from-github]",
@@ -546,7 +558,8 @@ Return JSON:
 
 export const checkConsistency = async (
   notes: Note[],
-  gcm: GCM
+  gcm: GCM,
+  signal?: AbortSignal
 ): Promise<{ report: string; inconsistentNoteIds: string[] }> => {
   const prompt = `
 당신은 시스템 아키텍트입니다. 현재 설계도(노트)와 실제 코드 기반의 '코드 스냅샷' 간의 일관성을 검사하십시오.
@@ -571,31 +584,42 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          report: { type: Type.STRING },
-          inconsistentNoteIds: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          }
-        },
-        required: ["report", "inconsistentNoteIds"]
-      }
-    },
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            report: { type: Type.STRING },
+            inconsistentNoteIds: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: ["report", "inconsistentNoteIds"]
+        }
+      },
+    });
 
-  const result = safeJsonParse(response.text || '{"report": "분석 실패", "inconsistentNoteIds": []}');
-  return {
-    report: result.report || "분석 결과가 없습니다.",
-    inconsistentNoteIds: result.inconsistentNoteIds || [],
-  };
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    const result = safeJsonParse(response.text || '{"report": "분석 실패", "inconsistentNoteIds": []}');
+    return {
+      report: result.report || "분석 결과가 없습니다.",
+      inconsistentNoteIds: result.inconsistentNoteIds || [],
+    };
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Check consistency failed:', err);
+    return {
+      report: "일관성 검사 중 오류가 발생했습니다.",
+      inconsistentNoteIds: [],
+    };
+  }
 };
 
 export const suggestNextSteps = async (
@@ -651,7 +675,7 @@ Return JSON:
   };
 };
 
-export const checkConflict = async (content: string, fileContent: string): Promise<{ isMatch: boolean; reason: string }> => {
+export const checkConflict = async (content: string, fileContent: string, signal?: AbortSignal): Promise<{ isMatch: boolean; reason: string }> => {
   const prompt = `
 당신은 코드 대조 및 통합 관리자입니다. 설계 내용(사양)과 실제 Github 소스 코드를 비교하십시오.
 소스 코드가 설계를 논리적으로 구현하고 있는지 판단하십시오.
@@ -670,26 +694,35 @@ ${fileContent.slice(0, 15000)}
 
 반환 JSON: { "isMatch": boolean, "reason": "한국어 문자열" }
 `;
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          isMatch: { type: Type.BOOLEAN },
-          reason: { type: Type.STRING },
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isMatch: { type: Type.BOOLEAN },
+            reason: { type: Type.STRING },
+          },
+          required: ["isMatch", "reason"],
         },
-        required: ["isMatch", "reason"],
       },
-    },
-  });
-  return safeJsonParse(response.text || '{"isMatch": false, "reason": "Failed to parse"}');
+    });
+
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return safeJsonParse(response.text || '{"isMatch": false, "reason": "Failed to parse"}');
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Check conflict failed:', err);
+    return { isMatch: false, reason: "오류 발생: " + (err instanceof Error ? err.message : String(err)) };
+  }
 };
 
-export const updateSpecFromCode = async (content: string, fileContent: string): Promise<string> => {
+export const updateSpecFromCode = async (content: string, fileContent: string, signal?: AbortSignal): Promise<string> => {
   const prompt = `
 다음 설계 내용을 제공된 소스 코드와 일치하도록 업데이트하십시오.
 동일한 형식을 유지하되, 코드의 내용을 반영하여 로직과 세부 사항을 조정하십시오.
@@ -701,15 +734,24 @@ ${content}
 소스 코드:
 ${fileContent.slice(0, 15000)}
 `;
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: { systemInstruction }
-  });
-  return response.text || content;
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: { systemInstruction }
+    });
+
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return response.text || content;
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Update spec from code failed:', err);
+    return content;
+  }
 };
 
-export const generateFixGuide = async (content: string, fileContent: string): Promise<string> => {
+export const generateFixGuide = async (content: string, fileContent: string, signal?: AbortSignal): Promise<string> => {
   const prompt = `
 소스 코드가 설계 내용과 일치하지 않습니다.
 소스 코드를 설계 내용에 맞게 수정하는 방법에 대한 간결한 가이드를 한국어로 제공하십시오.
@@ -720,18 +762,28 @@ ${content}
 소스 코드:
 ${fileContent.slice(0, 15000)}
 `;
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: { systemInstruction }
-  });
-  return response.text || "가이드가 없습니다.";
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: { systemInstruction }
+    });
+
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return response.text || "가이드가 없습니다.";
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Generate fix guide failed:', err);
+    return "오류 발생: " + (err instanceof Error ? err.message : String(err));
+  }
 };
 
 export const generateNoteFromCode = async (
   fileName: string,
   fileContent: string,
-  existingNotes: Note[]
+  existingNotes: Note[],
+  signal?: AbortSignal
 ): Promise<Omit<Note, 'id' | 'status'>> => {
   const prompt = `
 당신은 시스템 역공학 전문가입니다. 제공된 소스 코드를 분석하여 해당 코드의 역할을 설명하는 설계도(노트)를 작성하십시오.
@@ -768,19 +820,34 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.
 Return JSON matching the Note schema (title, folder, content, summary, yamlMetadata, relatedNoteIds).
 `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: noteSchema,
-    },
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: noteSchema,
+      },
+    });
 
-  const result = safeJsonParse(response.text || "{}");
-  const sanitized = sanitizeNotes([result], existingNotes);
-  return sanitized[0];
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    const result = safeJsonParse(response.text || "{}");
+    const sanitized = sanitizeNotes([result], existingNotes);
+    return sanitized[0];
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Generate note from code failed:', err);
+    return {
+      title: `[파일] ${fileName}`,
+      folder: "Imported/Source",
+      content: "분석 중 오류가 발생했습니다.",
+      summary: "분석 중 오류가 발생했습니다.",
+      yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}`,
+      relatedNoteIds: [],
+    };
+  }
 };
 
 export const mergeLogicIntoNote = async (
@@ -1102,7 +1169,8 @@ export const summarizeRepoFeatures = async (
   repoName: string,
   fileTree: string[],
   readmeContent: string,
-  userGoal: string
+  userGoal: string,
+  signal?: AbortSignal
 ): Promise<{ features: { id: number; title: string; description: string; relatedFiles: string[] }[] }> => {
   const prompt = `
 당신은 오픈소스 분석 전문가입니다. 외부 Github 레포지토리의 구조와 README를 분석하여, 시스템의 전체 모듈 구조와 모든 독립적인 기능 단위를 식별하십시오.
@@ -1129,42 +1197,51 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          features: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.NUMBER },
-                title: { type: Type.STRING },
-                description: { type: Type.STRING },
-                relatedFiles: { type: Type.ARRAY, items: { type: Type.STRING } },
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            features: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.NUMBER },
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  relatedFiles: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ["id", "title", "description", "relatedFiles"],
               },
-              required: ["id", "title", "description", "relatedFiles"],
             },
           },
+          required: ["features"],
         },
-        required: ["features"],
       },
-    },
-  });
+    });
 
-  return safeJsonParse(response.text || '{"features": []}');
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return safeJsonParse(response.text || '{"features": []}');
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Summarize repo features failed:', err);
+    return { features: [] };
+  }
 };
 
 export const transpileExternalLogic = async (
   featureTitles: string[],
   externalCodes: { path: string; content: string }[],
   currentGcm: GCM,
-  existingNotes: Note[]
+  existingNotes: Note[],
+  signal?: AbortSignal
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedGcm: GCM 
@@ -1196,40 +1273,51 @@ export const transpileExternalLogic = async (
   }
   `;
 
-  const response = await ai.models.generateContent({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          newNotes: { type: Type.ARRAY, items: noteSchema },
-          updatedGcm: {
-            type: Type.OBJECT,
-            properties: {
-              entities: { type: Type.OBJECT },
-              variables: { type: Type.OBJECT },
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            newNotes: { type: Type.ARRAY, items: noteSchema },
+            updatedGcm: {
+              type: Type.OBJECT,
+              properties: {
+                entities: { type: Type.OBJECT },
+                variables: { type: Type.OBJECT },
+              },
+              required: ["entities", "variables"],
             },
-            required: ["entities", "variables"],
           },
+          required: ["newNotes", "updatedGcm"],
         },
-        required: ["newNotes", "updatedGcm"],
       },
-    },
-  });
+    });
 
-  const result = safeJsonParse(response.text || "{}");
-  const sanitized = sanitizeNotes(result.newNotes || [], existingNotes);
+    if (signal?.aborted) throw new Error("Operation cancelled");
 
-  return {
-    newNotes: sanitized,
-    updatedGcm: result.updatedGcm || currentGcm,
-  };
+    const result = safeJsonParse(response.text || "{}");
+    const sanitized = sanitizeNotes(result.newNotes || [], existingNotes);
+
+    return {
+      newNotes: sanitized,
+      updatedGcm: result.updatedGcm || currentGcm,
+    };
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Transpilation failed:', err);
+    return {
+      newNotes: [],
+      updatedGcm: currentGcm,
+    };
+  }
 };
 
-export const translateQueryForGithub = async (query: string): Promise<{ queries: string[], suggestedRepos: string[] }> => {
+export const translateQueryForGithub = async (query: string, signal?: AbortSignal): Promise<{ queries: string[], suggestedRepos: string[] }> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
@@ -1253,14 +1341,16 @@ export const translateQueryForGithub = async (query: string): Promise<{ queries:
         tools: [{ googleSearch: {} }]
       }
     });
+    if (signal?.aborted) throw new Error("Operation cancelled");
     return safeJsonParse(response.text || "{\"queries\":[], \"suggestedRepos\":[]}");
   } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
     console.error('Translation failed:', err);
     return { queries: [], suggestedRepos: [] };
   }
 };
 
-export const refineSearchGoal = async (query: string): Promise<string[]> => {
+export const refineSearchGoal = async (query: string, signal?: AbortSignal): Promise<string[]> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
@@ -1279,8 +1369,10 @@ export const refineSearchGoal = async (query: string): Promise<string[]> => {
         }
       }
     });
+    if (signal?.aborted) throw new Error("Operation cancelled");
     return safeJsonParse(response.text || "[]");
   } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
     console.error('Refining goals failed:', err);
     return [];
   }
@@ -1288,7 +1380,8 @@ export const refineSearchGoal = async (query: string): Promise<string[]> => {
 
 export const summarizeReposShort = async (
   repos: { full_name: string; description: string }[],
-  userGoal: string
+  userGoal: string,
+  signal?: AbortSignal
 ): Promise<{ summaries: Record<string, { nickname: string; summary: string; features: string }> }> => {
   const prompt = `
   사용자의 목표: "${userGoal}"
@@ -1343,6 +1436,8 @@ export const summarizeReposShort = async (
       }
     });
 
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
     const parsed = safeJsonParse(response.text || '{"summaries": []}');
     const summariesMap: Record<string, { nickname: string; summary: string; features: string }> = {};
     
@@ -1360,6 +1455,7 @@ export const summarizeReposShort = async (
 
     return { summaries: summariesMap };
   } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
     console.error('Summarize repos failed:', err);
     return { summaries: {} };
   }

@@ -21,10 +21,11 @@ import {
   transpileExternalLogic,
   translateQueryForGithub,
   refineSearchGoal,
-  summarizeReposShort
+  summarizeReposShort,
+  parseMetadata
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2 } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -164,6 +165,26 @@ export const Dashboard: React.FC = () => {
       await batch.commit();
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
+    }
+  };
+
+  const deleteNotesFromFirestore = async (noteIds: string[]) => {
+    if (!userId || !currentProjectId) return;
+    
+    // Firestore batch limit is 500
+    const chunkSize = 500;
+    for (let i = 0; i < noteIds.length; i += chunkSize) {
+      const chunk = noteIds.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      chunk.forEach(id => {
+        const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', id);
+        batch.delete(noteRef);
+      });
+      try {
+        await batch.commit();
+      } catch (e) {
+        handleFirestoreError(e, OperationType.DELETE, 'batch-notes');
+      }
     }
   };
 
@@ -521,6 +542,62 @@ export const Dashboard: React.FC = () => {
     });
   };
 
+  const handleWipeSnapshots = async () => {
+    if (!window.confirm('GitHub에서 가져온 모든 코드 스냅샷 노트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+      return;
+    }
+
+    try {
+      setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
+      const snapshotNotes = state.notes.filter(n => {
+        const folder = n.folder || '';
+        const yamlStr = n.yamlMetadata || '';
+        
+        // Broad matching for snapshot folders and metadata
+        const isSnapshotFolder = folder.includes('Code Snapshot') || 
+                                 folder.includes('CodeSnapshot') || 
+                                 folder.includes('Code Snapchat');
+        
+        const isSnapshotMetadata = /discovered-from-github/.test(yamlStr) || 
+                                    /sourceFiles\s*:/.test(yamlStr) || 
+                                    /sourceVersion\s*:/.test(yamlStr) ||
+                                    /childNoteIds\s*:/.test(yamlStr);
+                                    
+        return isSnapshotFolder || isSnapshotMetadata;
+      });
+
+      const snapshotNoteIds = snapshotNotes.map(n => n.id);
+      
+      if (snapshotNoteIds.length === 0) {
+        showAlert('알림', '삭제할 코드 스냅샷이 없습니다.', 'info');
+        return;
+      }
+
+      // Delete from Firestore
+      await deleteNotesFromFirestore(snapshotNoteIds);
+      
+      // Update local state
+      const remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
+      
+      // Clear sync logs
+      await syncProject({ fileSyncLogs: {}, lastSyncedSha: undefined });
+
+      setState(prev => ({
+        ...prev,
+        notes: remainingNotes,
+        fileSyncLogs: {},
+        lastSyncedSha: undefined
+      }));
+
+      showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되었습니다.`, 'success');
+    } catch (error) {
+      console.error('Failed to wipe snapshots:', error);
+      showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
+    } finally {
+      setProcessStatus(null);
+    }
+  };
+
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
@@ -604,10 +681,22 @@ export const Dashboard: React.FC = () => {
         try {
           const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken);
           const snapshotNotes = currentNotes.filter(n => n.folder.startsWith('Code Snapshot'));
-          const { logicUnits } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha);
-          const touchedNotes: Note[] = [];
+          
+          // Find existing parent to get old child IDs for cleanup
+          const existingParent = snapshotNotes.find(n => {
+            const meta = parseMetadata(n.yamlMetadata);
+            return meta.sourceFiles?.includes(file.path) && meta.childNoteIds;
+          });
+          const oldChildIds = existingParent 
+            ? (parseMetadata(existingParent.yamlMetadata).childNoteIds || '').replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
+            : [];
 
-          for (const unit of logicUnits) {
+          const { parent, children } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha);
+          const touchedNotes: Note[] = [];
+          const childIds: string[] = [];
+
+          // Process children first
+          for (const unit of children) {
             let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
             
             // Fallback: If targetNote is not found by ID, try to find by title and folder
@@ -615,16 +704,16 @@ export const Dashboard: React.FC = () => {
               targetNote = currentNotes.find(n => n.title === unit.title && n.folder === unit.folder);
             }
 
+            let finalNote: Note;
             if (targetNote) {
               // Update existing note
-              setProcessStatus(prev => ({ ...prev!, message: `기존 스냅샷 업데이트 중: ${targetNote!.title}` }));
-              const updatedNote = await mergeLogicIntoNote(unit, targetNote);
-              currentNotes = currentNotes.map(n => n.id === updatedNote.id ? updatedNote : n);
-              touchedNotes.push(updatedNote);
+              setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
+              finalNote = await mergeLogicIntoNote(unit, targetNote);
+              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
             } else {
               // Create new note
-              const newNote: Note = {
+              finalNote = {
                 id: Math.random().toString(36).substr(2, 9),
                 title: unit.title,
                 folder: unit.folder,
@@ -633,9 +722,90 @@ export const Dashboard: React.FC = () => {
                 yamlMetadata: unit.yamlMetadata,
                 status: 'Done',
               };
-              currentNotes.push(newNote);
-              touchedNotes.push(newNote);
+              currentNotes.push(finalNote);
               newCount++;
+            }
+            touchedNotes.push(finalNote);
+            childIds.push(finalNote.id);
+          }
+
+          // Cleanup discarded children
+          const discardedChildIds = oldChildIds.filter(id => !childIds.includes(id));
+          for (const id of discardedChildIds) {
+            const noteIndex = currentNotes.findIndex(n => n.id === id);
+            if (noteIndex !== -1) {
+              const discardedNote = { ...currentNotes[noteIndex] };
+              discardedNote.folder = 'Code Snapshot/폐기됨';
+              discardedNote.status = 'Deprecated';
+              
+              // Add discarded tag
+              const meta = parseMetadata(discardedNote.yamlMetadata);
+              let tags = meta.tags ? meta.tags.replace(/[\[\]]/g, '').split(',').map(t => t.trim()) : [];
+              if (!tags.includes('discarded')) {
+                tags.push('discarded');
+                discardedNote.yamlMetadata = discardedNote.yamlMetadata.replace(/tags:.*(\n|$)/, '') + `\ntags: [${tags.join(', ')}]`;
+              }
+              
+              currentNotes[noteIndex] = discardedNote;
+              touchedNotes.push(discardedNote);
+            }
+          }
+
+          // Process parent
+          let targetParent = currentNotes.find(n => n.id === parent.matchedNoteId);
+          if (!targetParent && parent.title && parent.folder) {
+            targetParent = currentNotes.find(n => n.title === parent.title && n.folder === parent.folder);
+          }
+
+          // Append childNoteIds to parent's yamlMetadata
+          const parentYaml = parent.yamlMetadata + `\nchildNoteIds: [${childIds.join(', ')}]`;
+          parent.yamlMetadata = parentYaml;
+
+          let finalParent: Note;
+          if (targetParent) {
+            setProcessStatus(prev => ({ ...prev!, message: `기존 부모 스냅샷 업데이트 중: ${targetParent!.title}` }));
+            finalParent = await mergeLogicIntoNote(parent, targetParent);
+            currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
+            updateCount++;
+          } else {
+            finalParent = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: parent.title,
+              folder: parent.folder,
+              content: parent.content,
+              summary: parent.summary,
+              yamlMetadata: parent.yamlMetadata,
+              status: 'Done',
+            };
+            currentNotes.push(finalParent);
+            newCount++;
+          }
+          touchedNotes.push(finalParent);
+
+          // Auto-Link: Add parentNoteId to children
+          for (const childId of childIds) {
+            const childIndex = currentNotes.findIndex(n => n.id === childId);
+            if (childIndex !== -1) {
+              const childNote = { ...currentNotes[childIndex] };
+              const meta = parseMetadata(childNote.yamlMetadata);
+              let parentIds = meta.parentNoteIds ? meta.parentNoteIds.replace(/[\[\]]/g, '').split(',').map(s => s.trim()).filter(Boolean) : [];
+              
+              if (!parentIds.includes(finalParent.id)) {
+                parentIds.push(finalParent.id);
+                // Remove existing parentNoteIds line if exists, then append
+                const newYaml = childNote.yamlMetadata.replace(/parentNoteIds:.*(\n|$)/, '');
+                childNote.yamlMetadata = newYaml.trim() + `\nparentNoteIds: [${parentIds.join(', ')}]`;
+                
+                currentNotes[childIndex] = childNote;
+                
+                // Update in touchedNotes if already there
+                const touchedIndex = touchedNotes.findIndex(n => n.id === childId);
+                if (touchedIndex !== -1) {
+                  touchedNotes[touchedIndex] = childNote;
+                } else {
+                  touchedNotes.push(childNote);
+                }
+              }
             }
           }
 
@@ -674,7 +844,7 @@ export const Dashboard: React.FC = () => {
         lastSyncedSha: latestSha
       }));
       
-      const { suggestion } = await suggestNextSteps(currentNotes, filesActuallyToProcess.map(f => f.path));
+      const { suggestion } = await suggestNextSteps(currentNotes, state.gcm);
       setNextStepSuggestion(suggestion);
 
       showAlert(
@@ -754,7 +924,7 @@ export const Dashboard: React.FC = () => {
   const handleAnalyzeNextSteps = async () => {
     setProcessStatus({ message: '다음 단계 분석 중...' });
     try {
-      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, []);
+      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, state.gcm);
       setNextStepSuggestion(suggestion);
       
       if (Object.keys(updatedStatuses).length > 0) {
@@ -1340,7 +1510,7 @@ export const Dashboard: React.FC = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => handleSyncGithub()}
                     disabled={isSyncing}
@@ -1348,7 +1518,16 @@ export const Dashboard: React.FC = () => {
                     title="변경된 파일만 분석하여 코드 스냅샷을 업데이트합니다."
                   >
                     {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
-                    GitHub 최신 코드 반영
+                    최신 코드 반영
+                  </button>
+                  <button
+                    onClick={() => handleWipeSnapshots()}
+                    disabled={isSyncing}
+                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                    title="GitHub에서 가져온 모든 코드 스냅샷을 삭제합니다."
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    스냅샷 초기화
                   </button>
                 </div>
               </div>

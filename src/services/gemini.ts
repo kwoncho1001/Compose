@@ -38,7 +38,11 @@ const systemInstruction = `
    - 모든 노드는 해당 기능이 속한 비즈니스 영역 폴더로 즉시 분류되어야 합니다.
    - 제목에서 'Main_', 'ㄴ.', '1.' 등의 불필요한 접두어를 제거하고, 기능의 본질을 나타내는 명확한 한국어 명칭을 사용하십시오.
    - [중요] 노트 제목에 'ㄱ, ㄴ, ㄷ' 또는 '1, 2, 3' 등의 숫자를 붙여 순서를 매기지 마십시오.
-   - 시스템의 위계질서를 폴더 이름이 아닌 'parentNoteId', 'componentType'과 'relatedNoteIds'로 표현하십시오.
+       - 시스템의 위계질서를 폴더 이름이 아닌 'parentNoteId', 'componentType'과 'relatedNoteIds'로 표현하십시오.
+    - **[중요] 노트 제목 접두어 강제 규칙**: 모든 노트의 제목(title)은 그 성격에 따라 반드시 다음 접두어를 붙여야 합니다.
+       - 개별 함수나 유틸리티 성격의 노트: **[함수]** (예: [함수] checkAuthStatus)
+       - 파일 전체를 대변하거나 여러 함수를 포함하는 상위 노트: **[파일]** (예: [파일] 사용자 인증 관리)
+       - 비즈니스 흐름이나 복합 로직을 설명하는 노트: **[로직]** (예: [로직] 결제 승인 프로세스)
 9. [중요] 수직적 계층 구조(Hierarchy) 강화:
    - 노트를 수평적으로 나열하지 마십시오. '문제 스캔 및 등록', '문제 스캔 및 디지털화'와 같은 세부 기능들은 '문제 스캔'이라는 상위 노트의 하위(parentNoteId 설정)로 배치하여 수직적 깊이를 확보하십시오.
    - 기능의 크기에 따라 상위(Parent) - 하위(Child) 관계를 명확히 설정하여 균일하고 체계적인 분류를 유지하십시오.
@@ -444,14 +448,15 @@ ${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, sum
 [작업 지침]
 1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
 2. **부모 노트 (파일 단위)**:
-   - 제목: "[파일] 한국어 제목" (예: [파일] 사용자 인증 관리)
+   - 제목: **[파일]** 한국어 제목 (예: [파일] 사용자 인증 관리)
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
-   - 폴더: "Code Snapshot/하위범주"
+   - 폴더: "Code Snapshot/해당_도메인"
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
 3. **자식 노트 (함수/로직 단위)**:
-   - 제목: 실제 함수명 또는 클래스명을 그대로 사용하십시오 (예: checkPassword, getNodeName). '[함수]' 등의 접두어를 붙이지 마십시오.
+   - 제목: 실제 함수명 또는 클래스명 (예: checkPassword, getNodeName)
    - 역할: 파일 내의 구체적인 로직 하나하나를 상세히 설명하십시오.
-   - 폴더: "Code Snapshot/하위범주/상세"
+   - 폴더: "Code Snapshot/해당_도메인/[파일] 부모_노트_제목"
+   - [중요] '상세' 폴더를 생성하지 말고, 부모 노드의 제목을 하위 폴더명으로 사용하십시오.
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
 4. **유사도 매칭**: 각 단위에 대해 기존 '코드 스냅샷' 노트 중 내용이나 목적이 같은 노트가 있다면 기존 노트에 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
 5. **주의**: 'relatedNoteIds'는 사용하지 마십시오. 오직 'sourceFiles'와 'sourceVersion'으로 출처를 증명합니다.
@@ -724,6 +729,7 @@ export const generateNoteFromCode = async (
 2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
 3. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
 4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
+5. **제목 접두어 규칙**: 파일 단위 분석이면 **[파일]**, 개별 함수/유틸리티면 **[함수]**, 복합 로직이면 **[로직]** 접두어를 제목 앞에 반드시 붙이십시오.
 
 파일 이름: ${fileName}
 소스 코드:

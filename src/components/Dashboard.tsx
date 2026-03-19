@@ -25,7 +25,7 @@ import {
   parseMetadata
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
-import { subscribeSyncLog, saveSyncLog } from '../services/syncLog';
+import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2 } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -601,24 +601,43 @@ export const Dashboard: React.FC = () => {
     try {
       setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
       
+      if (userId && currentProjectId) {
+        await clearSyncLog(userId, currentProjectId);
+      }
+      await syncProject({ lastSyncedSha: undefined });
+
       // 메타데이터 검사 없이 'Code Snapshot'이 포함된 폴더를 싹 다 잡습니다.
       const snapshotNotes = state.notes.filter(n => n.folder && n.folder.startsWith('Code Snapshot'));
       const snapshotNoteIds = snapshotNotes.map(n => n.id);
       
-      if (snapshotNoteIds.length === 0) {
-        showAlert('알림', '삭제할 코드 스냅샷이 없습니다.', 'info');
-        return;
+      if (snapshotNoteIds.length > 0) {
+        // Firestore에서 일괄 삭제
+        await deleteNotesFromFirestore(snapshotNoteIds);
       }
+      
+      let remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
 
-      // Firestore에서 일괄 삭제
-      await deleteNotesFromFirestore(snapshotNoteIds);
+      // 빈 SHA 장부 노트 생성
+      const logTitle = '[로그] SHA 동기화 장부';
+      const logFolder = 'Code Snapshot/시스템 로그';
+      const now = new Date().toISOString();
+      const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
       
-      const remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
+      const newLogNote: Note = {
+        id: Math.random().toString(36).substr(2, 9),
+        title: logTitle,
+        content: emptyLogContent,
+        folder: logFolder,
+        status: 'Done',
+        lastUpdated: now,
+        summary: 'GitHub 동기화된 파일들의 SHA 값을 추적하는 장부입니다.',
+        yamlMetadata: 'type: system-log\n',
+        relatedNoteIds: [],
+        childNoteIds: []
+      };
       
-      if (userId && currentProjectId) {
-        await saveSyncLog(userId, currentProjectId, {});
-      }
-      await syncProject({ lastSyncedSha: undefined });
+      await saveNotesToFirestore([newLogNote]);
+      remainingNotes.push(newLogNote);
 
       setState(prev => ({
         ...prev,
@@ -627,7 +646,7 @@ export const Dashboard: React.FC = () => {
         lastSyncedSha: undefined
       }));
 
-      showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되었습니다.`, 'success');
+      showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되고 SHA 장부가 초기화되었습니다.`, 'success');
     } catch (error) {
       console.error('Failed to wipe snapshots:', error);
       showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
@@ -763,14 +782,48 @@ export const Dashboard: React.FC = () => {
       if (filesActuallyToProcess.length === 0) {
         showAlert('알림', '모든 파일이 이미 최신 상태입니다.', 'info');
         
-        // Even if no files to process, update the global SHA if it's different
-        if (state.lastSyncedSha !== latestSha) {
+        let currentNotes = [...state.notes];
+        // Even if no files to process, update the global SHA or logs if they changed
+        if (state.lastSyncedSha !== latestSha || logsChanged) {
           const now = new Date().toISOString();
           await syncProject({ 
             lastSyncedAt: now,
             lastSyncedSha: latestSha
           });
-          setState(prev => ({ ...prev, lastSyncedAt: now, lastSyncedSha: latestSha }));
+          
+          // [로그] SHA 동기화 장부 생성/업데이트
+          const logTitle = '[로그] SHA 동기화 장부';
+          const logFolder = 'Code Snapshot/시스템 로그';
+          let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
+          
+          const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
+          
+          if (logNote) {
+            logNote = { ...logNote, content: logContent, lastUpdated: now };
+            currentNotes = currentNotes.map(n => n.id === logNote!.id ? logNote! : n);
+            await saveNotesToFirestore([logNote]);
+          } else {
+            const newLogNote: Note = {
+              id: Math.random().toString(36).substr(2, 9),
+              title: logTitle,
+              folder: logFolder,
+              content: logContent,
+              summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
+              status: 'Done',
+              lastUpdated: now,
+              yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}\nversion: 1.0.0\ntags: [system-log]`
+            };
+            currentNotes.push(newLogNote);
+            await saveNotesToFirestore([newLogNote]);
+          }
+
+          setState(prev => ({ 
+            ...prev, 
+            notes: currentNotes,
+            lastSyncedAt: now, 
+            lastSyncedSha: latestSha,
+            fileSyncLogs: currentLogs
+          }));
         }
         
         setIsSyncing(false);
@@ -935,6 +988,32 @@ export const Dashboard: React.FC = () => {
       // [Post-Processing] Reconcile relationships without AI
       setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
       await reconcileNoteRelationships(currentNotes);
+
+      // [로그] SHA 동기화 장부 생성/업데이트
+      const logTitle = '[로그] SHA 동기화 장부';
+      const logFolder = 'Code Snapshot/시스템 로그';
+      let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
+      
+      const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
+      
+      if (logNote) {
+        logNote = { ...logNote, content: logContent, lastUpdated: new Date().toISOString() };
+        currentNotes = currentNotes.map(n => n.id === logNote!.id ? logNote! : n);
+        await saveNotesToFirestore([logNote]);
+      } else {
+        const newLogNote: Note = {
+          id: Math.random().toString(36).substr(2, 9),
+          title: logTitle,
+          folder: logFolder,
+          content: logContent,
+          summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
+          status: 'Done',
+          lastUpdated: new Date().toISOString(),
+          yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}\nversion: 1.0.0\ntags: [system-log]`
+        };
+        currentNotes.push(newLogNote);
+        await saveNotesToFirestore([newLogNote]);
+      }
       
       const { suggestion } = await suggestNextSteps(currentNotes, state.gcm);
       setNextStepSuggestion(suggestion);

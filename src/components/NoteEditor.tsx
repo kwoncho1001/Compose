@@ -124,15 +124,24 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
     );
   }
 
+  const isSnapshotNote = note.folder?.startsWith('Code Snapshot');
+
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (isSnapshotNote) return;
     onUpdateNote({ ...note, status: e.target.value as Note['status'] });
   };
 
   const handleParentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (isSnapshotNote) return;
     onUpdateNote({ ...note, parentNoteId: e.target.value || undefined });
   };
 
   const handleSaveManual = () => {
+    if (isSnapshotNote) {
+      showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다. GitHub 동기화를 이용하세요.', 'info');
+      setIsEditing(false);
+      return;
+    }
     // Sync relatedNoteIds from YAML before saving
     const meta = parseMetadata(editData.yamlMetadata);
     let relatedIdsFromYaml: string[] = [];
@@ -243,20 +252,31 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
               <input
                 type="text"
                 value={editData.title}
-                onChange={(e) => setEditData({ ...editData, title: e.target.value })}
-                className="text-3xl font-bold text-slate-900 dark:text-white border-b border-transparent hover:border-slate-200 focus:border-indigo-500 bg-transparent focus:outline-none w-full transition-colors"
+                onChange={(e) => !isSnapshotNote && setEditData({ ...editData, title: e.target.value })}
+                readOnly={isSnapshotNote}
+                className={`text-3xl font-bold text-slate-900 dark:text-white border-b border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-200 focus:border-indigo-500'} bg-transparent focus:outline-none w-full transition-colors`}
                 placeholder="노트 제목"
               />
             </div>
             <div className="flex items-center gap-3">
+              {isSnapshotNote && (
+                <span className="px-2 py-1 text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded border border-slate-200 dark:border-slate-700 tracking-wider">
+                  READ ONLY
+                </span>
+              )}
               <Button
                 variant="outline"
                 size="sm"
                 onClick={async () => {
+                  if (isSnapshotNote) {
+                    showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다.', 'info');
+                    return;
+                  }
                   setIsGeneratingSub(true);
                   await onGenerateSubModules(note);
                   setIsGeneratingSub(false);
                 }}
+                disabled={isSnapshotNote}
                 isLoading={isGeneratingSub}
                 icon={<Layers className="w-4 h-4" />}
               >
@@ -266,6 +286,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                 variant="primary"
                 size="sm"
                 onClick={handleSaveManual}
+                disabled={isSnapshotNote}
                 icon={<Save className="w-4 h-4" />}
               >
                 저장
@@ -317,8 +338,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
               <input
                 type="text"
                 value={editData.folder}
-                onChange={(e) => setEditData({ ...editData, folder: e.target.value })}
-                className="border-b border-transparent hover:border-slate-200 focus:border-indigo-500 bg-transparent focus:outline-none transition-colors"
+                onChange={(e) => !isSnapshotNote && setEditData({ ...editData, folder: e.target.value })}
+                readOnly={isSnapshotNote}
+                className={`border-b border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-200 focus:border-indigo-500'} bg-transparent focus:outline-none transition-colors`}
                 placeholder="폴더명 (예: 대분류/소분류)"
               />
             </span>
@@ -417,8 +439,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
           </h2>
           <textarea
             value={editData.summary}
-            onChange={(e) => setEditData({ ...editData, summary: e.target.value })}
-            className="w-full border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 dark:text-white rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 h-20 transition-all"
+            onChange={(e) => !isSnapshotNote && setEditData({ ...editData, summary: e.target.value })}
+            readOnly={isSnapshotNote}
+            className={`w-full border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 dark:text-white rounded-lg p-3 text-sm focus:outline-none ${isSnapshotNote ? 'cursor-default' : 'focus:ring-2 focus:ring-indigo-500'} h-20 transition-all`}
             placeholder="이 기능에 대한 간단한 요약..."
           />
         </div>
@@ -430,13 +453,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
             메타데이터 (YAML)
             {yamlErrors.length > 0 && <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">오류 {yamlErrors.length}</span>}
           </h2>
-          <div className={`border rounded-lg overflow-hidden transition-all ${yamlErrors.length > 0 ? 'border-red-500 ring-1 ring-red-500' : 'border-slate-200 dark:border-slate-800 focus-within:ring-2 focus-within:ring-indigo-500'}`}>
+          <div className={`border rounded-lg overflow-hidden transition-all ${yamlErrors.length > 0 ? 'border-red-500 ring-1 ring-red-500' : 'border-slate-200 dark:border-slate-800 focus-within:ring-2 focus-within:ring-indigo-500'} ${isSnapshotNote ? 'opacity-80' : ''}`}>
             <CodeMirror
               value={editData.yamlMetadata}
               height="150px"
               theme={darkMode ? vscodeDark : vscodeLight}
               extensions={[yaml()]}
-              onChange={onYamlChange}
+              onChange={(val) => !isSnapshotNote && onYamlChange(val)}
+              readOnly={isSnapshotNote}
               className="text-xs"
             />
           </div>
@@ -461,8 +485,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                 </button>
               ) : (
                 <button
-                  onClick={() => setIsEditing(true)}
-                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                  onClick={() => {
+                    if (isSnapshotNote) {
+                      showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다.', 'info');
+                      return;
+                    }
+                    setIsEditing(true);
+                  }}
+                  className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors ${isSnapshotNote ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <Edit3 className="w-3 h-3" /> 편집
                 </button>
@@ -478,15 +508,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                   height="600px"
                   theme={darkMode ? vscodeDark : vscodeLight}
                   extensions={[markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping]}
-                  onChange={onContentChange}
+                  onChange={(val) => !isSnapshotNote && onContentChange(val)}
+                  readOnly={isSnapshotNote}
                   autoFocus
                   className="text-sm"
                 />
               </div>
             ) : (
               <div 
-                onClick={() => setIsEditing(true)}
-                className="border border-transparent hover:border-slate-200 dark:hover:border-slate-800 rounded-xl p-6 bg-slate-50/30 dark:bg-slate-900/30 cursor-text prose prose-indigo dark:prose-invert max-w-none transition-all"
+                onClick={() => {
+                  if (isSnapshotNote) {
+                    showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다.', 'info');
+                    return;
+                  }
+                  setIsEditing(true);
+                }}
+                className={`border border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-200 dark:hover:border-slate-800 cursor-text'} rounded-xl p-6 bg-slate-50/30 dark:bg-slate-900/30 prose prose-indigo dark:prose-invert max-w-none transition-all`}
               >
                 <Markdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]} rehypePlugins={[rehypeKatex]}>
                   {editData.content || '*내용이 없습니다. 클릭하여 편집하세요.*'}

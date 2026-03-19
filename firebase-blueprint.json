@@ -11,6 +11,8 @@
         "content": { "type": "string" },
         "summary": { "type": "string" },
         "parentNoteId": { "type": "string" },
+        "parentNoteIds": { "type": "array", "items": { "type": "string" } },
+        "childNoteIds": { "type": "array", "items": { "type": "string" } },
         "relatedNoteIds": { "type": "array", "items": { "type": "string" } },
         "status": { "type": "string" },
         "githubLink": { "type": "string" },
@@ -52,6 +54,10 @@
     "/users/{userId}/projects/{projectId}/notes/{noteId}": {
       "schema": "Note",
       "description": "Notes within a project"
+    },
+    "/users/{userId}/projects/{projectId}/syncLogs/{logId}": {
+      "schema": "object",
+      "description": "Sync logs for GitHub files"
     }
   }
 }

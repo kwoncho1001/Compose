@@ -542,6 +542,52 @@ export const Dashboard: React.FC = () => {
     });
   };
 
+  const handleDeleteFolder = (folderPath: string) => {
+    const notesToDelete = state.notes.filter(n => n.folder === folderPath || n.folder.startsWith(`${folderPath}/`));
+    if (notesToDelete.length === 0) return;
+    
+    setDialogConfig({
+      isOpen: true,
+      title: '폴더 삭제',
+      message: `'${folderPath}' 폴더와 그 안의 하위 노트 ${notesToDelete.length}개를 모두 삭제하시겠습니까?\n이 작업은 복구할 수 없습니다.`,
+      type: 'warning',
+      confirmText: '일괄 삭제',
+      cancelText: '취소',
+      onConfirm: async () => {
+        const ids = notesToDelete.map(n => n.id);
+        await deleteNotesFromFirestore(ids);
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.filter(n => !ids.includes(n.id))
+        }));
+        if (selectedNoteId && ids.includes(selectedNoteId)) setSelectedNoteId(null);
+        setDialogConfig(null);
+      },
+      onCancel: () => setDialogConfig(null)
+    });
+  };
+
+  const handleDeleteMultiple = (noteIds: string[]) => {
+    setDialogConfig({
+      isOpen: true,
+      title: '노트 일괄 삭제',
+      message: `선택한 노트 ${noteIds.length}개를 모두 삭제하시겠습니까?\n이 작업은 복구할 수 없습니다.`,
+      type: 'warning',
+      confirmText: '일괄 삭제',
+      cancelText: '취소',
+      onConfirm: async () => {
+        await deleteNotesFromFirestore(noteIds);
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.filter(n => !noteIds.includes(n.id))
+        }));
+        if (selectedNoteId && noteIds.includes(selectedNoteId)) setSelectedNoteId(null);
+        setDialogConfig(null);
+      },
+      onCancel: () => setDialogConfig(null)
+    });
+  };
+
   const handleWipeSnapshots = async () => {
     if (!window.confirm('GitHub에서 가져온 모든 코드 스냅샷 노트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
       return;
@@ -549,23 +595,9 @@ export const Dashboard: React.FC = () => {
 
     try {
       setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
-      const snapshotNotes = state.notes.filter(n => {
-        const folder = n.folder || '';
-        const yamlStr = n.yamlMetadata || '';
-        
-        // Broad matching for snapshot folders and metadata
-        const isSnapshotFolder = folder.includes('Code Snapshot') || 
-                                 folder.includes('CodeSnapshot') || 
-                                 folder.includes('Code Snapchat');
-        
-        const isSnapshotMetadata = /discovered-from-github/.test(yamlStr) || 
-                                    /sourceFiles\s*:/.test(yamlStr) || 
-                                    /sourceVersion\s*:/.test(yamlStr) ||
-                                    /childNoteIds\s*:/.test(yamlStr);
-                                    
-        return isSnapshotFolder || isSnapshotMetadata;
-      });
-
+      
+      // 메타데이터 검사 없이 'Code Snapshot'이 포함된 폴더를 싹 다 잡습니다.
+      const snapshotNotes = state.notes.filter(n => n.folder && n.folder.startsWith('Code Snapshot'));
       const snapshotNoteIds = snapshotNotes.map(n => n.id);
       
       if (snapshotNoteIds.length === 0) {
@@ -573,13 +605,11 @@ export const Dashboard: React.FC = () => {
         return;
       }
 
-      // Delete from Firestore
+      // Firestore에서 일괄 삭제
       await deleteNotesFromFirestore(snapshotNoteIds);
       
-      // Update local state
       const remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
       
-      // Clear sync logs
       await syncProject({ fileSyncLogs: {}, lastSyncedSha: undefined });
 
       setState(prev => ({
@@ -1199,6 +1229,8 @@ export const Dashboard: React.FC = () => {
             onAddNote={handleAddNote}
             onAddChildNote={handleAddChildNote}
             onDeleteNote={handleDeleteNote}
+            onDeleteFolder={handleDeleteFolder}
+            onDeleteMultiple={handleDeleteMultiple}
           />
         )}
       </div>
@@ -1232,6 +1264,8 @@ export const Dashboard: React.FC = () => {
               onAddNote={handleAddNote}
               onAddChildNote={handleAddChildNote}
               onDeleteNote={handleDeleteNote}
+              onDeleteFolder={handleDeleteFolder}
+              onDeleteMultiple={handleDeleteMultiple}
               onClose={() => setIsMobileMenuOpen(false)}
             />
           </div>

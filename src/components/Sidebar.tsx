@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus, ShieldAlert, X, PanelLeft, PanelRight, Trash2, ChevronRight, ChevronDown, Merge, Database, FolderTree } from 'lucide-react';
+import { Folder, FileText, CheckCircle, Circle, Clock, AlertTriangle, Star, Plus, ShieldAlert, X, PanelLeft, PanelRight, Trash2, ChevronRight, ChevronDown, Merge, Database, FolderTree, CheckSquare, Check } from 'lucide-react';
 import { Note } from '../types';
 
 interface SidebarProps {
@@ -16,6 +16,8 @@ interface SidebarProps {
   onAddNote: () => void;
   onAddChildNote: (parentId: string) => void;
   onDeleteNote: (id: string) => void;
+  onDeleteFolder?: (folderPath: string) => void;
+  onDeleteMultiple?: (noteIds: string[]) => void;
   onClose?: () => void;
 }
 
@@ -61,15 +63,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onAddNote, 
   onAddChildNote, 
   onDeleteNote,
+  onDeleteFolder,
+  onDeleteMultiple,
   onClose
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
 
   const toggleExpand = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const toggleNoteSelection = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newSet = new Set(selectedNotes);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedNotes(newSet);
   };
 
   const tree = useMemo(() => {
@@ -206,8 +220,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="w-4.5" /> // Spacer
             )}
             
+            {isSelectMode && item.type === 'note' && (
+              <div 
+                className="cursor-pointer shrink-0 mr-1" 
+                onClick={(e) => toggleNoteSelection(item.id, e)}
+              >
+                {selectedNotes.has(item.id) ? (
+                  <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
+                ) : (
+                  <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
+                )}
+              </div>
+            )}
+            
             {item.type === 'folder' ? (
-              <Folder className={`w-4 h-4 ${folderColorClass}`} />
+              <Folder className={`w-4 h-4 shrink-0 ${folderColorClass}`} />
             ) : (
               <StatusIcon status={note?.status || 'Planned'} />
             )}
@@ -239,6 +266,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}
                   className="p-1 text-slate-500 hover:text-red-500 transition-colors"
                   title="노트 삭제"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+            {item.type === 'folder' && onDeleteFolder && (
+              <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-auto pl-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteFolder(item.path);
+                  }}
+                  className="p-1 text-slate-500 hover:text-red-500 transition-colors"
+                  title="이 폴더와 하위 노트 모두 삭제"
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>
@@ -283,6 +324,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <FolderTree className="w-3.5 h-3.5" />
               </button>
             </div>
+          )}
+          {title !== 'Code Snapshot' && onDeleteMultiple && (
+            <>
+              {isSelectMode && selectedNotes.size > 0 && (
+                <button 
+                  onClick={() => {
+                    onDeleteMultiple(Array.from(selectedNotes));
+                    setSelectedNotes(new Set());
+                    setIsSelectMode(false);
+                  }}
+                  className="p-1.5 mr-1 bg-red-600 hover:bg-red-500 text-white rounded-md transition-colors flex items-center gap-1"
+                  title="선택된 항목 삭제"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="text-xs font-bold leading-none">{selectedNotes.size}</span>
+                </button>
+              )}
+              <button 
+                onClick={() => {
+                  setIsSelectMode(!isSelectMode);
+                  setSelectedNotes(new Set());
+                }}
+                className={`p-1.5 mr-1 rounded-md transition-colors ${isSelectMode ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                title="다중 선택 모드"
+              >
+                <CheckSquare className="w-4 h-4" />
+              </button>
+            </>
           )}
           {title !== 'Code Snapshot' && (
             <button 

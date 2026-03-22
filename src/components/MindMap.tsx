@@ -49,23 +49,27 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
     // Helper to calculate links between notes
     const calculateLinks = (filteredNotes: Note[]) => {
       const links: any[] = [];
-      const nodeIds = new Set(filteredNotes.map(n => n.id));
+      const nodeMap = new Map(filteredNotes.map(n => [n.id, n]));
 
       filteredNotes.forEach(note => {
-        if (note.parentNoteId && nodeIds.has(note.parentNoteId)) {
+        if (note.parentNoteId && nodeMap.has(note.parentNoteId)) {
+          const parentNote = nodeMap.get(note.parentNoteId);
           links.push({
             source: note.parentNoteId,
             target: note.id,
-            type: 'parent'
+            type: 'parent',
+            isReferenceLink: note.noteType === 'Reference' || parentNote?.noteType === 'Reference'
           });
         }
         if (note.relatedNoteIds) {
           note.relatedNoteIds.forEach(relId => {
-            if (nodeIds.has(relId)) {
+            if (nodeMap.has(relId)) {
+              const relNote = nodeMap.get(relId);
               links.push({
                 source: relId,
                 target: note.id,
-                type: 'related'
+                type: 'related',
+                isReferenceLink: note.noteType === 'Reference' || relNote?.noteType === 'Reference'
               });
             }
           });
@@ -162,7 +166,8 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         type: 'note',
         status: note.status,
         summary: note.summary,
-        domain: note.folder || '미분류' // 도메인 정보 추가 (색상 구분 등에 활용 가능)
+        domain: note.folder || '미분류',
+        noteType: note.noteType
       }));
 
       const nodes = [...domainNodes, ...noteNodes];
@@ -219,7 +224,8 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       type: 'note',
       status: note.status,
       summary: note.summary,
-      domain: note.folder || '미분류'
+      domain: note.folder || '미분류',
+      noteType: note.noteType
     }));
 
     const nodes = [...domainNodes, ...noteNodes];
@@ -235,10 +241,14 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
 
   useEffect(() => {
     if (fgRef.current) {
-      fgRef.current.d3Force('link').distance(100);
+      fgRef.current.d3Force('link').distance((link: any) => {
+        if (link.isReferenceLink) return 30;
+        if (link.type === 'hierarchy') return 150;
+        return 100;
+      });
       fgRef.current.d3Force('charge').strength(-300);
     }
-  }, []);
+  }, [graphData]);
 
   const nodeColor = (node: any) => {
     if (node.type === 'domain') return darkMode ? '#3b82f6' : '#2563eb'; // Blue
@@ -336,7 +346,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           onNodeClick={handleNodeClick}
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const label = node.name || '';
-            const fontSize = (node.type === 'domain' ? 14 : 12) / globalScale;
+            const fontSize = (node.type === 'domain' ? 14 : 10) / globalScale;
             ctx.font = `${node.type === 'domain' ? 'bold ' : ''}${fontSize}px Inter, sans-serif`;
             const textWidth = ctx.measureText(label).width;
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
@@ -365,21 +375,70 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
               ctx.strokeStyle = nodeColor(node);
               ctx.lineWidth = 1 / globalScale;
               ctx.stroke();
+
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = nodeColor(node);
+              ctx.fillText(label, node.x, node.y);
+
+              node.__bckgDimensions = bckgDimensions;
             } else {
-              ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+              // Draw shape based on noteType
+              const noteType = node.noteType || 'Task';
+              let r = 5;
+              if (noteType === 'Epic') r = 12;
+              else if (noteType === 'Feature') r = 8;
+              else if (noteType === 'Task') r = 5;
+              else if (noteType === 'Reference') r = 4;
+
+              ctx.beginPath();
+              if (noteType === 'Reference') {
+                // Diamond
+                ctx.moveTo(node.x, node.y - r - 2);
+                ctx.lineTo(node.x + r + 2, node.y);
+                ctx.lineTo(node.x, node.y + r + 2);
+                ctx.lineTo(node.x - r - 2, node.y);
+                ctx.closePath();
+                ctx.fillStyle = darkMode ? '#334155' : '#cbd5e1';
+                ctx.fill();
+                ctx.strokeStyle = darkMode ? '#475569' : '#94a3b8';
+                ctx.setLineDash([2, 2]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+              } else {
+                // Circle
+                ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
+                ctx.fillStyle = nodeColor(node);
+                ctx.fill();
+                
+                // Add a subtle border
+                ctx.strokeStyle = darkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)';
+                ctx.lineWidth = 1 / globalScale;
+                ctx.stroke();
+              }
+
+              // Draw text below the node
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'top';
+              ctx.fillStyle = darkMode ? '#cbd5e1' : '#475569';
+              ctx.fillText(label, node.x, node.y + r + 2);
+
+              // Update bckgDimensions for pointer interaction (roughly the shape + text)
+              node.__bckgDimensions = [Math.max(r * 2, textWidth), r * 2 + fontSize + 2];
+              node.__shapeRadius = r;
             }
-
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = nodeColor(node);
-            ctx.fillText(label, node.x, node.y);
-
-            node.__bckgDimensions = bckgDimensions;
           }}
           nodePointerAreaPaint={(node: any, color, ctx) => {
             ctx.fillStyle = color;
             const bckgDimensions = node.__bckgDimensions;
-            bckgDimensions && ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+            if (bckgDimensions) {
+              if (node.type === 'domain') {
+                ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - bckgDimensions[1] / 2, bckgDimensions[0], bckgDimensions[1]);
+              } else {
+                const r = node.__shapeRadius || 5;
+                ctx.fillRect(node.x - bckgDimensions[0] / 2, node.y - r, bckgDimensions[0], bckgDimensions[1]);
+              }
+            }
           }}
         />
       )}
@@ -403,6 +462,24 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-[#eab308]"></div>
               <span>Planned (계획중)</span>
+            </div>
+            <div className="mt-1 pt-1 border-t border-slate-200 dark:border-slate-700 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full border border-slate-400 dark:border-slate-500"></div>
+                <span>Epic (대목표)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full border border-slate-400 dark:border-slate-500"></div>
+                <span>Feature (기능)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full border border-slate-400 dark:border-slate-500"></div>
+                <span>Task (작업)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rotate-45 border border-dashed border-slate-400 dark:border-slate-500"></div>
+                <span>Reference (참조)</span>
+              </div>
             </div>
           </>
         )}

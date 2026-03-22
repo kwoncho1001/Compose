@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { Note, GCM, NoteStatus, GCMEntity } from "../types";
+import { Note, GCM, NoteStatus, GCMEntity, NoteType } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL_NAME = "gemini-3-flash-preview";
@@ -90,7 +90,6 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
 
 export const decomposeFeature = async (
   featureRequest: string,
-  noteType: NoteType,
   currentGcm: GCM,
   existingNotes: Note[],
   githubContext?: { repoName: string; files: string[]; readme?: string },
@@ -100,21 +99,6 @@ export const decomposeFeature = async (
   updatedNotes: Note[];
   updatedGcm: GCM 
 }> => {
-  let typeSpecificPrompt = '';
-  let targetChildType = 'Task';
-
-  if (noteType === 'Epic') {
-    targetChildType = 'Feature';
-    typeSpecificPrompt = `현재 사용자의 대목표(Epic)는 '${featureRequest}'이야. 이 거대한 목표를 이루기 위해 사용자가 앱에서 실제로 구현해야 할 '핵심 기능(Feature)' 3~5가지를 도출해 줘.`;
-  } else if (noteType === 'Feature') {
-    targetChildType = 'Task';
-    typeSpecificPrompt = `현재 구현할 기능(Feature)은 '${featureRequest}'이야. 1인 개발자가 오늘 당장 컴퓨터를 켜고 코딩할 수 있는 구체적이고 순차적인 '실제 행동(Task)' 단위로 쪼개줘. 
-(예: "users 컬렉션에 대한 firestore.rules 작성", "Google 로그인 버튼 UI 컴포넌트 생성", "로그인 성공 시 /dashboard로 라우팅하는 로직 추가" 등 구체적인 코드 레벨의 작업 명세)`;
-  } else {
-    targetChildType = 'Task';
-    typeSpecificPrompt = `다음 기능/모듈을 더 작은 하위 모듈이나 구체적인 구현 단계로 분해해줘: ${featureRequest}`;
-  }
-
   const step1Prompt = `
 목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
 또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
@@ -129,20 +113,18 @@ ${githubContext.readme ? `README.md 내용:
 ${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
 
 User Request: "${featureRequest}"
-요청 유형: ${noteType}
-세부 지시사항: ${typeSpecificPrompt}
 
 Task:
-1. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
-2. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
-3. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
-4. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
-5. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
-6. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
-7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
-8. [중요] 폴더명(folder)은 반드시 "상위범주/하위범주" 형태의 경로 기반 분류를 사용하십시오. (예: "1. 시스템 인프라/데이터 보안", "2. 콘텐츠 뱅크/문제 스캔"). 'Imported'나 기술 계층 명칭은 금지합니다.
-9. [중요] 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
-10. 생성되는 모든 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
+1. 사용자의 요청을 분석하여 이 요청이 어느 레벨(Epic, Feature, Task)에 해당하는지 자동 판별(noteType)하십시오.
+2. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
+3. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
+4. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
+5. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
+6. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
+7. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
+8. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
+9. [중요] 폴더명(folder)은 반드시 "상위범주/하위범주" 형태의 경로 기반 분류를 사용하십시오. (예: "1. 시스템 인프라/데이터 보안", "2. 콘텐츠 뱅크/문제 스캔"). 'Imported'나 기술 계층 명칭은 금지합니다.
+10. [중요] 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
 
 Return JSON:
 {
@@ -150,10 +132,10 @@ Return JSON:
   "folder": "한국어_폴더_이름",
   "content": "시스템 지침의 4개 섹션 구조를 따른 상세 내용",
   "summary": "한국어 요약 (역할 중심)",
-  "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]\\ncomponentType: Feature\\ndependencies: []\\nrelatedNoteIds: []",
+  "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\ntags: [tag1]\\nrelatedNoteIds: []",
   "reusedNoteIds": ["id1", "id2"],
   "newComponents": ["New Component 1"],
-  "noteType": "${targetChildType}"
+  "noteType": "Epic | Feature | Task"
 }
 `;
 
@@ -186,6 +168,7 @@ Return JSON:
 
   const step2Prompt = `
 메인 기능: "${mainFeature.title}"
+메인 기능 레벨: "${mainFeature.noteType}"
 상세 내용: ${mainFeature.content}
 신규 구성 요소: ${JSON.stringify(mainFeature.newComponents)}
 재사용 노트 ID: ${JSON.stringify(mainFeature.reusedNoteIds)}
@@ -196,7 +179,7 @@ Return JSON:
 3. GCM(엔티티, 변수)을 최적화하여 업데이트하십시오.
 4. 모든 노트는 "상위범주/하위범주" 폴더 형식을 유지하십시오.
 5. 모든 텍스트는 한국어로 작성하십시오.
-6. 생성되는 모든 하위 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
+6. 생성되는 모든 하위 노트의 'noteType'은 메인 기능의 레벨에 따라 엄격히 하위 레벨로 지정하십시오. (Epic -> Feature, Feature -> Task, Task -> Task)
 
 Current GCM:
 ${JSON.stringify(currentGcm, null, 2)}
@@ -238,7 +221,7 @@ Return JSON:
     summary: mainFeature.summary,
     yamlMetadata: mainFeature.yamlMetadata,
     relatedNoteIds: mainFeature.reusedNoteIds || [],
-    noteType: mainFeature.noteType || noteType,
+    noteType: (mainFeature.noteType as NoteType) || 'Feature',
   };
 
   const sanitizedNewNotes = sanitizeNotes([mainNote, ...(step2Result.newDetailNotes || [])], existingNotes);
@@ -437,7 +420,7 @@ Return JSON:
 export const updateCodeSnapshot = async (
   fileName: string,
   fileContent: string,
-  existingSnapshotNotes: Note[],
+  allNotes: Note[], // 기존 existingSnapshotNotes 에서 allNotes로 변경 (설계도 목록을 보기 위함)
   fileSha: string,
   signal?: AbortSignal
 ): Promise<{
@@ -449,6 +432,8 @@ export const updateCodeSnapshot = async (
     yamlMetadata: string;
     matchedNoteId?: string;
     isNew: boolean;
+    noteType: string;
+    relatedNoteIds: string[];
   };
   children: {
     title: string;
@@ -458,11 +443,17 @@ export const updateCodeSnapshot = async (
     yamlMetadata: string;
     matchedNoteId?: string;
     isNew: boolean;
+    noteType: string;
+    relatedNoteIds: string[];
   }[];
 }> => {
+  // 스냅챗 목록과 설계도 목록을 분리
+  const snapshotNotes = allNotes.filter(n => n.folder.startsWith('Code Snapshot') || n.noteType === 'Reference');
+  const designNotes = allNotes.filter(n => !n.folder.startsWith('Code Snapshot') && n.noteType !== 'Reference');
+
   const prompt = `
 당신은 소스 코드 분석 및 문서화 전문가입니다. 제공된 소스 코드를 분석하여 '코드 스냅샷(Code Snapshot)' 노트를 생성하거나 업데이트하십시오.
-코드 스냅샷은 "실제 코드는 현재 이렇게 짜여 있어"라는 현실(Reality)을 담는 전용 보관소입니다.
+코드 스냅샷은 "실제 코드는 현재 이렇게 짜여 있어"라는 현실(Reality)을 담는 전용 보관소이자, **'Reference(참고 자료)'** 입니다.
 
 [분석 대상 코드]
 파일 경로: ${fileName}
@@ -470,44 +461,50 @@ export const updateCodeSnapshot = async (
 소스 코드:
 ${fileContent.slice(0, 15000)}
 
-[기존 코드 스냅샷 노트 목록 (요약)]
-${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
+[기존 코드 스냅샷 목록 (유사도 매칭용)]
+${JSON.stringify(snapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
+
+[기존 설계도 (Task/Feature) 목록 - 자동 연결용]
+${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary })))}
 
 [작업 지침]
 1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
 2. **부모 노트 (파일 단위)**:
-   - 제목: 한국어 제목 (예: 사용자 인증 관리)
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
    - 폴더: "Code Snapshot/해당_도메인"
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
 3. **자식 노트 (함수/로직 단위)**:
-   - 제목: 실제 함수명 또는 클래스명 (예: checkPassword, getNodeName)
-   - 역할: 파일 내의 구체적인 로직 하나하나를 상세히 설명하십시오.
-   - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오. 절대 하위 폴더('상세' 등)를 임의로 만들지 마십시오.
-   - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
-4. **유사도 매칭**: 각 단위에 대해 기존 '코드 스냅샷' 노트 중 내용이나 목적이 같은 노트가 있다면 기존 노트에 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
-5. **주의**: 'relatedNoteIds'는 사용하지 마십시오. 오직 'sourceFiles'와 'sourceVersion'으로 출처를 증명합니다.
+   - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
+4. **유사도 매칭**: 기존 '코드 스냅샷' 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
+5. **[가장 중요] 증빙 자료 연결(relatedNoteIds)**: 
+   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
+   - 관련된 설계도의 ID를 'relatedNoteIds' 배열에 반드시 포함시켜 위성처럼 연결되게 만드십시오.
+6. 생성되는 모든 스냅샷의 'noteType'은 반드시 "Reference"로 지정하십시오.
 
 Return JSON:
 {
   "parent": {
     "title": "제목",
     "folder": "Code Snapshot/...",
-    "content": "파일의 전체적인 역할 및 책임 설명",
-    "summary": "파일 역할 요약",
+    "content": "...",
+    "summary": "...",
     "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\ntags: [discovered-from-github]",
     "matchedNoteId": "기존_노트_ID",
-    "isNew": boolean
+    "isNew": boolean,
+    "noteType": "Reference",
+    "relatedNoteIds": ["연결할_Task_ID"]
   },
   "children": [
     {
       "title": "함수명",
-      "folder": "Code Snapshot/...", // 부모와 똑같이!
-      "content": "구체적인 로직 설명",
-      "summary": "함수 역할 요약",
-      "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\ntags: [discovered-from-github]",
+      "folder": "Code Snapshot/...",
+      "content": "...",
+      "summary": "...",
+      "yamlMetadata": "...",
       "matchedNoteId": "기존_노트_ID",
-      "isNew": boolean
+      "isNew": boolean,
+      "noteType": "Reference",
+      "relatedNoteIds": ["연결할_Task_ID"]
     }
   ]
 }
@@ -532,8 +529,10 @@ Return JSON:
               yamlMetadata: { type: Type.STRING },
               matchedNoteId: { type: Type.STRING },
               isNew: { type: Type.BOOLEAN },
+              noteType: { type: Type.STRING },
+              relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
-            required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew"],
+            required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],
           },
           children: {
             type: Type.ARRAY,
@@ -547,8 +546,10 @@ Return JSON:
                 yamlMetadata: { type: Type.STRING },
                 matchedNoteId: { type: Type.STRING },
                 isNew: { type: Type.BOOLEAN },
+                noteType: { type: Type.STRING },
+                relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
               },
-              required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew"],
+              required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],
             },
           },
         },

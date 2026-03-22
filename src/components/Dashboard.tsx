@@ -4,7 +4,7 @@ import { NoteEditor } from './NoteEditor';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
-import { Note, GCM, AppState, ChatMessage } from '../types';
+import { Note, GCM, AppState, ChatMessage, NoteType } from '../types';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { 
@@ -230,7 +230,6 @@ export const Dashboard: React.FC = () => {
   const [sidebarMode, setSidebarMode] = useState<'design' | 'snapshots'>('design');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
-  const [featureInputType, setFeatureInputType] = useState<NoteType>('Epic');
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('vibe-architect-theme') === 'dark' || 
@@ -383,7 +382,7 @@ export const Dashboard: React.FC = () => {
         readme: githubReadme
       } : undefined;
 
-      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, featureInputType, state.gcm, state.notes, githubContext, signal);
+      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext, signal);
       
       if (signal.aborted) return;
 
@@ -602,7 +601,11 @@ export const Dashboard: React.FC = () => {
 
       if (result.mainNoteUpdates) {
         updatedNotesList = updatedNotesList.map(n => 
-          n.id === mainNote.id ? { ...n, ...result.mainNoteUpdates } : n
+          n.id === mainNote.id ? { 
+            ...n, 
+            ...result.mainNoteUpdates,
+            noteType: result.mainNoteUpdates!.noteType as NoteType | undefined
+          } : n
         );
       }
 
@@ -1016,7 +1019,7 @@ export const Dashboard: React.FC = () => {
             ? (parseMetadata(existingParent.yamlMetadata).childNoteIds || '').replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
             : [];
 
-          const { parent, children } = await updateCodeSnapshot(file.path, content, snapshotNotes, file.sha, signal);
+          const { parent, children } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
           if (signal.aborted) return;
           const touchedNotes: Note[] = [];
           const childIds: string[] = [];
@@ -1032,6 +1035,13 @@ export const Dashboard: React.FC = () => {
             setProcessStatus(prev => ({ ...prev!, message: `기존 부모 스냅샷 업데이트 중: ${targetParent!.title}` }));
             finalParent = await mergeLogicIntoNote(parent, targetParent, signal);
             if (signal.aborted) return;
+            
+            // --- [여기서부터 새로 추가/변경되는 부분] ---
+            finalParent.noteType = 'Reference'; // 계급 강제 부여
+            // 기존에 연결된 Task들과 AI가 새로 찾은 Task들을 병합
+            finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
+            // ------------------------------------------
+            
             currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
             updateCount++;
           } else {
@@ -1043,6 +1053,11 @@ export const Dashboard: React.FC = () => {
               summary: parent.summary,
               yamlMetadata: parent.yamlMetadata,
               status: 'Done',
+              
+              // --- [여기서부터 새로 추가/변경되는 부분] ---
+              noteType: 'Reference',
+              relatedNoteIds: parent.relatedNoteIds || []
+              // ------------------------------------------
             };
             currentNotes.push(finalParent);
             newCount++;
@@ -1064,6 +1079,12 @@ export const Dashboard: React.FC = () => {
               finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
               if (signal.aborted) return;
               finalNote.parentNoteId = parentNoteId; // Force link
+              
+              // --- [여기서부터 새로 추가/변경되는 부분] ---
+              finalNote.noteType = 'Reference';
+              finalNote.relatedNoteIds = Array.from(new Set([...(finalNote.relatedNoteIds || []), ...(unit.relatedNoteIds || [])]));
+              // ------------------------------------------
+              
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
             } else {
@@ -1075,7 +1096,12 @@ export const Dashboard: React.FC = () => {
                 summary: unit.summary,
                 yamlMetadata: unit.yamlMetadata,
                 status: 'Done',
-                parentNoteId: parentNoteId // Link to parent
+                parentNoteId: parentNoteId, // Link to parent
+                
+                // --- [여기서부터 새로 추가/변경되는 부분] ---
+                noteType: 'Reference',
+                relatedNoteIds: unit.relatedNoteIds || []
+                // ------------------------------------------
               };
               currentNotes.push(finalNote);
               newCount++;
@@ -1979,18 +2005,9 @@ export const Dashboard: React.FC = () => {
                 <div className="space-y-3">
                   <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
                   <div className="flex flex-col gap-2">
-                    <select
-                      value={featureInputType}
-                      onChange={(e) => setFeatureInputType(e.target.value as NoteType)}
-                      className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
-                    >
-                      <option value="Epic">대목표 (Epic)</option>
-                      <option value="Feature">기능 (Feature)</option>
-                      <option value="Task">작업 (Task)</option>
-                    </select>
                     <input
                       type="text"
-                      placeholder="추가할 기능 입력..."
+                      placeholder="설계할 기능을 입력하세요 (예: 로그인 기능 추가)"
                       value={featureInput}
                       onChange={(e) => setFeatureInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}

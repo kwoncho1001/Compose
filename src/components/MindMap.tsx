@@ -159,16 +159,20 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         summary: ''
       }));
 
-      const noteNodes = filteredNotes.map(note => ({
-        id: note.id,
-        name: note.title,
-        val: (note.folder || '미분류') === selectedDomain ? 10 : 6,
-        type: 'note',
-        status: note.status,
-        summary: note.summary,
-        domain: note.folder || '미분류',
-        noteType: note.noteType
-      }));
+      const noteNodes = filteredNotes.map(note => {
+        const meta = parseMetadata(note.yamlMetadata);
+        return {
+          id: note.id,
+          name: note.title,
+          val: (note.folder || '미분류') === selectedDomain ? 10 : 6,
+          type: 'note',
+          status: note.status,
+          summary: note.summary,
+          domain: note.folder || '미분류',
+          noteType: note.noteType,
+          sourceFiles: meta.sourceFiles || ''
+        };
+      });
 
       const nodes = [...domainNodes, ...noteNodes];
       const noteLinks = calculateLinks(filteredNotes);
@@ -217,16 +221,20 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       summary: ''
     }));
 
-    const noteNodes = filteredNotes.map(note => ({
-      id: note.id,
-      name: note.title,
-      val: note.isMainFeature ? 10 : 6,
-      type: 'note',
-      status: note.status,
-      summary: note.summary,
-      domain: note.folder || '미분류',
-      noteType: note.noteType
-    }));
+    const noteNodes = filteredNotes.map(note => {
+      const meta = parseMetadata(note.yamlMetadata);
+      return {
+        id: note.id,
+        name: note.title,
+        val: note.isMainFeature ? 10 : 6,
+        type: 'note',
+        status: note.status,
+        summary: note.summary,
+        domain: note.folder || '미분류',
+        noteType: note.noteType,
+        sourceFiles: meta.sourceFiles || ''
+      };
+    });
 
     const nodes = [...domainNodes, ...noteNodes];
     const noteLinks = calculateLinks(filteredNotes);
@@ -331,7 +339,13 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           width={dimensions.width}
           height={dimensions.height}
           graphData={graphData}
-          nodeLabel={(node: any) => `${node.name}\n${node.summary}`}
+          nodeLabel={(node: any) => {
+            let label = `${node.name}\n${node.summary}`;
+            if (node.sourceFiles) {
+              label += `\n\n[구현 파일]\n${node.sourceFiles}`;
+            }
+            return label;
+          }}
           nodeColor={nodeColor}
           nodeRelSize={6}
           linkDirectionalArrowLength={(link: any) => link.type === 'hierarchy' ? 0 : 3}

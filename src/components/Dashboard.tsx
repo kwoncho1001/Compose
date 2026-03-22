@@ -1893,6 +1893,7 @@ export const Dashboard: React.FC = () => {
             <NoteEditor 
               note={selectedNote} 
               allNotes={state.notes}
+              gcm={state.gcm}
               onUpdateNote={handleUpdateNote} 
               onTargetedUpdate={handleTargetedUpdate}
               onGenerateSubModules={handleGenerateSubModules}

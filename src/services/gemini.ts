@@ -812,6 +812,53 @@ ${fileContent.slice(0, 15000)}
   }
 };
 
+export const generateImpactAnalysis = async (
+  note: Note,
+  allNotes: Note[],
+  signal?: AbortSignal
+): Promise<string> => {
+  const context = allNotes.map(n => `- ${n.title} (${n.noteType}): ${n.summary}`).join('\n');
+  const currentNoteMeta = note.yamlMetadata;
+
+  const prompt = `
+당신은 대규모 프로젝트의 아키텍트입니다.
+현재 설계 노트가 변경되었거나 충돌(Conflict)이 발생했습니다.
+이 설계 변경이 실제 코드의 어떤 파일들에 영향을 미칠지 분석하여 '수정 필요 파일 목록'을 추출해 주세요.
+
+[현재 설계 노트]
+제목: ${note.title}
+유형: ${note.noteType}
+요약: ${note.summary}
+메타데이터:
+${currentNoteMeta}
+
+[전체 프로젝트 컨텍스트]
+${context}
+
+[지시 사항]
+1. 메타데이터의 'sourceFiles' 필드와 'relatedNoteIds'를 참고하여 연관된 코드 파일들을 식별하세요.
+2. 설계 변경의 내용을 바탕으로, 어떤 파일의 어떤 로직이 수정되어야 하는지 구체적으로 리스트업하세요.
+3. 마크다운 형식으로 출력하세요.
+4. 파일 경로는 프로젝트 루트 기준(예: src/components/...)으로 표시하세요.
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: { systemInstruction }
+    });
+
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return response.text || "분석 결과가 없습니다.";
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Generate impact analysis failed:', err);
+    return "분석을 수행하지 못했습니다.";
+  }
+};
+
 export const generateNoteFromCode = async (
   fileName: string,
   fileContent: string,
@@ -1253,7 +1300,7 @@ ${code}
   return response.text || spec;
 };
 
-export const validateYamlMetadata = (content: string): { isValid: boolean; errors: string[] } => {
+export const validateYamlMetadata = (content: string, gcm?: GCM): { isValid: boolean; errors: string[] } => {
   const errors: string[] = [];
   const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
   
@@ -1263,10 +1310,14 @@ export const validateYamlMetadata = (content: string): { isValid: boolean; error
 
   const yamlStr = yamlMatch[1];
   const lines = yamlStr.split('\n');
+  const meta: Record<string, string> = {};
   
   lines.forEach((line, index) => {
     if (line.trim() && !line.includes(':')) {
       errors.push(`Line ${index + 1}: 올바른 YAML 형식이 아닙니다 (키: 값 형식이 필요함)`);
+    } else if (line.includes(':')) {
+      const [key, ...val] = line.split(':');
+      meta[key.trim()] = val.join(':').trim();
     }
   });
 
@@ -1275,6 +1326,29 @@ export const validateYamlMetadata = (content: string): { isValid: boolean; error
   }
   if (!yamlStr.includes('noteId:')) {
     errors.push("노트 식별을 위한 'noteId' 필드가 메타데이터에 필요합니다.");
+  }
+
+  // GCM Consistency Check
+  if (gcm) {
+    // Check entities
+    if (meta.entities) {
+      const usedEntities = meta.entities.replace(/[\[\]]/g, '').split(',').map(s => s.trim()).filter(Boolean);
+      usedEntities.forEach(entity => {
+        if (!gcm.entities[entity]) {
+          errors.push(`GCM 경고: 정의되지 않은 엔티티 '${entity}'가 사용되었습니다.`);
+        }
+      });
+    }
+
+    // Check variables
+    if (meta.variables) {
+      const usedVars = meta.variables.replace(/[\[\]]/g, '').split(',').map(s => s.trim()).filter(Boolean);
+      usedVars.forEach(v => {
+        if (!gcm.variables[v]) {
+          errors.push(`GCM 경고: 정의되지 않은 변수 '${v}'가 사용되었습니다.`);
+        }
+      });
+    }
   }
 
   return {

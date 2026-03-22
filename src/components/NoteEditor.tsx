@@ -3,9 +3,9 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Note, NoteType } from '../types';
-import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge } from 'lucide-react';
-import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge } from '../services/gemini';
+import { Note, NoteType, GCM } from '../types';
+import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge, ExternalLink } from 'lucide-react';
+import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge, generateImpactAnalysis } from '../services/gemini';
 import { Button } from './common/Button';
 import { Input } from './common/Input';
 import { Dialog } from './common/Dialog';
@@ -19,6 +19,7 @@ import { EditorView } from '@codemirror/view';
 interface NoteEditorProps {
   note: Note | null;
   allNotes: Note[];
+  gcm: GCM;
   onUpdateNote: (note: Note) => void;
   onTargetedUpdate: (noteId: string, command: string) => Promise<void>;
   onGenerateSubModules: (mainNote: Note) => Promise<void>;
@@ -38,8 +39,23 @@ const parseMetadata = (yaml: string) => {
   return meta;
 };
 
-export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdateNote, onTargetedUpdate, onGenerateSubModules, onDeleteNote, darkMode }) => {
+export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onUpdateNote, onTargetedUpdate, onGenerateSubModules, onDeleteNote, darkMode }) => {
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [impactResult, setImpactResult] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+
+  const handleImpactAnalysis = async () => {
+    if (!note) return;
+    setIsAnalyzing(true);
+    try {
+      const result = await generateImpactAnalysis(note, allNotes);
+      setImpactResult(result);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
   const [command, setCommand] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingSub, setIsGeneratingSub] = useState(false);
@@ -216,9 +232,15 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
 
   const onYamlChange = useCallback((value: string) => {
     setEditData(prev => ({ ...prev, yamlMetadata: value }));
-    const validation = validateYamlMetadata(value);
+    const validation = validateYamlMetadata(value, gcm);
     setYamlErrors(validation.errors);
-  }, []);
+    
+    // If GCM errors exist, suggest conflict status
+    if (validation.errors.some(e => e.includes('GCM 경고'))) {
+      // We don't automatically set to Conflict here to avoid flickering, 
+      // but we show the errors in the UI.
+    }
+  }, [gcm]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -385,6 +407,12 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                 코드 보기
               </a>
             )}
+            {parseMetadata(note.yamlMetadata).sourceFiles && (
+              <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                <ExternalLink className="w-4 h-4" />
+                구현 추적: {parseMetadata(note.yamlMetadata).sourceFiles}
+              </div>
+            )}
           </div>
         </div>
 
@@ -409,47 +437,78 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
         )}
 
         {/* Implementation Conflict Banner */}
-        {note.status === 'Conflict' && note.conflictInfo && (
+        {note.status === 'Conflict' && (
           <div className="mb-8 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg p-5">
             <div className="flex items-center gap-2 text-red-700 dark:text-red-400 font-semibold mb-2">
               <AlertTriangle className="w-5 h-5" />
-              구현 충돌: {note.conflictInfo.filePath}
+              {note.conflictInfo ? `구현 충돌: ${note.conflictInfo.filePath}` : '설계 충돌 감지됨'}
             </div>
-            <p className="text-sm text-red-600 dark:text-red-300 mb-4">{note.conflictInfo.reason}</p>
+            <p className="text-sm text-red-600 dark:text-red-300 mb-4">
+              {note.conflictInfo ? note.conflictInfo.reason : '이 설계 노트는 현재 프로젝트의 다른 부분 또는 실제 코드와 정합성이 맞지 않습니다.'}
+            </p>
             
-            {note.conflictInfo.guide ? (
-              <div className="bg-white dark:bg-slate-900 border border-red-100 dark:border-red-900/30 rounded p-4 mb-4">
+            <div className="flex flex-wrap gap-2 mb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleImpactAnalysis}
+                disabled={isAnalyzing}
+                className="border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40"
+              >
+                {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Activity className="w-4 h-4 mr-2" />}
+                수정 필요 파일 분석
+              </Button>
+              {note.conflictInfo && !note.conflictInfo.guide && (
+                <>
+                  <button
+                    onClick={handleCodeWins}
+                    disabled={isResolving}
+                    className="bg-white dark:bg-slate-800 border border-red-200 dark:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-700 dark:text-red-400 px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    코드가 맞습니다 (설계 업데이트)
+                  </button>
+                  <button
+                    onClick={handleDesignWins}
+                    disabled={isResolving}
+                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                    설계가 맞습니다 (수정 가이드 생성)
+                  </button>
+                  <button
+                    onClick={handlePartialMerge}
+                    disabled={isResolving}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Merge className="w-4 h-4" />}
+                    지능형 부분 병합 (AI 추천)
+                  </button>
+                </>
+              )}
+            </div>
+
+            {impactResult && (
+              <div className="mt-4 p-4 bg-white dark:bg-slate-900 rounded-lg border border-red-100 dark:border-red-800/30 shadow-inner relative">
+                <button 
+                  onClick={() => setImpactResult(null)} 
+                  className="absolute top-2 right-2 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">AI 분석: 수정 필요 파일 및 로직</h4>
+                <div className="prose prose-sm dark:prose-invert max-w-none text-xs">
+                  <Markdown remarkPlugins={[remarkGfm]}>{impactResult}</Markdown>
+                </div>
+              </div>
+            )}
+            
+            {note.conflictInfo?.guide && (
+              <div className="bg-white dark:bg-slate-900 border border-red-100 dark:border-red-900/30 rounded p-4 mt-4">
                 <h4 className="font-semibold text-slate-800 dark:text-slate-200 mb-2">구현 보정 가이드:</h4>
                 <div className="prose prose-sm dark:prose-invert max-w-none">
                   <Markdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath]} rehypePlugins={[rehypeKatex]}>{note.conflictInfo.guide}</Markdown>
                 </div>
-              </div>
-            ) : (
-              <div className="flex gap-3">
-                <button
-                  onClick={handleCodeWins}
-                  disabled={isResolving}
-                  className="bg-white dark:bg-slate-800 border border-red-200 dark:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-700 dark:text-red-400 px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  코드가 맞습니다 (설계 업데이트)
-                </button>
-                <button
-                  onClick={handleDesignWins}
-                  disabled={isResolving}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  설계가 맞습니다 (수정 가이드 생성)
-                </button>
-                <button
-                  onClick={handlePartialMerge}
-                  disabled={isResolving}
-                  className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {isResolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Merge className="w-4 h-4" />}
-                  지능형 부분 병합 (AI 추천)
-                </button>
               </div>
             )}
           </div>
@@ -489,8 +548,20 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
             />
           </div>
           {yamlErrors.map((err, i) => (
-            <p key={i} className="text-[10px] text-red-500 mt-1 ml-1">{err}</p>
+            <p key={i} className={`text-[10px] mt-1 ml-1 ${err.includes('GCM 경고') ? 'text-orange-500 font-bold' : 'text-red-500'}`}>{err}</p>
           ))}
+          {yamlErrors.some(e => e.includes('GCM 경고')) && (
+            <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/50 rounded text-[10px] text-orange-700 dark:text-orange-400">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              GCM 정합성 오류가 발견되었습니다. 설계와 GCM을 일치시키거나 GCM을 업데이트하십시오.
+              <button 
+                onClick={() => onUpdateNote({ ...note, status: 'Conflict' })}
+                className="ml-2 underline font-bold"
+              >
+                Conflict 상태로 전환
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Content (Obsidian-like Live Preview) */}

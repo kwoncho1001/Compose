@@ -116,6 +116,7 @@ User Request: "${featureRequest}"
 
 Task:
 1. 사용자의 요청을 분석하여 이 요청이 어느 레벨(Epic, Feature, Task)에 해당하는지 자동 판별(noteType)하십시오.
+   - [분류 기준] Epic: 거대한 목표 (예: 사용자 인증 시스템) / Feature: 구체적 기능 (예: 구글 로그인) / Task: 실제 작업 (예: API 키 발급, UI 생성)
 2. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
 3. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
 4. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
@@ -223,6 +224,17 @@ Return JSON:
     relatedNoteIds: mainFeature.reusedNoteIds || [],
     noteType: (mainFeature.noteType as NoteType) || 'Feature',
   };
+
+  // --- [🔥 새로 추가: AI가 뭐라 하든 무시하고 계급 강제 할당] ---
+  const expectedChildType = mainNote.noteType === 'Epic' ? 'Feature' : 'Task';
+  
+  if (step2Result.newDetailNotes) {
+    step2Result.newDetailNotes.forEach((n: any) => n.noteType = expectedChildType);
+  }
+  if (step2Result.updatedDetailNotes) {
+    step2Result.updatedDetailNotes.forEach((n: any) => n.noteType = expectedChildType);
+  }
+  // -------------------------------------------------------------
 
   const sanitizedNewNotes = sanitizeNotes([mainNote, ...(step2Result.newDetailNotes || [])], existingNotes);
   const sanitizedUpdatedNotes = sanitizeNotes(step2Result.updatedDetailNotes || [], existingNotes);
@@ -1093,10 +1105,21 @@ Return JSON:
 
   const result = safeJsonParse(response.text);
   
-  const rawNewNotes = [...(result.newChildNotes || [])];
+  // --- [🔥 새로 추가: AI가 뭐라 하든 무시하고 계급 강제 할당] ---
+  const detectedType = result.detectedNoteType || 'Feature';
+  const expectedChildType = detectedType === 'Epic' ? 'Feature' : 'Task';
+
+  // 자식 노트들은 부모 계급에 따라 무조건 강제 설정
+  const rawNewNotes = [...(result.newChildNotes || [])].map(n => ({ 
+    ...n, 
+    noteType: expectedChildType 
+  }));
+  
+  // 새 에픽을 만들었다면 무조건 에픽으로 고정
   if (result.newParentEpic) {
-    rawNewNotes.push(result.newParentEpic);
+    rawNewNotes.push({ ...result.newParentEpic, noteType: 'Epic' });
   }
+  // -------------------------------------------------------------
   
   const sanitizedNewNotes = sanitizeNotes(rawNewNotes, existingNotes);
 
@@ -1104,7 +1127,7 @@ Return JSON:
     newNotes: sanitizedNewNotes,
     updatedGcm: result.updatedGcm || currentGcm,
     mainNoteUpdates: {
-      noteType: result.detectedNoteType,
+      noteType: detectedType,
       parentNoteId: result.suggestedParentId
     }
   };

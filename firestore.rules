@@ -73,6 +73,7 @@ service cloud.firestore {
              (!('folder' in data) || (data.folder is string && data.folder.size() <= 2000)) &&
              (!('content' in data) || (data.content is string && data.content.size() <= 1000000)) &&
              (!('summary' in data) || (data.summary is string && data.summary.size() <= 50000)) &&
+             (!('noteType' in data) || data.noteType == null || data.noteType in ['Epic', 'Feature', 'Task', 'Reference']) &&
              (!('status' in data) || data.status is string) &&
              (!('yamlMetadata' in data) || (data.yamlMetadata is string && data.yamlMetadata.size() <= 100000)) &&
              (!('parentNoteId' in data) || data.parentNoteId == null || data.parentNoteId is string) &&

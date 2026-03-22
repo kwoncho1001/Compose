@@ -244,9 +244,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
             
             <div className="flex flex-col flex-1 min-w-0">
-              <span className={`text-sm truncate ${item.type === 'folder' && folderStatus !== 'Other' ? folderColorClass : ''} ${isConflict ? 'text-red-400' : ''} ${isTemporaryMerge ? 'text-pink-400' : ''} ${isSelected ? 'font-medium' : ''}`}>
-                {item.name}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-sm truncate ${item.type === 'folder' && folderStatus !== 'Other' ? folderColorClass : ''} ${isConflict ? 'text-red-400' : ''} ${isTemporaryMerge ? 'text-pink-400' : ''} ${isSelected ? 'font-medium' : ''}`}>
+                  {item.name}
+                </span>
+                {item.type === 'note' && note?.noteType && (
+                  <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded-sm font-medium border ${
+                    note.noteType === 'Epic' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                    note.noteType === 'Feature' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                    note.noteType === 'Task' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                    'bg-slate-500/10 text-slate-400 border-slate-500/20'
+                  }`}>
+                    {note.noteType.charAt(0)}
+                  </span>
+                )}
+              </div>
             </div>
             
             {hasConsistencyConflict && <AlertTriangle className="w-3 h-3 text-red-500 shrink-0" />}

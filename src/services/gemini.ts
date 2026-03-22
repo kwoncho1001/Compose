@@ -65,6 +65,7 @@ const noteSchema: Schema = {
       type: Type.STRING, 
       description: "표준화된 YAML: noteId: [id], version: 1.0.0, lastUpdated: YYYY-MM-DD, tags: [tag1], componentType: Core|UI|Shared|Feature, dependencies: [lib1], relatedNoteIds: [id1, id2]" 
     },
+    noteType: { type: Type.STRING, description: "노트의 유형 (Epic, Feature, Task, Reference 중 하나)" },
   },
   required: ["title", "folder", "content", "summary", "yamlMetadata"],
 };
@@ -110,6 +111,7 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
 
 export const decomposeFeature = async (
   featureRequest: string,
+  noteType: NoteType,
   currentGcm: GCM,
   existingNotes: Note[],
   githubContext?: { repoName: string; files: string[]; readme?: string },
@@ -119,12 +121,27 @@ export const decomposeFeature = async (
   updatedNotes: Note[];
   updatedGcm: GCM 
 }> => {
+  let typeSpecificPrompt = '';
+  let targetChildType = 'Task';
+
+  if (noteType === 'Epic') {
+    targetChildType = 'Feature';
+    typeSpecificPrompt = `현재 사용자의 대목표(Epic)는 '${featureRequest}'이야. 이 거대한 목표를 이루기 위해 사용자가 앱에서 실제로 구현해야 할 '핵심 기능(Feature)' 3~5가지를 도출해 줘.`;
+  } else if (noteType === 'Feature') {
+    targetChildType = 'Task';
+    typeSpecificPrompt = `현재 구현할 기능(Feature)은 '${featureRequest}'이야. 1인 개발자가 오늘 당장 컴퓨터를 켜고 코딩할 수 있는 구체적이고 순차적인 '실제 행동(Task)' 단위로 쪼개줘. 
+(예: "users 컬렉션에 대한 firestore.rules 작성", "Google 로그인 버튼 UI 컴포넌트 생성", "로그인 성공 시 /dashboard로 라우팅하는 로직 추가" 등 구체적인 코드 레벨의 작업 명세)`;
+  } else {
+    targetChildType = 'Task';
+    typeSpecificPrompt = `다음 기능/모듈을 더 작은 하위 모듈이나 구체적인 구현 단계로 분해해줘: ${featureRequest}`;
+  }
+
   const step1Prompt = `
 목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
 또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
 
 기존 노트 목록 (요약):
-${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })))}
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary, noteType: n.noteType })))}
 
 ${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
 ${JSON.stringify(githubContext.files.slice(0, 100))}
@@ -133,6 +150,8 @@ ${githubContext.readme ? `README.md 내용:
 ${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
 
 User Request: "${featureRequest}"
+요청 유형: ${noteType}
+세부 지시사항: ${typeSpecificPrompt}
 
 Task:
 1. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
@@ -144,6 +163,7 @@ Task:
 7. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
 8. [중요] 폴더명(folder)은 반드시 "상위범주/하위범주" 형태의 경로 기반 분류를 사용하십시오. (예: "1. 시스템 인프라/데이터 보안", "2. 콘텐츠 뱅크/문제 스캔"). 'Imported'나 기술 계층 명칭은 금지합니다.
 9. [중요] 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
+10. 생성되는 모든 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
 
 Return JSON:
 {
@@ -153,7 +173,8 @@ Return JSON:
   "summary": "한국어 요약 (역할 중심)",
   "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]\\ncomponentType: Feature\\ndependencies: []\\nrelatedNoteIds: []",
   "reusedNoteIds": ["id1", "id2"],
-  "newComponents": ["New Component 1"]
+  "newComponents": ["New Component 1"],
+  "noteType": "${targetChildType}"
 }
 `;
 
@@ -173,8 +194,9 @@ Return JSON:
           yamlMetadata: { type: Type.STRING },
           reusedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
           newComponents: { type: Type.ARRAY, items: { type: Type.STRING } },
+          noteType: { type: Type.STRING },
         },
-        required: ["title", "folder", "content", "summary", "yamlMetadata", "reusedNoteIds", "newComponents"],
+        required: ["title", "folder", "content", "summary", "yamlMetadata", "reusedNoteIds", "newComponents", "noteType"],
       },
     },
   });
@@ -195,14 +217,15 @@ Return JSON:
 3. GCM(엔티티, 변수)을 최적화하여 업데이트하십시오.
 4. 모든 노트는 "상위범주/하위범주" 폴더 형식을 유지하십시오.
 5. 모든 텍스트는 한국어로 작성하십시오.
+6. 생성되는 모든 하위 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
 
 Current GCM:
 ${JSON.stringify(currentGcm, null, 2)}
 
 Return JSON:
 {
-  "newDetailNotes": [ { title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds } ],
-  "updatedDetailNotes": [ { id, title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds } ],
+  "newDetailNotes": [ { title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds, noteType } ],
+  "updatedDetailNotes": [ { id, title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds, noteType } ],
   "updatedGcm": { ... }
 }
 `;
@@ -236,6 +259,7 @@ Return JSON:
     summary: mainFeature.summary,
     yamlMetadata: mainFeature.yamlMetadata,
     relatedNoteIds: mainFeature.reusedNoteIds || [],
+    noteType: mainFeature.noteType || noteType,
   };
 
   const sanitizedNewNotes = sanitizeNotes([mainNote, ...(step2Result.newDetailNotes || [])], existingNotes);
@@ -265,7 +289,8 @@ export const optimizeBlueprint = async (
     summary: n.summary,
     content: n.content.slice(0, 2000),
     relatedNoteIds: n.relatedNoteIds,
-    parentNoteId: n.parentNoteId
+    parentNoteId: n.parentNoteId,
+    noteType: n.noteType
   }));
 
   const analysisPrompt = `
@@ -278,10 +303,11 @@ export const optimizeBlueprint = async (
 4. **불필요한 기술 중심 폴더 제거**: 'Imported', 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 제거하고 실제 사용자 기능 단위로 재분류하십시오.
 5. **명칭 표준화**: 제목에서 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
 6. **GCM 최적화**: 엔티티와 변수를 정리하고 중복을 제거하십시오.
+7. **노트 유형(noteType) 유지 및 할당**: 기존 노트의 'noteType'이 있다면 유지하고, 새로 통합되거나 변경되는 노트에 대해서는 적절한 'noteType'(Epic, Feature, Task, Reference)을 할당하십시오.
 
 Return JSON:
 {
-  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "yamlMetadata": "string", "parentNoteId": "string", "relatedNoteIds": ["string"], "status": "string" } ],
+  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "yamlMetadata": "string", "parentNoteId": "string", "relatedNoteIds": ["string"], "status": "string", "noteType": "string" } ],
   "deletedNoteIds": ["string"],
   "updatedGcm": { "entities": {}, "variables": {} },
   "report": "최적화 작업 내용 요약 (Markdown)"
@@ -314,7 +340,8 @@ Return JSON:
                 yamlMetadata: { type: Type.STRING },
                 parentNoteId: { type: Type.STRING },
                 relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                status: { type: Type.STRING }
+                status: { type: Type.STRING },
+                noteType: { type: Type.STRING }
               },
               required: ["id", "title", "folder", "content", "summary", "yamlMetadata"]
             }
@@ -560,7 +587,7 @@ export const checkConsistency = async (
   notes: Note[],
   gcm: GCM,
   signal?: AbortSignal
-): Promise<{ report: string; inconsistentNoteIds: string[] }> => {
+): Promise<{ report: string; inconsistentNotes: { id: string, description: string, suggestion: string }[] }> => {
   const prompt = `
 당신은 시스템 아키텍트입니다. 현재 설계도(노트)와 실제 코드 기반의 '코드 스냅샷' 간의 일관성을 검사하십시오.
 설계 의도(Design)와 실제 구현(Reality) 사이의 차이점을 찾아내어 보고서를 작성하십시오.
@@ -575,12 +602,18 @@ ${JSON.stringify(notes.filter(n => n.folder.startsWith('Code Snapshot')).map(n =
 1. **차이점 분석**: 설계도에는 정의되어 있으나 코드에는 구현되지 않은 기능, 또는 코드에는 구현되어 있으나 설계도에 누락된 기능을 찾으십시오.
 2. **불일치 식별**: 설계도와 구현 내용이 서로 상충되는 부분을 찾으십시오.
 3. **보고서 작성**: 발견된 문제점들을 한국어로 상세히 기술하십시오.
-4. **ID 추출**: 일관성이 깨진 것으로 판단되는 '설계 노트'의 ID 목록을 추출하십시오.
+4. **불일치 노트 추출**: 일관성이 깨진 것으로 판단되는 '설계 노트'의 ID와 불일치 사유, 해결 제안을 추출하십시오.
 
 Return JSON:
 {
   "report": "상세 분석 보고서 (Markdown)",
-  "inconsistentNoteIds": ["note_id_1", "note_id_2"]
+  "inconsistentNotes": [
+    {
+      "id": "note_id_1",
+      "description": "코드에는 A로 구현되어 있으나 설계도에는 B로 되어 있음",
+      "suggestion": "설계도를 A로 수정하거나 코드를 B로 수정"
+    }
+  ]
 }
 `;
 
@@ -595,29 +628,37 @@ Return JSON:
           type: Type.OBJECT,
           properties: {
             report: { type: Type.STRING },
-            inconsistentNoteIds: {
+            inconsistentNotes: {
               type: Type.ARRAY,
-              items: { type: Type.STRING }
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  suggestion: { type: Type.STRING }
+                },
+                required: ["id", "description", "suggestion"]
+              }
             }
           },
-          required: ["report", "inconsistentNoteIds"]
+          required: ["report", "inconsistentNotes"]
         }
       },
     });
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
-    const result = safeJsonParse(response.text || '{"report": "분석 실패", "inconsistentNoteIds": []}');
+    const result = safeJsonParse(response.text || '{"report": "분석 실패", "inconsistentNotes": []}');
     return {
       report: result.report || "분석 결과가 없습니다.",
-      inconsistentNoteIds: result.inconsistentNoteIds || [],
+      inconsistentNotes: result.inconsistentNotes || [],
     };
   } catch (err) {
     if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
     console.error('Check consistency failed:', err);
     return {
       report: "일관성 검사 중 오류가 발생했습니다.",
-      inconsistentNoteIds: [],
+      inconsistentNotes: [],
     };
   }
 };
@@ -977,9 +1018,25 @@ export const generateSubModules = async (
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedGcm: GCM 
 }> => {
+  const noteType = mainNote.noteType || 'Feature';
+  let typeSpecificPrompt = '';
+  let targetChildType = 'Task';
+
+  if (noteType === 'Epic') {
+    targetChildType = 'Feature';
+    typeSpecificPrompt = `현재 사용자의 대목표(Epic)는 '${mainNote.title}'이야. 이 거대한 목표를 이루기 위해 사용자가 앱에서 실제로 구현해야 할 '핵심 기능(Feature)' 3~5가지를 도출해 줘.`;
+  } else if (noteType === 'Feature') {
+    targetChildType = 'Task';
+    typeSpecificPrompt = `현재 구현할 기능(Feature)은 '${mainNote.title}'이야. 1인 개발자가 오늘 당장 컴퓨터를 켜고 코딩할 수 있는 구체적이고 순차적인 '실제 행동(Task)' 단위로 쪼개줘. 
+(예: "users 컬렉션에 대한 firestore.rules 작성", "Google 로그인 버튼 UI 컴포넌트 생성", "로그인 성공 시 /dashboard로 라우팅하는 로직 추가" 등 구체적인 코드 레벨의 작업 명세)`;
+  } else {
+    targetChildType = 'Task';
+    typeSpecificPrompt = `다음 기능/모듈을 더 작은 하위 모듈이나 구체적인 구현 단계로 분해해줘.`;
+  }
+
   const prompt = `
 용도: 메인 기능의 하위 모듈 상세 설계 (마인드맵 기반)
-목표: 주어진 메인 기능 노트를 분석하여 필요한 하위 구성 요소(Sub-modules)를 상세 설계합니다.
+목표: ${typeSpecificPrompt}
 또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
 
 그래프 원칙: "이 기능 구현을 위해 필요한 모든 논리 노드를 생성하고 관계를 선(relatedNoteIds)으로 연결하라"는 지침을 따르십시오.
@@ -991,13 +1048,13 @@ export const generateSubModules = async (
 3. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
 4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
 
-메인 기능:
+메인 기능 (${noteType}):
 제목: ${mainNote.title}
 내용: ${mainNote.content}
 요약: ${mainNote.summary}
 
 기존 노트 목록 (중복 방지 및 연결용):
-${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })))}
+${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, noteType: n.noteType })))}
 
 ${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
 ${JSON.stringify(githubContext.files.slice(0, 100))}
@@ -1012,6 +1069,7 @@ Task:
 4. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
 5. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
 6. [중요] 'Imported' 또는 기술 계층 폴더 사용을 금지하고, 도메인/기능 중심의 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
+7. 생성되는 모든 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
 
 Return JSON:
 {
@@ -1023,7 +1081,8 @@ Return JSON:
       "summary": "Brief summary",
       "yamlMetadata": "version: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]",
       "parentNoteId": "${mainNote.id}",
-      "relatedNoteIds": ["id1", "id2"]
+      "relatedNoteIds": ["id1", "id2"],
+      "noteType": "${targetChildType}"
     }
   ],
   "updatedGcm": { ... }

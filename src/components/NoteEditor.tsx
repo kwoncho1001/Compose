@@ -3,7 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Note } from '../types';
+import { Note, NoteType } from '../types';
 import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge } from 'lucide-react';
 import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge } from '../services/gemini';
 import { Button } from './common/Button';
@@ -71,13 +71,15 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
     summary: string;
     yamlMetadata: string;
     relatedNoteIds: string[];
+    noteType?: NoteType;
   }>({
     title: '',
     folder: '',
     content: '',
     summary: '',
     yamlMetadata: '',
-    relatedNoteIds: []
+    relatedNoteIds: [],
+    noteType: 'Feature'
   });
 
   useEffect(() => {
@@ -108,7 +110,8 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
         content: note.content,
         summary: note.summary,
         yamlMetadata: note.yamlMetadata,
-        relatedNoteIds: combinedRelatedIds
+        relatedNoteIds: combinedRelatedIds,
+        noteType: note.noteType || 'Feature'
       });
     }
   }, [note?.id, allNotes]);
@@ -134,6 +137,13 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
   const handleParentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     if (isSnapshotNote) return;
     onUpdateNote({ ...note, parentNoteId: e.target.value || undefined });
+  };
+
+  const handleNoteTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (isSnapshotNote) return;
+    const newType = e.target.value as NoteType;
+    setEditData({ ...editData, noteType: newType });
+    onUpdateNote({ ...note, noteType: newType });
   };
 
   const handleSaveManual = () => {
@@ -313,6 +323,20 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, onUpdate
                       <option key={n.id} value={n.id}>{n.title}</option>
                     ))
                   }
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">유형:</span>
+                <select
+                  value={note.noteType || 'Feature'}
+                  onChange={handleNoteTypeChange}
+                  disabled={isSnapshotNote}
+                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2"
+                >
+                  <option value="Epic">Epic</option>
+                  <option value="Feature">Feature</option>
+                  <option value="Task">Task</option>
+                  <option value="Reference">Reference</option>
                 </select>
               </div>
               <div className="flex items-center gap-2">

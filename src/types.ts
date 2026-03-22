@@ -1,4 +1,5 @@
 export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required' | 'Temporary Merge';
+export type NoteType = 'Epic' | 'Feature' | 'Task' | 'Reference';
 
 export interface Note {
   id: string;
@@ -6,6 +7,7 @@ export interface Note {
   folder: string;
   content: string;
   summary: string;
+  noteType?: NoteType;
   parentNoteId?: string;
   parentNoteIds?: string[];
   childNoteIds?: string[];

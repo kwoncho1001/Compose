@@ -10,6 +10,7 @@
         "folder": { "type": "string" },
         "content": { "type": "string" },
         "summary": { "type": "string" },
+        "noteType": { "type": "string", "enum": ["Epic", "Feature", "Task", "Reference"] },
         "parentNoteId": { "type": "string" },
         "parentNoteIds": { "type": "array", "items": { "type": "string" } },
         "childNoteIds": { "type": "array", "items": { "type": "string" } },

@@ -13,6 +13,7 @@ import {
   checkConflict, 
   updateSingleNote,
   optimizeBlueprint,
+  checkConsistency,
   generateSubModules,
   updateCodeSnapshot,
   mergeLogicIntoNote,
@@ -229,6 +230,7 @@ export const Dashboard: React.FC = () => {
   const [sidebarMode, setSidebarMode] = useState<'design' | 'snapshots'>('design');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
+  const [featureInputType, setFeatureInputType] = useState<NoteType>('Epic');
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('vibe-architect-theme') === 'dark' || 
@@ -381,7 +383,7 @@ export const Dashboard: React.FC = () => {
         readme: githubReadme
       } : undefined;
 
-      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext, signal);
+      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, featureInputType, state.gcm, state.notes, githubContext, signal);
       
       if (signal.aborted) return;
 
@@ -518,6 +520,60 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleCheckConsistency = async () => {
+    if (state.notes.length === 0) return;
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
+    setIsSyncing(true);
+    setProcessStatus({ message: '설계도 일관성 검증 진행 중...' });
+    try {
+      const { report, inconsistentNotes } = await checkConsistency(state.notes, state.gcm, signal);
+      
+      if (signal.aborted) return;
+
+      const inconsistentMap = new Map(inconsistentNotes.map(n => [n.id, n]));
+      const updatedNotes = state.notes.map(note => {
+        const conflict = inconsistentMap.get(note.id);
+        if (conflict) {
+          return { 
+            ...note, 
+            consistencyConflict: {
+              description: conflict.description,
+              suggestion: conflict.suggestion
+            } 
+          };
+        }
+        if (note.consistencyConflict) {
+          return { ...note, consistencyConflict: undefined };
+        }
+        return note;
+      });
+
+      saveNotesToFirestore(updatedNotes);
+
+      setState(prev => ({
+        ...prev,
+        notes: updatedNotes
+      }));
+      
+      setNextStepSuggestion(report);
+      setRightSidebarOpen(true);
+    } catch (error) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Check consistency cancelled');
+      } else {
+        console.error('Consistency check failed', error);
+        showAlert('오류', '설계도 일관성 검증 중 오류가 발생했습니다.', 'error');
+      }
+    } finally {
+      setIsSyncing(false);
+      setProcessStatus(null);
+    }
+  };
+
   const handleGenerateSubModules = async (mainNote: Note) => {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -576,7 +632,8 @@ export const Dashboard: React.FC = () => {
       content: '# 새 노트\n여기에 기능을 설명하세요.',
       summary: '새로운 기능 설명',
       status: 'Planned',
-      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
+      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []',
+      noteType: 'Feature'
     };
     syncNote(newNote);
     setState(prev => ({
@@ -588,6 +645,10 @@ export const Dashboard: React.FC = () => {
 
   const handleAddChildNote = (parentId: string) => {
     const parentNote = state.notes.find(n => n.id === parentId);
+    let childNoteType: NoteType = 'Task';
+    if (parentNote?.noteType === 'Epic') childNoteType = 'Feature';
+    else if (parentNote?.noteType === 'Feature') childNoteType = 'Task';
+
     const newNote: Note = {
       id: Math.random().toString(36).substr(2, 9),
       title: '새 하위 노트',
@@ -596,7 +657,8 @@ export const Dashboard: React.FC = () => {
       content: `# ${parentNote?.title || ''}의 하위 기능\n여기에 세부 기능을 설명하세요.`,
       summary: '하위 기능 설명',
       status: 'Planned',
-      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []'
+      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []',
+      noteType: childNoteType
     };
     syncNote(newNote);
     setState(prev => ({
@@ -1910,6 +1972,15 @@ export const Dashboard: React.FC = () => {
                 <div className="space-y-3">
                   <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
                   <div className="flex flex-col gap-2">
+                    <select
+                      value={featureInputType}
+                      onChange={(e) => setFeatureInputType(e.target.value as NoteType)}
+                      className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
+                    >
+                      <option value="Epic">대목표 (Epic)</option>
+                      <option value="Feature">기능 (Feature)</option>
+                      <option value="Task">작업 (Task)</option>
+                    </select>
                     <input
                       type="text"
                       placeholder="추가할 기능 입력..."
@@ -2000,9 +2071,16 @@ export const Dashboard: React.FC = () => {
                     <button
                       onClick={handleOptimizeBlueprint}
                       disabled={isSyncing || state.notes.length === 0}
-                      className="col-span-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-xs font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-2 shadow-sm"
+                      className="col-span-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-[10px] font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-1 shadow-sm"
                     >
                       {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
+                    </button>
+                    <button
+                      onClick={handleCheckConsistency}
+                      disabled={isSyncing || state.notes.length === 0}
+                      className="col-span-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 py-2.5 rounded-md text-[10px] font-bold border border-emerald-100 dark:border-emerald-800/50 flex items-center justify-center gap-1 shadow-sm"
+                    >
+                      {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />} 일관성 검증
                     </button>
                     <button
                       onClick={handleAnalyzeNextSteps}

@@ -8,48 +8,27 @@ const systemInstruction = `
 당신은 Vibe-Architect 프로젝트의 핵심 AI 설계자입니다.
 아래의 공통 규칙을 모든 작업에 엄격히 적용하십시오:
 
-1. 언어 설정: 모든 텍스트(제목, 내용, 요약, 설명 등)는 반드시 한국어로 작성하십시오. 영어 사용을 최소화하십시오.
+1. 언어 설정: 모든 텍스트는 반드시 한국어로 작성하십시오.
 2. 가독성: Markdown 작성 시 단락 구분을 위해 줄바꿈(\\n\\n)을 적절히 사용하십시오.
-3. 그래프 아키텍처: 계층적 폴더보다는 노드 간의 연결(relatedNoteIds)을 최우선으로 고려하십시오.
-4. 메타데이터 표준: yamlMetadata는 항상 다음 형식을 포함해야 합니다:
+3. 메타데이터 표준: yamlMetadata는 항상 다음 형식을 포함해야 합니다:
    - noteId: [노트의 고유 ID]
    - version: 1.0.0
-   - lastUpdated: 2026-03-15
    - tags: [키워드 목록]
-   - componentType: Core|UI|Shared|Feature
-   - dependencies: [라이브러리 목록]
-   - relatedNoteIds: [연관된 노트 ID 목록] (마인드맵 연결용)
-5. [중요] 메타데이터 분리: 모든 메타데이터(ID, 버전, 태그, 연결 정보 등)는 반드시 'yamlMetadata' 필드에만 넣으십시오. 'content' 본문에는 마크다운 형식의 설계 내용만 들어가야 하며, 'content' 내부에 'noteId', 'tags', 'relatedNoteIds' 등의 메타데이터 정보를 중복해서 넣는 것을 엄격히 금지합니다.
-6. [중요] 노트 본문(content) 구조: 모든 노트의 'content'는 반드시 다음 4개 섹션을 포함해야 하며, 충분히 상세하게 작성하십시오. 섹션 제목은 반드시 아래 형식을 따르십시오:
-   **1. 모듈의 핵심 역할 (Core Role):** (가장 쉽게 설명)
-   **2. 무엇을 하는가? (What it Does):** (비유나 쉬운 용어 사용)
-   **3. 어떻게 작동하는가? (How it Works - High-Level Flow):** (큰 그림에서 흐름 설명)
-   **4. 구체적인 알고리즘 및 기술 명세 (Detailed Algorithm & Technical Specification):**
-      - 4.1. 데이터 인터페이스 정의 (Data Contract) (Input, Output, State)
-      - 4.2. 단계별 알고리즘 (Step-by-Step Logic) (의사코드 또는 상세 논리 단계)
-      - 4.3. 예외 처리 및 제약 조건 (Edge Cases & Constraints)
-      - 4.4. 상호 연동성 및 의존성 (Dependencies)
-7. [중요] 요약(summary) 규칙: 'summary'는 "Imported from..."과 같은 출처 정보가 아니라, 해당 모듈이 시스템에서 수행하는 실제 기능을 1-2문장의 한국어로 설명해야 합니다.
-8. [중요] 폴더 및 명칭 규칙:
-   - 'Imported' 폴더는 절대 사용하지 마십시오.
-   - 'Core', 'Feature', 'Shared', 'UI', 'Logic'과 같은 기술 계층 명칭 대신, '학생 실력 추적', '문제 풀이 공간', '문제 난이도 측정', '문제 스캔'과 같이 실제 기능을 나타내는 도메인(Domain) 단위로 폴더를 구성하십시오.
-   - **[중요] 폴더명(folder)은 반드시 "상위범주/하위범주" 형태의 경로 기반 분류를 사용하십시오.** (예: "1. 시스템 인프라/데이터 보안", "2. 콘텐츠 뱅크/문제 스캔").
-   - **[중요] 유사한 도메인 폴더 통합**: '디지털 캔버스', '디지털 학습캔버스', '디지털 문제 풀이 캔버스'와 같이 유사한 목적을 가진 폴더들은 반드시 하나의 대표 도메인 폴더(예: "3. 학습 공간/디지털 캔버스")로 통합하십시오. 파편화된 폴더 생성을 엄격히 금지합니다.
-   - 모든 노드는 해당 기능이 속한 비즈니스 영역 폴더로 즉시 분류되어야 합니다.
-   - 제목에서 'Main_', 'ㄴ.', '1.' 등의 불필요한 접두어를 제거하고, 기능의 본질을 나타내는 명확한 한국어 명칭을 사용하십시오.
-   - [중요] 노트 제목에 'ㄱ, ㄴ, ㄷ' 또는 '1, 2, 3' 등의 숫자를 붙여 순서를 매기지 마십시오.
-       - 시스템의 위계질서를 폴더 이름이 아닌 'parentNoteId', 'componentType'과 'relatedNoteIds'로 표현하십시오.
-    - **[중요] 노트 제목 접두어 강제 규칙**: 모든 노트의 제목(title)은 그 성격에 따라 반드시 다음 접두어를 붙여야 합니다.
-       - 개별 함수나 유틸리티 성격의 노트: **[함수]** (예: [함수] checkAuthStatus)
-       - 파일 전체를 대변하거나 여러 함수를 포함하는 상위 노트: **[파일]** (예: [파일] 사용자 인증 관리)
-       - 비즈니스 흐름이나 복합 로직을 설명하는 노트: **[로직]** (예: [로직] 결제 승인 프로세스)
-9. [중요] 수직적 계층 구조(Hierarchy) 강화:
-   - 노트를 수평적으로 나열하지 마십시오. '문제 스캔 및 등록', '문제 스캔 및 디지털화'와 같은 세부 기능들은 '문제 스캔'이라는 상위 노트의 하위(parentNoteId 설정)로 배치하여 수직적 깊이를 확보하십시오.
-   - 기능의 크기에 따라 상위(Parent) - 하위(Child) 관계를 명확히 설정하여 균일하고 체계적인 분류를 유지하십시오.
-10. [중요] 연결성(Mindmap) 유지:
-   - 'relatedNoteIds'에는 반드시 노트의 고유 'id'를 사용하십시오. 제목을 넣지 마십시오.
-   - 최적화 과정에서 기존의 연결 관계가 끊어지지 않도록 주의하고, 새로운 논리적 연결을 적극적으로 찾아 추가하십시오.
-11. GCM 업데이트: 전역 컨텍스트 맵(GCM)을 업데이트할 때는 기존 엔티티와의 일관성을 유지하고, 불필요한 중복을 피하십시오.
+   - relatedNoteIds: [연관된 노트 ID 목록]
+4. 메타데이터 분리: 모든 메타데이터는 'yamlMetadata'에만 넣고 'content' 본문에는 마크다운 형식의 설계 내용만 작성하십시오.
+5. 노트 본문(content) 구조 (4개 섹션):
+   **1. 모듈의 핵심 역할 (Core Role)**
+   **2. 무엇을 하는가? (What it Does)**
+   **3. 어떻게 작동하는가? (How it Works - High-Level Flow)**
+   **4. 구체적인 알고리즘 및 기술 명세 (Detailed Algorithm & Technical Specification)**
+6. 요약(summary): 해당 모듈이 수행하는 실제 기능을 1-2문장의 한국어로 설명하십시오.
+7. 폴더 및 명칭 규칙:
+   - 폴더명은 반드시 "상위범주/하위범주" 형태를 사용하십시오. (예: "핵심 도메인/인증")
+   - [중요] 제목에 'Main_', '1.', '[파일]', '[로직]', '[함수]' 등의 어떠한 접두어나 숫자도 절대 붙이지 마십시오. 기능의 이름만 깔끔하게 적으십시오.
+8. [매우 중요] 수직적 계층 구조(Hierarchy)의 엄격한 제한:
+   - 부모-자식 관계는 오직 다음의 순서만 허용됩니다: **Epic -> Feature -> Task**
+   - Feature 하위에 또 Feature를 넣거나, Epic 하위에 바로 Task를 넣는 등 단계를 건너뛰거나 같은 단계를 중첩하는 것을 엄격히 금지합니다.
+   - 코드 스냅챗(Reference)은 Task 또는 Feature의 하위(증빙 자료)로만 존재할 수 있습니다.
 `;
 
 const noteSchema: Schema = {
@@ -497,7 +476,7 @@ ${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, sum
 [작업 지침]
 1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
 2. **부모 노트 (파일 단위)**:
-   - 제목: **[파일]** 한국어 제목 (예: [파일] 사용자 인증 관리)
+   - 제목: 한국어 제목 (예: 사용자 인증 관리)
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
    - 폴더: "Code Snapshot/해당_도메인"
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
@@ -512,7 +491,7 @@ ${JSON.stringify(existingSnapshotNotes.map(n => ({ id: n.id, title: n.title, sum
 Return JSON:
 {
   "parent": {
-    "title": "[파일] 제목",
+    "title": "제목",
     "folder": "Code Snapshot/...",
     "content": "파일의 전체적인 역할 및 책임 설명",
     "summary": "파일 역할 요약",
@@ -836,7 +815,6 @@ export const generateNoteFromCode = async (
 2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
 3. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
 4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
-5. **제목 접두어 규칙**: 파일 단위 분석이면 **[파일]**, 개별 함수/유틸리티면 **[함수]**, 복합 로직이면 **[로직]** 접두어를 제목 앞에 반드시 붙이십시오.
 
 파일 이름: ${fileName}
 소스 코드:
@@ -852,7 +830,6 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.
 4. 기존 노트 중 이 코드와 논리적으로 연결된 것이 있다면 relatedNoteIds에 포함시킵니다. AI가 스스로 판단하여 자동으로 연결하십시오. (반드시 ID 사용)
 5. Metadata(yamlMetadata)를 작성합니다:
    - version: 1.0.0
-   - lastUpdated: 2026-03-15
    - tags: [discovered-from-github, ...]
    - componentType: Core|UI|Shared|Feature
    - dependencies: [코드에서 발견된 주요 라이브러리]
@@ -881,7 +858,7 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
     if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
     console.error('Generate note from code failed:', err);
     return {
-      title: `[파일] ${fileName}`,
+      title: `${fileName}`,
       folder: "Imported/Source",
       content: "분석 중 오류가 발생했습니다.",
       summary: "분석 중 오류가 발생했습니다.",
@@ -1016,7 +993,8 @@ export const generateSubModules = async (
   signal?: AbortSignal
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
-  updatedGcm: GCM 
+  updatedGcm: GCM;
+  mainNoteUpdates?: { noteType?: string; parentNoteId?: string };
 }> => {
   const noteType = mainNote.noteType || 'Feature';
   let typeSpecificPrompt = '';
@@ -1035,54 +1013,48 @@ export const generateSubModules = async (
   }
 
   const prompt = `
-용도: 메인 기능의 하위 모듈 상세 설계 (마인드맵 기반)
-목표: ${typeSpecificPrompt}
-또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
+용도: 입력된 기능의 논리적 레벨(Epic/Feature/Task)을 자동 분석하고, 필요한 상위/하위 모듈을 동시에 설계합니다.
 
-그래프 원칙: "이 기능 구현을 위해 필요한 모든 논리 노드를 생성하고 관계를 선(relatedNoteIds)으로 연결하라"는 지침을 따르십시오.
-언어 설정: 모든 노트 제목(title)은 반드시 한국어로 작성하십시오.
-
-[중요] 지시사항:
-1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
-2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
-3. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
-4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
-
-메인 기능 (${noteType}):
+[입력된 메인 노트]
 제목: ${mainNote.title}
 내용: ${mainNote.content}
 요약: ${mainNote.summary}
 
-기존 노트 목록 (중복 방지 및 연결용):
+[기존 노트 목록 (부모 탐색 및 중복 방지용)]
 ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, noteType: n.noteType })))}
 
-${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
-${JSON.stringify(githubContext.files.slice(0, 100))}
-
-${githubContext.readme ? `README.md 내용:
-${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
-
-Task:
-1. 메인 기능을 구현하기 위해 필요한 하위 모듈(UI 컴포넌트, API, 데이터 모델 등)을 식별합니다.
-2. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
-3. 기존 노트 중 재사용 가능한 공통 부품이 있다면 relatedNoteIds에 포함시키고, 새로운 논리 노드만 생성합니다. (반드시 ID 사용)
-4. parentNoteId를 "${mainNote.id}"로 설정하고, 상호 연관된 노드끼리 relatedNoteIds를 설정하십시오. (반드시 ID 사용)
-5. Metadata는 다음 형식을 따릅니다: version, lastUpdated(2026-03-15), tags.
-6. [중요] 'Imported' 또는 기술 계층 폴더 사용을 금지하고, 도메인/기능 중심의 적절한 카테고리를 사용하십시오. 제목에서 불필요한 접두어를 제거하십시오.
-7. 생성되는 모든 노트의 'noteType'은 '${targetChildType}'이어야 합니다.
+[작업 지시사항]
+1. **레벨 자동 판별 및 엄격한 하위 생성**:
+   - 현재 노트가 'Epic'이면 -> 하위 노트는 **무조건 'Feature'** 단위(구체적 기능)로만 생성하십시오.
+   - 현재 노트가 'Feature'면 -> 하위 노트는 **무조건 'Task'** 단위(실제 코딩/작업 단위)로만 생성하십시오. (절대 Feature 밑에 Feature를 만들지 마십시오)
+   - 현재 노트가 'Task'면 -> 하위 노트는 더 잘게 쪼갠 'Task' 단위로 생성하십시오.
+2. **상위 노드 탐색 및 생성 (Upward)**:
+   - 현재 노트가 'Feature'라면 이것을 품을 'Epic'이 부모로 있어야 합니다. 기존 노트 중 적절한 Epic이 없다면 새로 만들어서 'newParentEpic'에 반환하십시오.
+   - 현재 노트가 'Task'라면 이것을 품을 'Feature'가 부모로 있어야 합니다.
+3. 생성되는 모든 노트의 제목에는 '[파일]', '[기능]' 등의 접두어를 일절 붙이지 마십시오.
 
 Return JSON:
 {
-  "newNotes": [
+  "detectedNoteType": "Feature", 
+  "suggestedParentId": "existing-id", 
+  "newParentEpic": { 
+    "title": "사용자 인증 시스템 구축",
+    "folder": "핵심 도메인/인증",
+    "content": "...",
+    "summary": "...",
+    "yamlMetadata": "...",
+    "noteType": "Epic" 
+  },
+  "newChildNotes": [ 
     {
-      "title": "한국어 하위 모듈 제목",
-      "folder": "상위범주/하위범주 형태의 폴더",
-      "content": "Markdown description and technical specification",
-      "summary": "Brief summary",
-      "yamlMetadata": "version: 1.0.0\\nlastUpdated: 2026-03-15\\ntags: [tag1]",
+      "title": "구글 API 키 발급", 
+      "folder": "...",
+      "content": "...",
+      "summary": "...",
+      "yamlMetadata": "...",
+      "noteType": "Task", 
       "parentNoteId": "${mainNote.id}",
-      "relatedNoteIds": ["id1", "id2"],
-      "noteType": "${targetChildType}"
+      "relatedNoteIds": []
     }
   ],
   "updatedGcm": { ... }
@@ -1098,7 +1070,10 @@ Return JSON:
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          newNotes: { type: Type.ARRAY, items: noteSchema },
+          detectedNoteType: { type: Type.STRING },
+          suggestedParentId: { type: Type.STRING },
+          newParentEpic: noteSchema,
+          newChildNotes: { type: Type.ARRAY, items: noteSchema },
           updatedGcm: {
             type: Type.OBJECT,
             properties: {
@@ -1108,7 +1083,7 @@ Return JSON:
             required: ["entities", "variables"],
           },
         },
-        required: ["newNotes", "updatedGcm"],
+        required: ["detectedNoteType", "newChildNotes", "updatedGcm"],
       },
     }
   });
@@ -1116,11 +1091,21 @@ Return JSON:
   if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text);
-  const sanitizedNewNotes = sanitizeNotes(result.newNotes || [], existingNotes);
+  
+  const rawNewNotes = [...(result.newChildNotes || [])];
+  if (result.newParentEpic) {
+    rawNewNotes.push(result.newParentEpic);
+  }
+  
+  const sanitizedNewNotes = sanitizeNotes(rawNewNotes, existingNotes);
 
   return {
     newNotes: sanitizedNewNotes,
-    updatedGcm: result.updatedGcm || currentGcm
+    updatedGcm: result.updatedGcm || currentGcm,
+    mainNoteUpdates: {
+      noteType: result.detectedNoteType,
+      parentNoteId: result.suggestedParentId
+    }
   };
 };
 

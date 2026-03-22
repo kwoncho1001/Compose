@@ -588,25 +588,32 @@ export const Dashboard: React.FC = () => {
         readme: githubReadme
       } : undefined;
 
-      const { newNotes, updatedGcm } = await generateSubModules(mainNote, state.gcm, state.notes, githubContext, signal);
+      const result = await generateSubModules(mainNote, state.gcm, state.notes, githubContext, signal);
       
       if (signal.aborted) return;
 
-      const newNotesWithIds = newNotes.map((n) => ({
+      const newNotesWithIds = result.newNotes.map((n) => ({
         ...n,
         id: Math.random().toString(36).substr(2, 9),
         status: 'Planned' as const,
       }));
 
-      const combinedNotes = [...state.notes, ...newNotesWithIds];
-      saveNotesToFirestore(combinedNotes);
-      syncProject({ gcm: updatedGcm });
+      let updatedNotesList = [...state.notes, ...newNotesWithIds];
+
+      if (result.mainNoteUpdates) {
+        updatedNotesList = updatedNotesList.map(n => 
+          n.id === mainNote.id ? { ...n, ...result.mainNoteUpdates } : n
+        );
+      }
+
+      saveNotesToFirestore(updatedNotesList);
+      syncProject({ gcm: result.updatedGcm });
 
       setState(prev => {
         return {
           ...prev,
-          notes: combinedNotes,
-          gcm: updatedGcm
+          notes: updatedNotesList,
+          gcm: result.updatedGcm
         };
       });
       

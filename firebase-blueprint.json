@@ -44,6 +44,19 @@
         "lastUpdated": { "type": "string" }
       },
       "required": ["id", "name", "gcm"]
+    },
+    "ChatMessage": {
+      "title": "Chat Message",
+      "description": "A message in a project chat, auto-deleted after 30 days",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "object", "description": "Firestore Timestamp for TTL" }
+      },
+      "required": ["id", "role", "content", "createdAt", "expiresAt"]
     }
   },
   "firestore": {
@@ -58,6 +71,10 @@
     "/users/{userId}/projects/{projectId}/syncLogs/{logId}": {
       "schema": "object",
       "description": "Sync logs for GitHub files"
+    },
+    "/users/{userId}/projects/{projectId}/chats/{chatId}": {
+      "schema": "ChatMessage",
+      "description": "Chat messages with TTL"
     }
   }
 }

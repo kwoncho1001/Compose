@@ -47,4 +47,13 @@ export interface AppState {
   lastSyncedAt?: string;
   lastSyncedSha?: string;
   fileSyncLogs?: Record<string, string>;
+  chatMessages?: ChatMessage[];
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'model';
+  content: string;
+  createdAt: string;
+  expiresAt: any; // Firebase Timestamp
 }

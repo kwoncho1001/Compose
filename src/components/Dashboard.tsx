@@ -4,7 +4,7 @@ import { NoteEditor } from './NoteEditor';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
-import { Note, GCM, AppState } from '../types';
+import { Note, GCM, AppState, ChatMessage } from '../types';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { 
@@ -21,16 +21,17 @@ import {
   translateQueryForGithub,
   refineSearchGoal,
   summarizeReposShort,
-  parseMetadata
+  parseMetadata,
+  chatWithNotes
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2 } from 'lucide-react';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, updateDoc } from 'firebase/firestore';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, updateDoc, query, orderBy } from 'firebase/firestore';
 import { Auth } from './Auth';
 
 export const Dashboard: React.FC = () => {
@@ -42,6 +43,7 @@ export const Dashboard: React.FC = () => {
     lastSyncedAt: '',
     lastSyncedSha: '',
     fileSyncLogs: {},
+    chatMessages: [],
   });
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string>('default-project');
@@ -50,6 +52,18 @@ export const Dashboard: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [githubFiles, setGithubFiles] = useState<{ path: string; sha: string }[]>([]);
   const [githubReadme, setGithubReadme] = useState<string>('');
+  
+  // Chat state
+  const [chatInput, setChatInput] = useState('');
+  const [isChatting, setIsChatting] = useState(false);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'tools' | 'chat'>('tools');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [state.chatMessages]);
+
   const userId = auth.currentUser?.uid;
 
   // Fetch projects list
@@ -125,10 +139,22 @@ export const Dashboard: React.FC = () => {
       setState(prev => ({ ...prev, fileSyncLogs: logs }));
     });
 
+    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
+    const chatsQuery = query(chatsRef, orderBy('createdAt', 'asc'));
+
+    const unsubscribeChats = onSnapshot(chatsQuery, (querySnap) => {
+      const chatsList: ChatMessage[] = [];
+      querySnap.forEach((doc) => {
+        chatsList.push(doc.data() as ChatMessage);
+      });
+      setState(prev => ({ ...prev, chatMessages: chatsList }));
+    }, (e) => handleFirestoreError(e, OperationType.GET, chatsRef.path));
+
     return () => {
       unsubscribeProject();
       unsubscribeNotes();
       unsubscribeSyncLogs();
+      unsubscribeChats();
     };
   }, [userId, currentProjectId]);
 
@@ -1225,6 +1251,66 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleChat = async () => {
+    if (!chatInput.trim() || isChatting) return;
+    
+    const now = new Date();
+    const expiryDate = new Date();
+    expiryDate.setDate(now.getDate() + 30);
+
+    const userMsg: ChatMessage = { 
+      id: Math.random().toString(36).substring(2, 11),
+      role: 'user', 
+      content: chatInput, 
+      createdAt: now.toISOString(),
+      expiresAt: expiryDate
+    };
+    
+    setChatInput('');
+    setIsChatting(true);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
+
+    try {
+      if (!userId || !currentProjectId) return;
+      const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
+      await setDoc(doc(chatsRef, userMsg.id), userMsg);
+
+      const history = (state.chatMessages || []).map(m => ({
+        role: m.role,
+        parts: m.content
+      }));
+      
+      const response = await chatWithNotes(chatInput, state.notes, history, signal);
+      
+      if (signal.aborted) return;
+
+      const aiMsg: ChatMessage = { 
+        id: Math.random().toString(36).substring(2, 11),
+        role: 'model', 
+        content: response, 
+        createdAt: new Date().toISOString(),
+        expiresAt: expiryDate
+      };
+      
+      await setDoc(doc(chatsRef, aiMsg.id), aiMsg);
+    } catch (error) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Chat cancelled');
+      } else {
+        console.error('Chat error:', error);
+        showAlert('오류', '대화 중 오류가 발생했습니다.', 'error');
+      }
+    } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      setIsChatting(false);
+    }
+  };
+
   const handleSearchExternal = async (customQuery?: string) => {
     const queryToSearch = customQuery || externalSearchQuery;
     if (!queryToSearch.trim()) return;
@@ -1769,161 +1855,272 @@ export const Dashboard: React.FC = () => {
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950/50">
             <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2 uppercase tracking-tight">
               <Sparkles className="w-4 h-4 text-amber-500" />
-              프로젝트 제어 및 분석
+              {activeSidebarTab === 'tools' ? '프로젝트 제어 및 분석' : '프로젝트 지식 가이드'}
             </h2>
-            <button onClick={() => setRightSidebarOpen(false)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md">
-              <X className="w-4 h-4 text-slate-500" />
+            <div className="flex items-center gap-1">
+              {activeSidebarTab === 'chat' && (state.chatMessages?.length || 0) > 0 && (
+                <button 
+                  onClick={async () => {
+                    if (!userId || !currentProjectId) return;
+                    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
+                    const batch = writeBatch(db);
+                    state.chatMessages?.forEach(msg => {
+                      batch.delete(doc(chatsRef, msg.id));
+                    });
+                    try {
+                      await batch.commit();
+                    } catch (e) {
+                      handleFirestoreError(e, OperationType.DELETE, 'batch-chats');
+                    }
+                  }} 
+                  className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md text-slate-500 hover:text-rose-500 transition-colors"
+                  title="대화 내역 삭제"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+              <button onClick={() => setRightSidebarOpen(false)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md">
+                <X className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+          </div>
+
+          {/* 탭 메뉴 */}
+          <div className="flex border-b border-slate-200 dark:border-slate-800">
+            <button
+              onClick={() => setActiveSidebarTab('tools')}
+              className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors ${activeSidebarTab === 'tools' ? 'text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-b-2 border-indigo-600 dark:border-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}
+            >
+              <Layers className="w-3 h-3" />
+              도구
+            </button>
+            <button
+              onClick={() => setActiveSidebarTab('chat')}
+              className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-colors ${activeSidebarTab === 'chat' ? 'text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-b-2 border-indigo-600 dark:border-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'}`}
+            >
+              <MessageSquare className="w-3 h-3" />
+              챗
             </button>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
-            {/* 섹션 1: 기능 설계 도구 */}
-            <div className="space-y-3">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
-              <div className="flex flex-col gap-2">
-                <input
-                  type="text"
-                  placeholder="추가할 기능 입력..."
-                  value={featureInput}
-                  onChange={(e) => setFeatureInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
-                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-                <button
-                  onClick={handleDecompose}
-                  disabled={isDecomposing || !featureInput.trim()}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
-                >
-                  {isDecomposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                  기능 분해 실행
-                </button>
-              </div>
-            </div>
+          <div className="flex-1 overflow-y-auto">
+            {activeSidebarTab === 'tools' ? (
+              <div className="p-4 space-y-6">
+                {/* 섹션 1: 기능 설계 도구 */}
+                <div className="space-y-3">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="text"
+                      placeholder="추가할 기능 입력..."
+                      value={featureInput}
+                      onChange={(e) => setFeatureInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
+                      className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
+                    />
+                    <button
+                      onClick={handleDecompose}
+                      disabled={isDecomposing || !featureInput.trim()}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
+                    >
+                      {isDecomposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                      기능 분해 실행
+                    </button>
+                  </div>
+                </div>
 
-            {/* 섹션 2: Github 코드 대조 및 통합 */}
-            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Github 코드 대조 및 통합</h3>
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  placeholder="Github Repo URL"
-                  value={state.githubRepo}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setState(prev => ({ ...prev, githubRepo: val }));
-                    syncProject({ githubRepo: val });
-                  }}
-                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
-                />
-                <input
-                  type="password"
-                  placeholder="Github PAT (선택 사항)"
-                  value={state.githubToken}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setState(prev => ({ ...prev, githubToken: val }));
-                    syncProject({ githubToken: val });
-                  }}
-                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
-                />
-                
-                {state.lastSyncedAt && (
-                  <div className="p-2 bg-slate-50 dark:bg-slate-800/50 rounded-md border border-slate-100 dark:border-slate-800">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] text-slate-400 font-medium uppercase">최근 동기화</span>
-                      <span className="text-[10px] text-slate-500">{new Date(state.lastSyncedAt).toLocaleString()}</span>
-                    </div>
-                    {state.lastSyncedSha && (
-                      <div className="text-[9px] text-slate-400 font-mono truncate">
-                        SHA: {state.lastSyncedSha}
+                {/* 섹션 2: Github 코드 대조 및 통합 */}
+                <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Github 코드 대조 및 통합</h3>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      placeholder="Github Repo URL"
+                      value={state.githubRepo}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setState(prev => ({ ...prev, githubRepo: val }));
+                        syncProject({ githubRepo: val });
+                      }}
+                      className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
+                    />
+                    <input
+                      type="password"
+                      placeholder="Github PAT (선택 사항)"
+                      value={state.githubToken}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setState(prev => ({ ...prev, githubToken: val }));
+                        syncProject({ githubToken: val });
+                      }}
+                      className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-1.5 text-[11px] dark:text-white"
+                    />
+                    
+                    {state.lastSyncedAt && (
+                      <div className="p-2 bg-slate-50 dark:bg-slate-800/50 rounded-md border border-slate-100 dark:border-slate-800">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] text-slate-400 font-medium uppercase">최근 동기화</span>
+                          <span className="text-[10px] text-slate-500">{new Date(state.lastSyncedAt).toLocaleString()}</span>
+                        </div>
+                        {state.lastSyncedSha && (
+                          <div className="text-[9px] text-slate-400 font-mono truncate">
+                            SHA: {state.lastSyncedSha}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                )}
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleSyncGithub()}
-                    disabled={isSyncing}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
-                    title="변경된 파일만 분석하여 코드 스냅샷을 업데이트합니다."
-                  >
-                    {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
-                    최신 코드 반영
-                  </button>
-                  <button
-                    onClick={() => handleWipeSnapshots()}
-                    disabled={isSyncing}
-                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
-                    title="GitHub에서 가져온 모든 코드 스냅샷을 삭제합니다."
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    스냅샷 초기화
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* 섹션 3: 분석 도구 모음 */}
-            <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">설계 최적화 및 분석</h3>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={handleOptimizeBlueprint}
-                  disabled={isSyncing || state.notes.length === 0}
-                  className="col-span-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-xs font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-2 shadow-sm"
-                >
-                  {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
-                </button>
-                <button
-                  onClick={handleAnalyzeNextSteps}
-                  disabled={state.notes.length === 0}
-                  className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
-                >
-                  <Lightbulb className="w-3 h-3 text-amber-500" /> 다음 단계 분석 (5개 추천)
-                </button>
-              </div>
-              <button
-                onClick={() => textFileInputRef.current?.click()}
-                className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-2 rounded-md text-[10px] font-medium flex items-center justify-center gap-2 transition-colors"
-              >
-                <FileUp className="w-3 h-3" />
-                텍스트 파일 업로드 (.md, .txt)
-              </button>
-              <input
-                type="file"
-                multiple
-                accept=".md,.txt,.yaml"
-                ref={textFileInputRef}
-                onChange={handleTextFileUpload}
-                className="hidden"
-              />
-            </div>
-
-            {/* AI 제안 및 분석 결과 */}
-            <div className="pt-2 space-y-6 border-t border-slate-100 dark:border-slate-800">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">AI 분석 및 제안</h3>
-              
-              {/* Next Step Suggestion */}
-              {nextStepSuggestion && (
-                <div className="space-y-2">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
-                    <Lightbulb className="w-3 h-3 text-amber-500" />
-                    다음 단계 제안
-                  </h3>
-                  <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/50 p-3 rounded-lg text-sm text-amber-900 dark:text-amber-200 prose prose-sm prose-amber dark:prose-invert max-w-none">
-                    <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleSyncGithub()}
+                        disabled={isSyncing}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                        title="변경된 파일만 분석하여 코드 스냅샷을 업데이트합니다."
+                      >
+                        {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Github className="w-3 h-3" />}
+                        최신 코드 반영
+                      </button>
+                      <button
+                        onClick={() => handleWipeSnapshots()}
+                        disabled={isSyncing}
+                        className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                        title="GitHub에서 가져온 모든 코드 스냅샷을 삭제합니다."
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        스냅샷 초기화
+                      </button>
+                    </div>
                   </div>
                 </div>
-              )}
 
-              {!nextStepSuggestion && (
-                <div className="text-center py-12">
-                  <Sparkles className="w-8 h-8 text-slate-200 mx-auto mb-3" />
-                  <p className="text-xs text-slate-400">현재 분석된 제안이 없습니다.<br/>상단 도구를 사용하여 분석을 시작하세요.</p>
+                {/* 섹션 3: 분석 도구 모음 */}
+                <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">설계 최적화 및 분석</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handleOptimizeBlueprint}
+                      disabled={isSyncing || state.notes.length === 0}
+                      className="col-span-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-xs font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
+                    </button>
+                    <button
+                      onClick={handleAnalyzeNextSteps}
+                      disabled={state.notes.length === 0}
+                      className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
+                    >
+                      <Lightbulb className="w-3 h-3 text-amber-500" /> 다음 단계 분석 (5개 추천)
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => textFileInputRef.current?.click()}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-3 py-2 rounded-md text-[10px] font-medium flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <FileUp className="w-3 h-3" />
+                    텍스트 파일 업로드 (.md, .txt)
+                  </button>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".md,.txt,.yaml"
+                    ref={textFileInputRef}
+                    onChange={handleTextFileUpload}
+                    className="hidden"
+                  />
                 </div>
-              )}
-            </div>
+
+                {/* AI 제안 및 분석 결과 */}
+                <div className="pt-2 space-y-6 border-t border-slate-100 dark:border-slate-800">
+                  <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">AI 분석 및 제안</h3>
+                  
+                  {/* Next Step Suggestion */}
+                  {nextStepSuggestion && (
+                    <div className="space-y-2">
+                      <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
+                        <Lightbulb className="w-3 h-3 text-amber-500" />
+                        다음 단계 제안
+                      </h3>
+                      <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/50 p-3 rounded-lg text-sm text-amber-900 dark:text-amber-200 prose prose-sm prose-amber dark:prose-invert max-w-none">
+                        <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{nextStepSuggestion}</Markdown>
+                      </div>
+                    </div>
+                  )}
+
+                  {!nextStepSuggestion && (
+                    <div className="text-center py-12">
+                      <Sparkles className="w-8 h-8 text-slate-200 mx-auto mb-3" />
+                      <p className="text-xs text-slate-400">현재 분석된 제안이 없습니다.<br/>상단 도구를 사용하여 분석을 시작하세요.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-950/20">
+                {/* 채팅 메시지 영역 */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {(state.chatMessages?.length || 0) === 0 && (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-6 opacity-50">
+                      <MessageSquare className="w-12 h-12 text-slate-300 mb-4" />
+                      <p className="text-sm font-medium text-slate-500">프로젝트 설계에 대해 궁금한 점을 물어보세요.</p>
+                      <p className="text-[10px] text-slate-400 mt-2">예: "현재 구현된 로그인 로직이 보안상 괜찮아?"</p>
+                    </div>
+                  )}
+                  {state.chatMessages?.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[90%] rounded-2xl px-4 py-2 text-sm shadow-sm ${
+                        msg.role === 'user' 
+                          ? 'bg-indigo-600 text-white rounded-tr-none' 
+                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-100 dark:border-slate-700 rounded-tl-none'
+                      }`}>
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</Markdown>
+                        </div>
+                        <div className={`text-[9px] mt-1 opacity-50 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
+                          {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {isChatting && (
+                    <div className="flex justify-start">
+                      <div className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                        <div className="flex gap-1">
+                          <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* 채팅 입력 영역 */}
+                <div className="p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+                  <div className="relative">
+                    <textarea
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleChat();
+                        }
+                      }}
+                      placeholder="메시지를 입력하세요..."
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none dark:text-white min-h-[80px] max-h-[200px]"
+                    />
+                    <button
+                      onClick={handleChat}
+                      disabled={isChatting || !chatInput.trim()}
+                      className="absolute right-3 bottom-3 p-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg transition-colors"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

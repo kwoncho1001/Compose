@@ -31,6 +31,15 @@ service cloud.firestore {
     //   - yamlMetadata: string (required)
     //   - isMainFeature: bool (optional)
     //
+    // Collection: /users/{userId}/projects/{projectId}/chats
+    // Document ID: chatId
+    // Fields:
+    //   - id: string (required)
+    //   - role: string (required, user/model)
+    //   - content: string (required)
+    //   - createdAt: string (required)
+    //   - expiresAt: timestamp (required)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -77,6 +86,15 @@ service cloud.firestore {
              (!('consistencyConflict' in data) || data.consistencyConflict == null || data.consistencyConflict is map);
     }
 
+    function isValidChatMessage(data) {
+      return data.id is string &&
+             data.role in ['user', 'model'] &&
+             data.content is string &&
+             data.content.size() <= 100000 &&
+             data.createdAt is string &&
+             data.expiresAt is timestamp;
+    }
+
     match /users/{userId} {
       allow read, write: if isOwner(userId) || isAdmin();
 
@@ -95,6 +113,13 @@ service cloud.firestore {
 
         match /syncLogs/{logId} {
           allow read, write: if isOwner(userId) || isAdmin();
+        }
+
+        match /chats/{chatId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if (isOwner(userId) || isAdmin()) && isValidChatMessage(request.resource.data);
+          allow update: if (isOwner(userId) || isAdmin()) && isValidChatMessage(request.resource.data);
+          allow delete: if isOwner(userId) || isAdmin();
         }
       }
     }

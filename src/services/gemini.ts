@@ -850,6 +850,56 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
   }
 };
 
+export const chatWithNotes = async (
+  query: string,
+  notes: Note[],
+  chatHistory: { role: 'user' | 'model', parts: string }[],
+  signal?: AbortSignal
+): Promise<string> => {
+  // 모든 노트를 다 넣으면 토큰 제한에 걸릴 수 있으므로, 
+  // 우선은 제목과 요약, 핵심 내용을 요약해서 컨텍스트로 구성합니다.
+  const context = notes.map(n => ({
+    title: n.title,
+    folder: n.folder,
+    summary: n.summary,
+    content: n.content.slice(0, 500) // 내용이 너무 길면 자름
+  }));
+
+  const prompt = `
+당신은 'Vibe-Architect'의 프로젝트 지식 가이드입니다. 
+아래 제공된 [프로젝트 설계 정보]를 바탕으로 사용자의 질문에 친절하게 답하십시오.
+
+[프로젝트 설계 정보]
+${JSON.stringify(context, null, 2)}
+
+사용자 질문: "${query}"
+`;
+
+  try {
+    const chat = ai.chats.create({
+      model: MODEL_NAME,
+      config: {
+        systemInstruction,
+        maxOutputTokens: 1000,
+      },
+      history: chatHistory.map(h => ({
+        role: h.role,
+        parts: [{ text: h.parts }]
+      })),
+    });
+
+    const response = await chat.sendMessage({ message: prompt });
+    
+    if (signal?.aborted) throw new Error("Operation cancelled");
+    
+    return response.text || "답변을 생성하지 못했습니다.";
+  } catch (err) {
+    if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;
+    console.error('Chat with notes failed:', err);
+    return "대화 중 오류가 발생했습니다.";
+  }
+};
+
 export const mergeLogicIntoNote = async (
   logicUnit: { title: string; content: string; summary: string; yamlMetadata?: string },
   targetNote: Note,

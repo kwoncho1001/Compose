@@ -387,18 +387,13 @@ export const Dashboard: React.FC = () => {
       if (signal.aborted) return;
 
       setProcessStatus({ message: 'Updating project state...' });
-      const newNotesWithIds = newNotes.map((n) => ({
-        ...n,
-        id: n.id || Math.random().toString(36).substr(2, 9),
-        status: 'Planned' as const,
-      }));
 
       const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
       updatedNotes.forEach(un => {
         existingNotesMap.set(un.id, un);
       });
 
-      const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotesWithIds];
+      const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotes];
       
       saveNotesToFirestore(combinedNotes);
       syncProject({ gcm: updatedGcm });

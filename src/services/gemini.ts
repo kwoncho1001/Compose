@@ -454,6 +454,12 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
    - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
    - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
    - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
+[엄격한 계층 구조 규칙]
+- 모든 'Feature' 타입의 노트는 반드시 'Epic' 타입의 노트를 부모(parentNoteId)로 가져야 합니다.
+- 기존 설계도 목록에 적절한 Epic이 없다면, 반드시 새로운 Epic을 생성하여 'newDesignNotes'에 포함시키고 해당 Feature를 그 아래에 배치하십시오.
+- 모든 'Task' 타입의 노트는 반드시 'Feature' 타입의 노트를 부모로 가져야 합니다.
+- 계층은 무조건 Epic -> Feature -> Task 순서를 유지해야 하며, 고립된 Feature나 Task가 생기지 않도록 하십시오.
+
 [가장 중요: 연관성 및 태그 부여]
 1. 새로 생성되는 'newDesignNotes'들은 분석 중인 소스 코드(Reference)와 반드시 'relatedNoteIds'로 연결되어야 합니다.
 2. 각 설계 노트(Epic, Feature, Task)의 태그는 코드의 실제 도메인 역할(예: '인증 로직', '데이터 매핑')을 반영해야 합니다.

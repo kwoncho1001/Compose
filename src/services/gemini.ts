@@ -5,30 +5,24 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL_NAME = "gemini-3-flash-preview";
 
 const systemInstruction = `
-당신은 Vibe-Architect 프로젝트의 핵심 AI 설계자입니다.
-아래의 공통 규칙을 모든 작업에 엄격히 적용하십시오:
+당신은 Vibe-Architect 프로젝트의 핵심 설계자입니다. 모든 작업은 '도메인 중심 트리 구조'를 따릅니다.
 
-1. 언어 설정: 모든 텍스트는 반드시 한국어로 작성하십시오.
-2. 가독성: Markdown 작성 시 단락 구분을 위해 줄바꿈(\\n\\n)을 적절히 사용하십시오.
-3. 메타데이터 표준: yamlMetadata는 항상 다음 형식을 포함해야 합니다:
-   - noteId: [노트의 고유 ID]
-   - version: 1.0.0
-   - tags: [키워드 목록]
-   - relatedNoteIds: [연관된 노트 ID 목록]
-4. 메타데이터 분리: 모든 메타데이터는 'yamlMetadata'에만 넣고 'content' 본문에는 마크다운 형식의 설계 내용만 작성하십시오.
-5. 노트 본문(content) 구조 (4개 섹션):
-   **1. 모듈의 핵심 역할 (Core Role)**
-   **2. 무엇을 하는가? (What it Does)**
-   **3. 어떻게 작동하는가? (How it Works - High-Level Flow)**
-   **4. 구체적인 알고리즘 및 기술 명세 (Detailed Algorithm & Technical Specification)**
-6. 요약(summary): 해당 모듈이 수행하는 실제 기능을 1-2문장의 한국어로 설명하십시오.
-7. 폴더 및 명칭 규칙:
-   - 폴더명은 반드시 "상위범주/하위범주" 형태를 사용하십시오. (예: "핵심 도메인/인증")
-   - [중요] 제목에 'Main_', '1.', '[파일]', '[로직]', '[함수]' 등의 어떠한 접두어나 숫자도 절대 붙이지 마십시오. 기능의 이름만 깔끔하게 적으십시오.
-8. [매우 중요] 수직적 계층 구조(Hierarchy)의 엄격한 제한:
-   - 부모-자식 관계는 오직 다음의 순서만 허용됩니다: **Epic -> Feature -> Task**
-   - Feature 하위에 또 Feature를 넣거나, Epic 하위에 바로 Task를 넣는 등 단계를 건너뛰거나 같은 단계를 중첩하는 것을 엄격히 금지합니다.
-   - 코드 스냅챗(Reference)은 Task 또는 Feature의 하위(증빙 자료)로만 존재할 수 있습니다.
+[필수 계층 규칙]
+1. 계층은 반드시 Epic -> Feature -> Task 순서를 따릅니다. 단계 건너뛰기나 중첩은 금지됩니다.
+2. 폴더명은 반드시 "상위도메인/하위도메인" 형식을 사용하며, 하나의 기능 분해 결과물은 원칙적으로 동일하거나 인접한 도메인 폴더에 모여야 합니다.
+
+[작업 순서]
+1. 분석: 사용자의 요청을 분석하여 최상위 도메인과 목표를 정의합니다.
+2. 오버뷰(Overview) 생성: 실제 노트를 만들기 전, Epic-Feature-Task의 트리 구조를 텍스트로 먼저 설계합니다.
+3. 순차적 생성: 
+   - 최상위 Epic 노드를 생성합니다.
+   - Epic의 자식인 Feature 노드들을 생성하고 parentNoteId를 Epic ID로 연결합니다.
+   - Feature의 자식인 Task 노드들을 생성하고 parentNoteId를 각 Feature ID로 연결합니다.
+
+[메타데이터 및 가독성]
+- 모든 텍스트는 한국어로 작성합니다.
+- yamlMetadata에는 반드시 noteId, parentNoteId, noteType을 포함하십시오.
+- 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
 
 const noteSchema: Schema = {
@@ -76,7 +70,14 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
   const titleToIdMap = new Map(allNotes.map(n => [n.title, n.id]));
   
   return updatedNotes.map(note => {
-    if (!note.relatedNoteIds) return note;
+    let sanitizedParentId = note.parentNoteId;
+    if (sanitizedParentId) {
+      if (titleToIdMap.has(sanitizedParentId)) {
+        sanitizedParentId = titleToIdMap.get(sanitizedParentId)!;
+      }
+    }
+
+    if (!note.relatedNoteIds) return { ...note, parentNoteId: sanitizedParentId };
     
     const sanitizedIds = note.relatedNoteIds.map((idOrTitle: string) => {
       if (allNotesMap.has(idOrTitle)) return idOrTitle;
@@ -84,7 +85,7 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
       return idOrTitle;
     }).filter((id: any) => id && typeof id === 'string');
     
-    return { ...note, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
+    return { ...note, parentNoteId: sanitizedParentId, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
   });
 };
 
@@ -95,48 +96,45 @@ export const decomposeFeature = async (
   githubContext?: { repoName: string; files: string[]; readme?: string },
   signal?: AbortSignal
 ): Promise<{ 
-  newNotes: Omit<Note, 'id' | 'status'>[]; 
+  newNotes: (Omit<Note, 'id' | 'status'> & { id?: string })[]; 
   updatedNotes: Note[];
   updatedGcm: GCM 
 }> => {
   const step1Prompt = `
-목표: 신규 기능을 설계하되, 기존에 정의된 노트들과의 중복을 피하고 유사 기능은 기존 노트를 업데이트합니다.
-또한, 연결된 Github 저장소의 코드 구조를 참조하여 실제 구현 가능성을 고려합니다.
+목표: 사용자의 요청을 분석하여 '도메인 중심 트리 구조'의 설계 도면(Overview)을 작성합니다.
 
-기존 노트 목록 (요약):
-${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary, noteType: n.noteType })))}
+[기존 프로젝트 컨텍스트]
+기존 노트 목록: ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, noteType: n.noteType })))}
+${githubContext ? `Github 파일 목록: ${JSON.stringify(githubContext.files.slice(0, 100))}` : ''}
 
-${githubContext ? `연결된 Github 저장소 (${githubContext.repoName}) 파일 목록:
-${JSON.stringify(githubContext.files.slice(0, 100))}
+[사용자 요청]
+"${featureRequest}"
 
-${githubContext.readme ? `README.md 내용:
-${githubContext.readme.slice(0, 2000)}` : ''}` : '연결된 Github 저장소가 없습니다.'}
+[작업 지침]
+1. 이 기능의 가장 상위 개념인 'Epic'을 정의하십시오.
+2. Epic을 구현하기 위한 하위 'Feature'들을 도출하십시오.
+3. 각 Feature를 완료하기 위한 구체적인 'Task'들을 설계하십시오.
+4. 모든 요소는 반드시 "상위도메인/하위도메인" 형식의 동일한 폴더 경로를 공유해야 합니다.
+5. 기존 노트와 중복되는 기능이 있다면 'reusedNoteIds'에 포함시키고, 신규로 만들어야 할 것들만 'structure'에 넣으십시오.
 
-User Request: "${featureRequest}"
-
-Task:
-1. 사용자의 요청을 분석하여 이 요청이 어느 레벨(Epic, Feature, Task)에 해당하는지 자동 판별(noteType)하십시오.
-   - [분류 기준] Epic: 거대한 목표 (예: 사용자 인증 시스템) / Feature: 구체적 기능 (예: 구글 로그인) / Task: 실제 작업 (예: API 키 발급, UI 생성)
-2. 기존 노트 중 재사용 가능한 '공통 부품'이 있는지 판단합니다.
-3. Github 파일 목록을 참고하여, 해당 기능이 어떤 파일이나 모듈과 연관될지 추론하고 설계에 반영하십시오.
-4. 유사한 노드가 있다면 해당 노드의 ID를 사용하여 업데이트 명세를 작성하고, relatedNoteIds에 포함시킵니다.
-5. 완전히 새로운 구성 요소만 신규 노트로 생성합니다.
-6. relatedNoteIds를 통해 마인드맵 상에서 논리적으로 연결될 모든 노드를 자동으로 찾아 연결하십시오. (반드시 ID 사용)
-7. [중요] 'summary'는 반드시 해당 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다. 파일 이름이나 경로 정보를 넣지 마십시오.
-8. [중요] 'content'는 반드시 시스템 지침에 정의된 4개 섹션 구조를 따라야 합니다.
-9. [중요] 폴더명(folder)은 반드시 "상위범주/하위범주" 형태의 경로 기반 분류를 사용하십시오. (예: "1. 시스템 인프라/데이터 보안", "2. 콘텐츠 뱅크/문제 스캔"). 'Imported'나 기술 계층 명칭은 금지합니다.
-10. [중요] 독립적인 기능보다는 상위 개념에 종속된 트리 구조로 설계하십시오. 제목에서 불필요한 접두어(Main_, ㄴ. 등)를 제거하십시오.
-
-Return JSON:
+[Return JSON Format]
 {
-  "title": "한국어 제목",
-  "folder": "한국어_폴더_이름",
-  "content": "시스템 지침의 4개 섹션 구조를 따른 상세 내용",
-  "summary": "한국어 요약 (역할 중심)",
-  "yamlMetadata": "noteId: [id]\\nversion: 1.0.0\\ntags: [tag1]\\nrelatedNoteIds: []",
-  "reusedNoteIds": ["id1", "id2"],
-  "newComponents": ["New Component 1"],
-  "noteType": "Epic | Feature | Task"
+  "title": "최상위 Epic 제목",
+  "folder": "도메인/하위도메인",
+  "overview": "여기에 Epic-Feature-Task로 이어지는 트리 구조를 텍스트로 상세히 기술하십시오.",
+  "noteType": "Epic",
+  "structure": {
+    "epic": { "title": "Epic 제목", "summary": "Epic 요약" },
+    "features": [
+      { 
+        "title": "Feature 제목", 
+        "tasks": ["Task 제목 1", "Task 제목 2"] 
+      }
+    ]
+  },
+  "yamlMetadata": "noteId: [임시ID]\\nnoteType: Epic",
+  "newComponents": ["도출된 하위 기능 및 작업들의 목록"],
+  "reusedNoteIds": []
 }
 `;
 
@@ -151,44 +149,69 @@ Return JSON:
         properties: {
           title: { type: Type.STRING },
           folder: { type: Type.STRING },
-          content: { type: Type.STRING },
-          summary: { type: Type.STRING },
-          yamlMetadata: { type: Type.STRING },
-          reusedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-          newComponents: { type: Type.ARRAY, items: { type: Type.STRING } },
+          overview: { type: Type.STRING },
           noteType: { type: Type.STRING },
+          structure: {
+            type: Type.OBJECT,
+            properties: {
+              epic: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  summary: { type: Type.STRING }
+                },
+                required: ["title", "summary"]
+              },
+              features: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    tasks: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  },
+                  required: ["title", "tasks"]
+                }
+              }
+            },
+            required: ["epic", "features"]
+          },
+          yamlMetadata: { type: Type.STRING },
+          newComponents: { type: Type.ARRAY, items: { type: Type.STRING } },
+          reusedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
-        required: ["title", "folder", "content", "summary", "yamlMetadata", "reusedNoteIds", "newComponents", "noteType"],
+        required: ["title", "folder", "overview", "noteType", "structure", "yamlMetadata", "newComponents", "reusedNoteIds"],
       },
     },
   });
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  const mainFeature = safeJsonParse(step1Response.text);
+  const designOverview = safeJsonParse(step1Response.text);
 
   const step2Prompt = `
-메인 기능: "${mainFeature.title}"
-메인 기능 레벨: "${mainFeature.noteType}"
-상세 내용: ${mainFeature.content}
-신규 구성 요소: ${JSON.stringify(mainFeature.newComponents)}
-재사용 노트 ID: ${JSON.stringify(mainFeature.reusedNoteIds)}
+설계 도면(Overview):
+${designOverview.overview}
+
+구조 데이터(Structure):
+${JSON.stringify(designOverview.structure, null, 2)}
 
 작업:
-1. 신규 구성 요소들을 각각 독립적인 노트로 분해하십시오. (4개 섹션 구조 준수)
-2. 재사용되는 기존 노트들에 대해, 이번 신규 기능과의 연동을 위한 업데이트 내용을 작성하십시오.
-3. GCM(엔티티, 변수)을 최적화하여 업데이트하십시오.
-4. 모든 노트는 "상위범주/하위범주" 폴더 형식을 유지하십시오.
-5. 모든 텍스트는 한국어로 작성하십시오.
-6. 생성되는 모든 하위 노트의 'noteType'은 메인 기능의 레벨에 따라 엄격히 하위 레벨로 지정하십시오. (Epic -> Feature, Feature -> Task, Task -> Task)
+1. 최상위 Epic: Step 1의 epic 정보를 바탕으로 content(4개 섹션 구조)를 작성하십시오.
+2. 하위 Feature: 각 Feature에 대해 content를 작성하고 parentNoteId를 Epic의 ID로 지정하십시오.
+3. 하위 Task: 각 Task에 대해 content를 작성하고 parentNoteId를 해당 Feature의 ID로 지정하십시오.
+4. 모든 노트는 Step 1에서 정한 폴더("${designOverview.folder}")를 반드시 상속받아야 합니다.
+5. GCM(엔티티, 변수)을 이 설계에 맞춰 업데이트하십시오.
 
 Current GCM:
 ${JSON.stringify(currentGcm, null, 2)}
 
-Return JSON:
+[Return JSON Format]
 {
-  "newDetailNotes": [ { title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds, noteType } ],
-  "updatedDetailNotes": [ { id, title, folder, content, summary, yamlMetadata, parentNoteId, relatedNoteIds, noteType } ],
+  "newDetailNotes": [ 
+    { "title": "...", "folder": "...", "content": "...", "summary": "...", "yamlMetadata": "...", "noteType": "Epic|Feature|Task", "parentNoteId": "..." } 
+  ],
+  "updatedDetailNotes": [],
   "updatedGcm": { ... }
 }
 `;
@@ -215,28 +238,24 @@ Return JSON:
 
   const step2Result = safeJsonParse(step2Response.text);
   
-  const mainNote: Omit<Note, 'id' | 'status'> = {
-    title: mainFeature.title,
-    folder: mainFeature.folder,
-    content: mainFeature.content,
-    summary: mainFeature.summary,
-    yamlMetadata: mainFeature.yamlMetadata,
-    relatedNoteIds: mainFeature.reusedNoteIds || [],
-    noteType: (mainFeature.noteType as NoteType) || 'Feature',
-  };
-
-  // --- [🔥 새로 추가: AI가 뭐라 하든 무시하고 계급 강제 할당] ---
-  const expectedChildType = mainNote.noteType === 'Epic' ? 'Feature' : 'Task';
+  // AI가 생성한 노트들에 임시 ID 부여 및 parentNoteId 맵핑
+  const tempIdMap = new Map<string, string>();
   
-  if (step2Result.newDetailNotes) {
-    step2Result.newDetailNotes.forEach((n: any) => n.noteType = expectedChildType);
-  }
-  if (step2Result.updatedDetailNotes) {
-    step2Result.updatedDetailNotes.forEach((n: any) => n.noteType = expectedChildType);
-  }
-  // -------------------------------------------------------------
+  const processedNewNotes = (step2Result.newDetailNotes || []).map((n: any) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    tempIdMap.set(n.title, id);
+    return { ...n, id };
+  });
 
-  const sanitizedNewNotes = sanitizeNotes([mainNote, ...(step2Result.newDetailNotes || [])], existingNotes);
+  // parentNoteId를 제목에서 실제 생성된 ID로 교체
+  const finalNewNotes = processedNewNotes.map((n: any) => {
+    if (n.parentNoteId && tempIdMap.has(n.parentNoteId)) {
+      return { ...n, parentNoteId: tempIdMap.get(n.parentNoteId) };
+    }
+    return n;
+  });
+  
+  const sanitizedNewNotes = sanitizeNotes(finalNewNotes, existingNotes);
   const sanitizedUpdatedNotes = sanitizeNotes(step2Result.updatedDetailNotes || [], existingNotes);
 
   return {

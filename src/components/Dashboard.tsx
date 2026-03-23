@@ -389,7 +389,7 @@ export const Dashboard: React.FC = () => {
       setProcessStatus({ message: 'Updating project state...' });
       const newNotesWithIds = newNotes.map((n) => ({
         ...n,
-        id: Math.random().toString(36).substr(2, 9),
+        id: n.id || Math.random().toString(36).substr(2, 9),
         status: 'Planned' as const,
       }));
 

@@ -4,7 +4,6 @@ import { NoteEditor } from './NoteEditor';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
-import HierarchyCleanupModal from './HierarchyCleanupModal';
 import { Note, GCM, AppState, ChatMessage, NoteType, NoteStatus } from '../types';
 import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import Markdown from 'react-markdown';
@@ -26,7 +25,9 @@ import {
   summarizeReposShort,
   parseMetadata,
   chatWithNotes,
-  generateParentNode
+  generateParentNode,
+  suggestOrCreateParent,
+  suggestOrCreateParentsBatch
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
@@ -299,8 +300,6 @@ export const Dashboard: React.FC = () => {
   const [isTranspiling, setIsTranspiling] = useState(false);
   const [refinedGoals, setRefinedGoals] = useState<string[]>([]);
   const [isRefiningGoals, setIsRefiningGoals] = useState(false);
-  const [isCleanupModalOpen, setIsCleanupModalOpen] = useState(false);
-  const [invalidNotesForCleanup, setInvalidNotesForCleanup] = useState<Note[]>([]);
   const [analysisProgress, setAnalysisProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [transferStep, setTransferStep] = useState<1 | 2 | 3 | 4>(1);
   const [repoSummaries, setRepoSummaries] = useState<Record<string, { nickname: string; summary: string; features: string }>>({});
@@ -593,7 +592,7 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleEnforceHierarchy = async () => {
-    if (state.notes.length === 0) return;
+    if (state.notes.length === 0 || !userId || !currentProjectId) return;
 
     const invalidNotes = findInvalidHierarchyNotes(state.notes);
     
@@ -602,47 +601,116 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
-    setInvalidNotesForCleanup(invalidNotes);
-    setIsCleanupModalOpen(true);
-  };
-
-  const handleApplyCleanup = async (newNotes: Note[], updatedNotes: Note[]) => {
-    if (!userId || !currentProjectId) return;
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
 
     setIsSyncing(true);
-    setProcessStatus({ message: '계층 구조 변경사항 적용 중...' });
+    setProcessStatus({ message: `계층 구조 분석 중 (${invalidNotes.length}개 노드)...` });
 
     try {
-      // 1. 새 노드 저장
-      if (newNotes.length > 0) {
-        await saveNotesToFirestore(newNotes);
+      const { results } = await suggestOrCreateParentsBatch(invalidNotes, state.notes, signal);
+      
+      if (signal.aborted) return;
+
+      const newNotes: Note[] = [];
+      const updatedNotes: Note[] = [];
+      let currentAllNotes = [...state.notes];
+
+      // Group by newNote title to avoid creating duplicate parents for the same batch
+      const newParentMap = new Map<string, string>(); // title -> id
+
+      for (const res of results) {
+        const orphanNote = invalidNotes.find(n => n.id === res.orphanNoteId);
+        if (!orphanNote) continue;
+
+        let parentId = res.parentId;
+
+        if (res.action === 'clear') {
+          const updatedOrphan = {
+            ...orphanNote,
+            parentNoteIds: []
+          };
+          updatedNotes.push(updatedOrphan);
+          continue;
+        }
+
+        if (res.action === 'create' && res.newNote) {
+          const parentTitle = res.newNote.title || 'New Parent';
+          if (newParentMap.has(parentTitle)) {
+            parentId = newParentMap.get(parentTitle);
+          } else {
+            const newParent: Note = {
+              ...res.newNote,
+              id: Math.random().toString(36).substr(2, 9),
+              childNoteIds: [orphanNote.id],
+            } as Note;
+            newNotes.push(newParent);
+            currentAllNotes.push(newParent);
+            parentId = newParent.id;
+            newParentMap.set(parentTitle, parentId!);
+          }
+        }
+
+        if (parentId) {
+          const updatedOrphan = {
+            ...orphanNote,
+            parentNoteIds: Array.from(new Set([...orphanNote.parentNoteIds, parentId]))
+          };
+          updatedNotes.push(updatedOrphan);
+          
+          // Update parent's childNoteIds if it's an existing note
+          const existingParent = currentAllNotes.find(n => n.id === parentId);
+          if (existingParent) {
+            const updatedParent = {
+              ...existingParent,
+              childNoteIds: Array.from(new Set([...existingParent.childNoteIds, orphanNote.id]))
+            };
+            // Check if already in updatedNotes or newNotes
+            const existingInUpdated = updatedNotes.findIndex(un => un.id === parentId);
+            if (existingInUpdated !== -1) {
+              updatedNotes[existingInUpdated] = updatedParent;
+            } else {
+              const existingInNew = newNotes.findIndex(nn => nn.id === parentId);
+              if (existingInNew !== -1) {
+                newNotes[existingInNew] = updatedParent;
+              } else {
+                updatedNotes.push(updatedParent);
+              }
+            }
+          }
+        }
       }
 
-      // 2. 업데이트된 노드 저장
-      if (updatedNotes.length > 0) {
-        await saveNotesToFirestore(updatedNotes);
-      }
+      // Apply changes
+      if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
+      if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
 
-      // 3. 전체 상태 업데이트 및 계층 동기화
-      const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
-      const allNotes = [...state.notes, ...newNotes];
       const affectedMap = new Map<string, Note>();
+      const finalNotes = [...state.notes, ...newNotes];
 
       updatedNotes.forEach(un => {
-        const affected = syncNoteRelationships(un, allNotes);
+        const affected = syncNoteRelationships(un, finalNotes);
         affected.forEach(an => affectedMap.set(an.id, an));
         affectedMap.set(un.id, un);
       });
 
-      const syncedNotes = allNotes.map(note => affectedMap.get(note.id) || note);
+      const syncedNotes = finalNotes.map(note => affectedMap.get(note.id) || note);
 
-      await saveNotesToFirestore(syncedNotes);
-      setState(prev => ({ ...prev, notes: syncedNotes }));
+      // 4. 무결성 자동 세척 및 완료 (sanitizeNoteIntegrity)
+      const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
+
+      await saveNotesToFirestore(finalSanitizedNotes);
+      setState(prev => ({ ...prev, notes: finalSanitizedNotes }));
       
-      showAlert('성공', '계층 구조 보정이 완료되었습니다.', 'success');
+      showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
     } catch (error) {
-      console.error('Cleanup apply failed', error);
-      showAlert('오류', '변경사항 적용 중 오류가 발생했습니다.', 'error');
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Hierarchy optimization cancelled');
+      } else {
+        console.error('Hierarchy optimization failed', error);
+        showAlert('오류', '최적화 중 오류가 발생했습니다.', 'error');
+      }
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -2578,15 +2646,6 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
         </div>
-      )}
-      {isCleanupModalOpen && (
-        <HierarchyCleanupModal
-          isOpen={isCleanupModalOpen}
-          onClose={() => setIsCleanupModalOpen(false)}
-          invalidNotes={invalidNotesForCleanup}
-          allNotes={state.notes}
-          onApply={handleApplyCleanup}
-        />
       )}
       {dialogConfig && (
         <Dialog

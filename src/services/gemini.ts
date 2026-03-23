@@ -65,49 +65,80 @@ export const parseMetadata = (yaml: string): Record<string, string> => {
 };
 
 const safeJsonParse = (text: string) => {
+  if (!text) return null;
   try {
-    const cleaned = text.replace(/^```json\n?/, '').replace(/\n?```$/, '').trim();
+    // Remove markdown code blocks if present
+    const cleaned = text.replace(/```json\s?([\s\S]*?)\s?```/g, '$1')
+                        .replace(/^```json\n?/, '')
+                        .replace(/\n?```$/, '')
+                        .trim();
     return JSON.parse(cleaned);
   } catch (e) {
+    // If parsing fails, try to find the first '{' and last '}'
+    try {
+      const firstBrace = text.indexOf('{');
+      const lastBrace = text.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        const potentialJson = text.substring(firstBrace, lastBrace + 1);
+        return JSON.parse(potentialJson);
+      }
+    } catch (innerE) {
+      // Ignore inner error
+    }
     console.error("Failed to parse JSON response from AI:", text);
     throw new Error(`AI returned invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
   }
 };
 
-const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
+const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]): Note[] => {
   const allNotesMap = new Map(allNotes.map(n => [n.id, n]));
   const titleToIdMap = new Map(allNotes.map(n => [n.title, n.id]));
   
   return updatedNotes.map(note => {
     const existingNote = note.id ? allNotesMap.get(note.id) : null;
     
-    const rawParentIds = Array.isArray(note.parentNoteIds) ? note.parentNoteIds : (note.parentNoteId ? [note.parentNoteId] : (existingNote?.parentNoteIds || []));
-    const sanitizedParentIds = rawParentIds.map((idOrTitle: string) => {
-      if (allNotesMap.has(idOrTitle)) return idOrTitle;
-      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
-      return idOrTitle;
-    }).filter((id: any) => id && typeof id === 'string');
-
-    const rawRelatedIds = Array.isArray(note.relatedNoteIds) ? note.relatedNoteIds : (existingNote?.relatedNoteIds || []);
-    const sanitizedRelatedIds = rawRelatedIds.map((idOrTitle: string) => {
-      if (allNotesMap.has(idOrTitle)) return idOrTitle;
-      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
-      return idOrTitle;
-    }).filter((id: any) => id && typeof id === 'string');
+    // Ensure arrays
+    const rawParentIds = Array.isArray(note.parentNoteIds) 
+      ? note.parentNoteIds 
+      : (note.parentNoteId ? [note.parentNoteId] : (existingNote?.parentNoteIds || []));
     
+    const sanitizedParentIds = rawParentIds.map((idOrTitle: any) => {
+      if (typeof idOrTitle !== 'string') return null;
+      if (allNotesMap.has(idOrTitle)) return idOrTitle;
+      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
+      return idOrTitle;
+    }).filter((id: any): id is string => !!id && typeof id === 'string');
+
+    const rawRelatedIds = Array.isArray(note.relatedNoteIds) 
+      ? note.relatedNoteIds 
+      : (existingNote?.relatedNoteIds || []);
+    
+    const sanitizedRelatedIds = rawRelatedIds.map((idOrTitle: any) => {
+      if (typeof idOrTitle !== 'string') return null;
+      if (allNotesMap.has(idOrTitle)) return idOrTitle;
+      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
+      return idOrTitle;
+    }).filter((id: any): id is string => !!id && typeof id === 'string');
+    
+    const sanitizedTags = Array.isArray(note.tags) ? note.tags : (existingNote?.tags || []);
+    const sanitizedChildIds = Array.isArray(note.childNoteIds) ? note.childNoteIds : (existingNote?.childNoteIds || []);
+
     return { 
       ...existingNote,
       ...note, 
+      id: note.id || existingNote?.id || Math.random().toString(36).substr(2, 9),
       parentNoteIds: Array.from(new Set(sanitizedParentIds)), 
       relatedNoteIds: Array.from(new Set(sanitizedRelatedIds)),
-      childNoteIds: Array.isArray(note.childNoteIds) ? note.childNoteIds : (existingNote?.childNoteIds || []),
-      tags: Array.isArray(note.tags) ? note.tags : (existingNote?.tags || []),
+      childNoteIds: Array.from(new Set(sanitizedChildIds)),
+      tags: Array.from(new Set(sanitizedTags.filter((t: any) => typeof t === 'string'))),
       priority: note.priority || existingNote?.priority || 'C',
       status: note.status || existingNote?.status || 'Planned',
       version: note.version || existingNote?.version || '1.0.0',
-      lastUpdated: note.lastUpdated || new Date().toISOString(),
-      importance: note.importance || existingNote?.importance || 3
-    };
+      lastUpdated: new Date().toISOString(),
+      importance: note.importance || existingNote?.importance || 3,
+      noteType: note.noteType || existingNote?.noteType || 'Task',
+      folder: note.folder || existingNote?.folder || 'Uncategorized',
+    } as Note;
   });
 };
 
@@ -152,6 +183,112 @@ export const generateParentNode = async (
     lastUpdated: new Date().toISOString(),
   };
 };
+export const suggestOrCreateParentsBatch = async (
+  orphanNotes: Note[],
+  allNotes: Note[],
+  signal?: AbortSignal
+): Promise<{ 
+  results: { 
+    orphanNoteId: string;
+    action: 'match' | 'create' | 'clear'; 
+    parentId?: string; 
+    newNote?: Partial<Note> 
+  }[] 
+}> => {
+  if (orphanNotes.length === 0) return { results: [] };
+
+  const designNotes = allNotes.filter(n => n.noteType !== 'Reference');
+  
+  const prompt = `
+    당신은 지식 관리 전문가입니다. 아래 '고아 노드'들을 적절한 부모 노드에 할당해야 합니다.
+    
+    [고아 노드 목록]
+    ${orphanNotes.map(n => `- ID: ${n.id}, 타입: ${n.noteType}, 제목: ${n.title}, 요약: ${n.summary}`).join('\n')}
+
+    [규칙]
+    - Task의 부모는 반드시 Feature 타입이어야 함.
+    - Feature의 부모는 반드시 Epic 타입이어야 함.
+
+    [기존 부모 후보 (이미 존재하는 설계 노트 목록)]
+    ${designNotes.map(p => `- ID: ${p.id}, 타입: ${p.noteType}, 제목: ${p.title}, 요약: ${p.summary}`).join('\n')}
+
+    작업:
+    1. 각 고아 노드에 대해, 기존 후보 중 논리적으로 포함할 수 있는 가장 적합한 부모가 있다면 해당 ID를 선택하세요. (action: "match")
+       - 부모 후보가 이미 자식을 가지고 있는지 여부는 전혀 상관하지 마십시오. 내용상 가장 논리적인 부모를 찾으면 됩니다.
+    2. 적합한 후보가 없다면, 이 노드를 아우를 수 있는 새로운 부모 노드(Task면 Feature, Feature면 Epic)를 즉석에서 설계하십시오. (action: "create")
+       - 사용자의 개입 없이 당신이 직접 최적의 제목과 내용을 결정하여 설계하십시오.
+    3. 만약 해당 노드가 Epic인데 부모가 있는 경우 등, 계층 규칙상 부모가 없어야 하는 상황이라면 부모 연결을 제거하도록 제안하십시오. (action: "clear")
+    4. 여러 고아 노드가 하나의 새로운 부모를 공유할 수 있다면, 동일한 newNote 정보를 사용하도록 하되, 결과 리스트에는 각각 포함시키십시오.
+    
+    결과 포맷: JSON { "results": [ { "orphanNoteId": "string", "action": "match" | "create" | "clear", "parentId": "string (match인 경우)", "newNote": { "title": "string", "content": "string", "summary": "string" } } ] }
+  `;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          results: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                orphanNoteId: { type: Type.STRING },
+                action: { type: Type.STRING, enum: ['match', 'create', 'clear'] },
+                parentId: { type: Type.STRING },
+                newNote: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    content: { type: Type.STRING },
+                    summary: { type: Type.STRING },
+                  }
+                }
+              },
+              required: ["orphanNoteId", "action"]
+            }
+          }
+        },
+        required: ["results"]
+      }
+    },
+  });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  const result = safeJsonParse(response.text || "{\"results\": []}");
+  
+  // Sanitize results
+  const sanitizedResults = (result.results || []).map((res: any) => {
+    const orphanNote = orphanNotes.find(n => n.id === res.orphanNoteId);
+    if (!orphanNote) return res;
+
+    if (res.action === 'create' && res.newNote) {
+      const requiredParentType = orphanNote.noteType === 'Task' ? 'Feature' : 'Epic';
+      res.newNote = {
+        ...res.newNote,
+        noteType: requiredParentType,
+        folder: orphanNote.folder,
+        status: 'Planned',
+        priority: 'B',
+        version: '1.0.0',
+        lastUpdated: new Date().toISOString(),
+        importance: 3,
+        parentNoteIds: [],
+        relatedNoteIds: [orphanNote.id],
+        tags: orphanNote.tags || [],
+      };
+    }
+    return res;
+  });
+
+  return { results: sanitizedResults };
+};
+
 export const suggestOrCreateParent = async (
   orphanNote: Note,
   candidateParents: Note[],
@@ -217,17 +354,22 @@ export const suggestOrCreateParent = async (
   const result = safeJsonParse(response.text || "{}");
   
   if (result.action === 'create' && result.newNote) {
+    const newNote: Partial<Note> = {
+      ...result.newNote,
+      noteType: requiredParentType,
+      folder: orphanNote.folder,
+      status: 'Planned',
+      priority: 'B',
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      importance: 3,
+      parentNoteIds: [],
+      relatedNoteIds: [orphanNote.id],
+      tags: orphanNote.tags || [],
+    };
     return {
       action: 'create',
-      newNote: {
-        ...result.newNote,
-        noteType: requiredParentType,
-        folder: orphanNote.folder,
-        status: 'Planned',
-        priority: 'B',
-        version: '1.0.0',
-        lastUpdated: new Date().toISOString(),
-      }
+      newNote
     };
   }
 
@@ -260,7 +402,8 @@ export const decomposeFeature = async (
 
   // --- [🔥 핵심 변경: 부모 ID 및 계급 강제 설정] ---
   const mainNoteId = Math.random().toString(36).substr(2, 9);
-  const parentType = (mainFeature.noteType === 'Epic' || featureRequest.includes('시스템')) ? 'Epic' : 'Feature';
+  const isSystemRequest = featureRequest && typeof featureRequest === 'string' && (featureRequest.includes('시스템') || featureRequest.includes('인프라') || featureRequest.includes('아키텍처'));
+  const parentType = (mainFeature.noteType === 'Epic' || isSystemRequest) ? 'Epic' : 'Feature';
   const childType = parentType === 'Epic' ? 'Feature' : 'Task';
 
   const mainNote: Note = {
@@ -999,7 +1142,7 @@ export const generateImpactAnalysis = async (
 요약: ${note.summary}
 메타데이터:
 - 중요도: ${note.importance}
-- 태그: ${note.tags.join(', ')}
+- 태그: ${note.tags?.join(', ') || '없음'}
 - 깃허브 링크: ${note.githubLink || 'N/A'}
 
 [전체 프로젝트 컨텍스트]
@@ -1165,7 +1308,7 @@ export const mergeLogicIntoNote = async (
 내용: ${targetNote.content}
 메타데이터:
 - 중요도: ${targetNote.importance}
-- 태그: ${targetNote.tags.join(', ')}
+- 태그: ${targetNote.tags?.join(', ') || '없음'}
 
 [새로운 코드 분석 결과]
 제목: ${logicUnit.title}
@@ -1495,18 +1638,20 @@ export const validateYamlMetadata = (content: string, gcm?: GCM): { isValid: boo
   const meta: Record<string, string> = {};
   
   lines.forEach((line, index) => {
-    if (line.trim() && !line.includes(':')) {
+    if (!line) return;
+    const trimmedLine = line.trim();
+    if (trimmedLine && !trimmedLine.includes(':')) {
       errors.push(`Line ${index + 1}: 올바른 YAML 형식이 아닙니다 (키: 값 형식이 필요함)`);
-    } else if (line.includes(':')) {
-      const [key, ...val] = line.split(':');
+    } else if (trimmedLine.includes(':')) {
+      const [key, ...val] = trimmedLine.split(':');
       meta[key.trim()] = val.join(':').trim();
     }
   });
 
-  if (!yamlStr.includes('relatedNoteIds:')) {
+  if (yamlStr && !yamlStr.includes('relatedNoteIds:')) {
     errors.push("마인드맵 연결을 위한 'relatedNoteIds' 필드가 메타데이터에 필요합니다.");
   }
-  if (!yamlStr.includes('noteId:')) {
+  if (yamlStr && !yamlStr.includes('noteId:')) {
     errors.push("노트 식별을 위한 'noteId' 필드가 메타데이터에 필요합니다.");
   }
 
@@ -1624,7 +1769,7 @@ export const transpileExternalLogic = async (
   당신은 '대화형 선별 이식(Interactive Selective Transfer)' 전문가입니다. 
   외부 프로젝트의 핵심 로직을 분석하여, 우리 프로젝트의 도메인 언어와 변수 체계(GCM)에 맞게 재구성한 설계도를 생성하십시오.
   
-  대상 기능들: ${featureTitles.join(', ')}
+  대상 기능들: ${featureTitles?.join(', ') || '없음'}
   외부 소스 코드:
   ${externalCodes.map(c => `File: ${c.path}\nContent:\n${c.content.slice(0, 5000)}`).join('\n---\n')}
   

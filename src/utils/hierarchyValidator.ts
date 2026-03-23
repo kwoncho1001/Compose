@@ -59,25 +59,17 @@ export const isValidRelationship = (parentId: string, childId: string, allNotes:
 export const findInvalidHierarchyNotes = (allNotes: Note[]): Note[] => {
   return allNotes.filter(note => {
     if (note.noteType === 'Epic') {
-      // Epic인데 부모가 있거나 자식(Feature)이 없는 경우
+      // Epic인데 부모가 있는 경우 (Epic은 최상위여야 함)
       const hasParent = note.parentNoteIds && note.parentNoteIds.length > 0;
-      const hasFeatureChild = (note.childNoteIds || []).some(cid => {
-        const child = allNotes.find(n => n.id === cid);
-        return child?.noteType === 'Feature';
-      });
-      return hasParent || !hasFeatureChild;
+      return hasParent;
     }
     if (note.noteType === 'Feature') {
-      // Feature인데 부모(Epic)가 없거나 자식(Task)이 없는 경우
+      // Feature인데 부모(Epic)가 없는 경우
       const hasEpicParent = (note.parentNoteIds || []).some(pid => {
         const p = allNotes.find(n => n.id === pid);
         return p?.noteType === 'Epic';
       });
-      const hasTaskChild = (note.childNoteIds || []).some(cid => {
-        const child = allNotes.find(n => n.id === cid);
-        return child?.noteType === 'Task';
-      });
-      return !hasEpicParent || !hasTaskChild;
+      return !hasEpicParent;
     }
     if (note.noteType === 'Task') {
       // Task인데 부모(Feature)가 없는 경우

@@ -227,7 +227,6 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const [sidebarMode, setSidebarMode] = useState<'design' | 'snapshots'>('design');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
   const [darkMode, setDarkMode] = useState(() => {
@@ -755,8 +754,8 @@ export const Dashboard: React.FC = () => {
       }
       await syncProject({ lastSyncedSha: undefined });
 
-      // 메타데이터 검사 없이 'Code Snapshot'이 포함된 폴더를 싹 다 잡습니다.
-      const snapshotNotes = state.notes.filter(n => n.folder && n.folder.startsWith('Code Snapshot'));
+      // 모든 'Reference' 타입의 노트를 싹 다 잡습니다.
+      const snapshotNotes = state.notes.filter(n => n.noteType === 'Reference');
       const snapshotNoteIds = snapshotNotes.map(n => n.id);
       
       if (snapshotNoteIds.length > 0) {
@@ -768,7 +767,7 @@ export const Dashboard: React.FC = () => {
 
       // 빈 SHA 장부 노트 생성
       const logTitle = '[로그] SHA 동기화 장부';
-      const logFolder = 'Code Snapshot/시스템 로그';
+      const logFolder = '시스템/동기화 로그';
       const now = new Date().toISOString();
       const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
       
@@ -873,7 +872,6 @@ export const Dashboard: React.FC = () => {
     const signal = abortController.signal;
 
     setIsSyncing(true);
-    setSidebarMode('snapshots');
     setProcessStatus({ message: 'Github 파일 목록 및 버전 확인 중...' });
     try {
       let filesToProcess: { path: string; sha: string }[] = [];
@@ -949,7 +947,7 @@ export const Dashboard: React.FC = () => {
           
           // [로그] SHA 동기화 장부 생성/업데이트
           const logTitle = '[로그] SHA 동기화 장부';
-          const logFolder = 'Code Snapshot/시스템 로그';
+          const logFolder = '시스템/동기화 로그';
           let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
           
           const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
@@ -1003,7 +1001,7 @@ export const Dashboard: React.FC = () => {
         try {
           const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken, signal);
           if (signal.aborted) return;
-          const snapshotNotes = currentNotes.filter(n => n.folder.startsWith('Code Snapshot'));
+          const snapshotNotes = currentNotes.filter(n => n.noteType === 'Reference');
           
           // Find existing parent to get old child IDs for cleanup
           const existingParent = snapshotNotes.find(n => {
@@ -1014,10 +1012,72 @@ export const Dashboard: React.FC = () => {
             ? (parseMetadata(existingParent.yamlMetadata).childNoteIds || '').replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
             : [];
 
-          const { parent, children } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
+          const { parent, children, newDesignNotes } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
           if (signal.aborted) return;
           const touchedNotes: Note[] = [];
           const childIds: string[] = [];
+          
+          // 0. Process newDesignNotes (Reverse Engineering)
+          const tempIdMap = new Map<string, string>();
+          if (newDesignNotes && newDesignNotes.length > 0) {
+            setProcessStatus(prev => ({ ...prev!, message: `새로운 설계 노트 생성 중... (${newDesignNotes.length}개)` }));
+            
+            // Sort to ensure Epics are created before Features, and Features before Tasks
+            const sortedDesignNotes = [...newDesignNotes].sort((a, b) => {
+              const order = { 'Epic': 1, 'Feature': 2, 'Task': 3 };
+              return (order[a.noteType] || 4) - (order[b.noteType] || 4);
+            });
+
+            for (const dNote of sortedDesignNotes) {
+              const newId = Math.random().toString(36).substr(2, 9);
+              tempIdMap.set(dNote.tempId, newId);
+              
+              let parentNoteId = undefined;
+              if (dNote.parentTempId && tempIdMap.has(dNote.parentTempId)) {
+                parentNoteId = tempIdMap.get(dNote.parentTempId);
+              } else if (dNote.matchedNoteId) {
+                parentNoteId = dNote.matchedNoteId;
+              }
+
+              const newDesignNote: Note = {
+                id: newId,
+                title: dNote.title,
+                folder: dNote.folder,
+                content: dNote.content,
+                summary: dNote.summary,
+                noteType: dNote.noteType,
+                status: 'Planned',
+                yamlMetadata: `tags: [auto-generated, design-leading-code]\nrelatedNoteIds: []`,
+                parentNoteId
+              };
+              
+              currentNotes.push(newDesignNote);
+              touchedNotes.push(newDesignNote);
+              newCount++;
+            }
+          }
+
+          const replaceTempIds = (ids: string[]) => {
+            if (!ids) return [];
+            return ids.map(id => tempIdMap.get(id) || id);
+          };
+
+          const appendRelatedNoteIdsToYaml = (yaml: string | undefined, relatedIds: string[]) => {
+            let newYaml = yaml || '';
+            if (relatedIds && relatedIds.length > 0) {
+              if (!newYaml.includes('relatedNoteIds:')) {
+                newYaml += `\nrelatedNoteIds: [${relatedIds.join(', ')}]`;
+              } else {
+                newYaml = newYaml.replace(/relatedNoteIds:.*(\n|$)/g, `relatedNoteIds: [${relatedIds.join(', ')}]\n`);
+              }
+            }
+            return newYaml.trim();
+          };
+
+          parent.relatedNoteIds = replaceTempIds(parent.relatedNoteIds);
+          children.forEach(child => {
+            child.relatedNoteIds = replaceTempIds(child.relatedNoteIds);
+          });
 
           // 1. Process parent first to get its ID
           let targetParent = currentNotes.find(n => n.id === parent.matchedNoteId);
@@ -1035,6 +1095,7 @@ export const Dashboard: React.FC = () => {
             finalParent.noteType = 'Reference'; // 계급 강제 부여
             // 기존에 연결된 Task들과 AI가 새로 찾은 Task들을 병합
             finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
+            finalParent.yamlMetadata = appendRelatedNoteIdsToYaml(finalParent.yamlMetadata, finalParent.relatedNoteIds);
             // ------------------------------------------
             
             currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
@@ -1046,7 +1107,7 @@ export const Dashboard: React.FC = () => {
               folder: parent.folder,
               content: parent.content,
               summary: parent.summary,
-              yamlMetadata: parent.yamlMetadata,
+              yamlMetadata: appendRelatedNoteIdsToYaml(parent.yamlMetadata, parent.relatedNoteIds || []),
               status: 'Done',
               
               // --- [여기서부터 새로 추가/변경되는 부분] ---
@@ -1078,6 +1139,7 @@ export const Dashboard: React.FC = () => {
               // --- [여기서부터 새로 추가/변경되는 부분] ---
               finalNote.noteType = 'Reference';
               finalNote.relatedNoteIds = Array.from(new Set([...(finalNote.relatedNoteIds || []), ...(unit.relatedNoteIds || [])]));
+              finalNote.yamlMetadata = appendRelatedNoteIdsToYaml(finalNote.yamlMetadata, finalNote.relatedNoteIds);
               // ------------------------------------------
               
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
@@ -1089,7 +1151,7 @@ export const Dashboard: React.FC = () => {
                 folder: unit.folder,
                 content: unit.content,
                 summary: unit.summary,
-                yamlMetadata: unit.yamlMetadata,
+                yamlMetadata: appendRelatedNoteIdsToYaml(unit.yamlMetadata, unit.relatedNoteIds || []),
                 status: 'Done',
                 parentNoteId: parentNoteId, // Link to parent
                 
@@ -1111,7 +1173,7 @@ export const Dashboard: React.FC = () => {
             const noteIndex = currentNotes.findIndex(n => n.id === id);
             if (noteIndex !== -1) {
               const discardedNote = { ...currentNotes[noteIndex] };
-              discardedNote.folder = 'Code Snapshot/폐기됨';
+              discardedNote.folder = '시스템/폐기된 소스';
               discardedNote.status = 'Deprecated';
               
               const meta = parseMetadata(discardedNote.yamlMetadata);
@@ -1183,7 +1245,7 @@ export const Dashboard: React.FC = () => {
 
       // [로그] SHA 동기화 장부 생성/업데이트
       const logTitle = '[로그] SHA 동기화 장부';
-      const logFolder = 'Code Snapshot/시스템 로그';
+      const logFolder = '시스템/동기화 로그';
       let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
       
       const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
@@ -1663,19 +1725,19 @@ export const Dashboard: React.FC = () => {
         </div>
         
         <button
-          onClick={() => setSidebarMode('design')}
-          className={`p-3 rounded-xl transition-all duration-200 ${sidebarMode === 'design' ? 'bg-indigo-500/20 text-indigo-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
-          title="설계도 (Design)"
+          onClick={() => setViewMode('editor')}
+          className={`p-3 rounded-xl transition-all duration-200 ${viewMode === 'editor' ? 'bg-indigo-500/20 text-indigo-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
+          title="에디터 뷰"
         >
           <FileText className="w-6 h-6" />
         </button>
         
         <button
-          onClick={() => setSidebarMode('snapshots')}
-          className={`p-3 rounded-xl transition-all duration-200 ${sidebarMode === 'snapshots' ? 'bg-emerald-500/20 text-emerald-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
-          title="코드 스냅샷 (Code Snapshot)"
+          onClick={() => setViewMode('mindmap')}
+          className={`p-3 rounded-xl transition-all duration-200 ${viewMode === 'mindmap' ? 'bg-indigo-500/20 text-indigo-400 shadow-inner' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'}`}
+          title="마인드맵 뷰"
         >
-          <FolderTree className="w-6 h-6" />
+          <Layers className="w-6 h-6" />
         </button>
         
         <div className="mt-auto flex flex-col gap-4">
@@ -1692,14 +1754,8 @@ export const Dashboard: React.FC = () => {
       <div className={`hidden lg:block transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-72' : 'w-0'}`}>
         {isSidebarOpen && (
           <Sidebar
-            notes={state.notes.filter(n => 
-              sidebarMode === 'snapshots' 
-                ? n.folder?.startsWith('Code Snapshot') 
-                : !n.folder?.startsWith('Code Snapshot')
-            )}
-            title={sidebarMode === 'snapshots' ? 'Code Snapshot' : 'Design Notes'}
-            sidebarMode={sidebarMode}
-            onModeChange={setSidebarMode}
+            notes={state.notes}
+            title="Design Notes"
             projects={projects}
             currentProjectId={currentProjectId}
             onSelectProject={setCurrentProjectId}
@@ -1722,14 +1778,8 @@ export const Dashboard: React.FC = () => {
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
           <div className="absolute inset-y-0 left-0 w-72 shadow-2xl animate-in slide-in-from-left duration-300">
             <Sidebar
-              notes={state.notes.filter(n => 
-                sidebarMode === 'snapshots' 
-                  ? n.folder?.startsWith('Code Snapshot') 
-                  : !n.folder?.startsWith('Code Snapshot')
-              )}
-              title={sidebarMode === 'snapshots' ? 'Code Snapshot' : 'Design Notes'}
-              sidebarMode={sidebarMode}
-              onModeChange={setSidebarMode}
+              notes={state.notes}
+              title="Design Notes"
               projects={projects}
               currentProjectId={currentProjectId}
               onSelectProject={(id) => {

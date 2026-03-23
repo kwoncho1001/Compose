@@ -10,6 +10,7 @@ const systemInstruction = `
 [필수 계층 규칙]
 1. 계층은 반드시 Epic -> Feature -> Task 순서를 따릅니다. 단계 건너뛰기나 중첩은 금지됩니다.
 2. 폴더명은 반드시 "상위도메인/하위도메인" 형식을 사용하며, 하나의 기능 분해 결과물은 원칙적으로 동일하거나 인접한 도메인 폴더에 모여야 합니다.
+3. **Reference(참고 자료)** 타입의 노트는 더 이상 'Code Snapshot/' 같은 별도 폴더에 격리하지 않습니다. 해당 기능이 속한 실제 업무 도메인 폴더 내에 Task와 나란히 배치하여 설계와 구현의 공존을 꾀하십시오.
 
 [작업 순서]
 1. 분석: 사용자의 요청을 분석하여 최상위 도메인과 목표를 정의합니다.
@@ -201,7 +202,8 @@ export const optimizeBlueprint = async (
 
 작업 목표:
 1. **폴더 및 도메인 통합**: 모든 노트의 'folder' 속성을 "상위범주/하위범주" 형태(예: "1. 시스템 인프라/데이터 보안")로 재작성하여 계층화하십시오. 유사한 명칭의 폴더들은 하나의 대표 도메인 폴더로 통합하십시오.
-2. **수직적 계층 구조(Hierarchy) 재구축**: 상위 개념의 노트를 찾아 그 아래로 하위 기능들을 'parentNoteId'를 사용하여 엮어 "통합"하십시오.
+2. **'Code Snapshot/' 폴더 폐지**: 기존에 'Code Snapshot/' 폴더에 격리되어 있던 Reference 타입의 노트들을 실제 업무 도메인 폴더(예: "인증/구글로그인")로 이동시키십시오. Task와 Reference가 같은 폴더 내에 공존하도록 재배치하십시오.
+3. **수직적 계층 구조(Hierarchy) 재구축**: 상위 개념의 노트를 찾아 그 아래로 하위 기능들을 'parentNoteId'를 사용하여 엮어 "통합"하십시오.
 3. **노트 통합 원칙**: 중복되거나 유사한 내용을 담은 노트들은 하나로 통합하십시오. 통합된 노트의 'status'는 반드시 'Temporary Merge'로 설정하십시오.
 4. **불필요한 기술 중심 폴더 제거**: 'Imported', 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 제거하고 실제 사용자 기능 단위로 재분류하십시오.
 5. **명칭 표준화**: 제목에서 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
@@ -387,14 +389,24 @@ export const updateCodeSnapshot = async (
     noteType: string;
     relatedNoteIds: string[];
   }[];
+  newDesignNotes?: {
+    tempId: string;
+    title: string;
+    folder: string;
+    content: string;
+    summary: string;
+    noteType: 'Epic' | 'Feature' | 'Task';
+    parentTempId?: string; // To link Epic -> Feature -> Task
+    matchedNoteId?: string; // If it links to an existing parent
+  }[];
 }> => {
-  // 스냅챗 목록과 설계도 목록을 분리
-  const snapshotNotes = allNotes.filter(n => n.folder.startsWith('Code Snapshot') || n.noteType === 'Reference');
-  const designNotes = allNotes.filter(n => !n.folder.startsWith('Code Snapshot') && n.noteType !== 'Reference');
+  // 스냅샷(Reference) 목록과 설계도(Epic/Feature/Task) 목록을 분리
+  const snapshotNotes = allNotes.filter(n => n.noteType === 'Reference');
+  const designNotes = allNotes.filter(n => n.noteType !== 'Reference');
 
   const prompt = `
-당신은 소스 코드 분석 및 문서화 전문가입니다. 제공된 소스 코드를 분석하여 '코드 스냅샷(Code Snapshot)' 노트를 생성하거나 업데이트하십시오.
-코드 스냅샷은 "실제 코드는 현재 이렇게 짜여 있어"라는 현실(Reality)을 담는 전용 보관소이자, **'Reference(참고 자료)'** 입니다.
+당신은 소스 코드 분석 및 문서화 전문가입니다. 제공된 소스 코드를 분석하여 'Reference(참고 자료)' 노트를 생성하거나 업데이트하십시오.
+이제 더 이상 'Code Snapshot/' 같은 기술적 격리 폴더를 사용하지 않습니다. 실제 업무 도메인 폴더 내에 설계(Task)와 구현(Reference)이 공존하도록 배치하십시오.
 
 [분석 대상 코드]
 파일 경로: ${fileName}
@@ -402,50 +414,81 @@ export const updateCodeSnapshot = async (
 소스 코드:
 ${fileContent.slice(0, 15000)}
 
-[기존 코드 스냅샷 목록 (유사도 매칭용)]
+[기존 Reference 목록 (유사도 매칭용)]
 ${JSON.stringify(snapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
 
-[기존 설계도 (Task/Feature) 목록 - 자동 연결용]
-${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary })))}
+[기존 설계도 (Task/Feature) 목록 - 자동 연결 및 폴더 결정용]
+${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary, folder: n.folder })))}
 
 [작업 지침]
 1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
 2. **부모 노트 (파일 단위)**:
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
-   - 폴더: "Code Snapshot/해당_도메인"
+   - 폴더: [매우 중요] 이 코드가 구현하고 있는 [기존 설계도 목록]의 Task/Feature가 속한 **동일한 도메인 폴더**를 사용하십시오. 만약 적절한 설계도를 찾지 못했다면, 코드의 성격에 맞는 "상위도메인/하위도메인" 폴더를 새로 정의하십시오.
    - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
 3. **자식 노트 (함수/로직 단위)**:
    - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
-4. **유사도 매칭**: 기존 '코드 스냅샷' 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
-5. **[가장 중요] 증빙 자료 연결(relatedNoteIds)**: 
-   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
-   - 관련된 설계도의 ID를 'relatedNoteIds' 배열에 반드시 포함시켜 위성처럼 연결되게 만드십시오.
-6. 생성되는 모든 스냅샷의 'noteType'은 반드시 "Reference"로 지정하십시오.
+4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
+5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 역공학(Reverse Engineering)**: 
+   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오. 관련된 설계도의 ID를 'relatedNoteIds' 배열에 포함시키십시오.
+   - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
+   - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
+   - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
+6. 생성되는 모든 코드 분석 노트의 'noteType'은 반드시 "Reference"로 지정하십시오.
 
 Return JSON:
 {
   "parent": {
     "title": "제목",
-    "folder": "Code Snapshot/...",
+    "folder": "도메인/서브도메인",
     "content": "...",
     "summary": "...",
     "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\ntags: [discovered-from-github]",
     "matchedNoteId": "기존_노트_ID",
     "isNew": boolean,
     "noteType": "Reference",
-    "relatedNoteIds": ["연결할_Task_ID"]
+    "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
   },
   "children": [
     {
       "title": "함수명",
-      "folder": "Code Snapshot/...",
+      "folder": "도메인/서브도메인",
       "content": "...",
       "summary": "...",
       "yamlMetadata": "...",
       "matchedNoteId": "기존_노트_ID",
       "isNew": boolean,
       "noteType": "Reference",
-      "relatedNoteIds": ["연결할_Task_ID"]
+      "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
+    }
+  ],
+  "newDesignNotes": [
+    {
+      "tempId": "temp_epic_1",
+      "title": "새로 발견된 Epic",
+      "folder": "도메인",
+      "content": "...",
+      "summary": "...",
+      "noteType": "Epic"
+    },
+    {
+      "tempId": "temp_feature_1",
+      "title": "새로 발견된 Feature",
+      "folder": "도메인/서브도메인",
+      "content": "...",
+      "summary": "...",
+      "noteType": "Feature",
+      "parentTempId": "temp_epic_1"
+    },
+    {
+      "tempId": "temp_task_1",
+      "title": "새로 발견된 Task",
+      "folder": "도메인/서브도메인",
+      "content": "...",
+      "summary": "...",
+      "noteType": "Task",
+      "parentTempId": "temp_feature_1",
+      "matchedNoteId": "기존_Feature_ID에_연결할경우_사용"
     }
   ]
 }
@@ -493,6 +536,23 @@ Return JSON:
               required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],
             },
           },
+          newDesignNotes: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                tempId: { type: Type.STRING },
+                title: { type: Type.STRING },
+                folder: { type: Type.STRING },
+                content: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                noteType: { type: Type.STRING },
+                parentTempId: { type: Type.STRING },
+                matchedNoteId: { type: Type.STRING }
+              },
+              required: ["tempId", "title", "folder", "content", "summary", "noteType"]
+            }
+          }
         },
         required: ["parent", "children"],
       },
@@ -510,14 +570,14 @@ export const checkConsistency = async (
   signal?: AbortSignal
 ): Promise<{ report: string; inconsistentNotes: { id: string, description: string, suggestion: string }[] }> => {
   const prompt = `
-당신은 시스템 아키텍트입니다. 현재 설계도(노트)와 실제 코드 기반의 '코드 스냅샷' 간의 일관성을 검사하십시오.
+당신은 시스템 아키텍트입니다. 현재 설계도(노트)와 실제 코드 기반의 'Reference(참고 자료)' 간의 일관성을 검사하십시오.
 설계 의도(Design)와 실제 구현(Reality) 사이의 차이점을 찾아내어 보고서를 작성하십시오.
 
 [설계 노트 목록]
-${JSON.stringify(notes.filter(n => !n.folder.startsWith('Code Snapshot')).map(n => ({ id: n.id, title: n.title, summary: n.summary, content: n.content })))}
+${JSON.stringify(notes.filter(n => n.noteType !== 'Reference').map(n => ({ id: n.id, title: n.title, summary: n.summary, content: n.content })))}
 
-[코드 스냅샷 목록]
-${JSON.stringify(notes.filter(n => n.folder.startsWith('Code Snapshot')).map(n => ({ id: n.id, title: n.title, summary: n.summary, content: n.content })))}
+[Reference(참고 자료) 목록]
+${JSON.stringify(notes.filter(n => n.noteType === 'Reference').map(n => ({ id: n.id, title: n.title, summary: n.summary, content: n.content })))}
 
 [작업 지침]
 1. **차이점 분석**: 설계도에는 정의되어 있으나 코드에는 구현되지 않은 기능, 또는 코드에는 구현되어 있으나 설계도에 누락된 기능을 찾으십시오.
@@ -848,7 +908,7 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
     console.error('Generate note from code failed:', err);
     return {
       title: `${fileName}`,
-      folder: "Imported/Source",
+      folder: "시스템/미분류 소스",
       content: "분석 중 오류가 발생했습니다.",
       summary: "분석 중 오류가 발생했습니다.",
       yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}`,

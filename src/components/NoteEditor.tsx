@@ -143,7 +143,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     );
   }
 
-  const isSnapshotNote = note.folder?.startsWith('Code Snapshot');
+  const isSnapshotNote = note.noteType === 'Reference' || note.folder?.startsWith('시스템/');
 
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     if (isSnapshotNote) return;

@@ -5,8 +5,6 @@ import { Note } from '../types';
 interface SidebarProps {
   notes: Note[];
   title?: string;
-  sidebarMode?: 'design' | 'snapshots';
-  onModeChange?: (mode: 'design' | 'snapshots') => void;
   projects: { id: string; name: string }[];
   currentProjectId: string;
   onSelectProject: (id: string) => void;
@@ -53,8 +51,6 @@ const StatusIcon = ({ status }: { status: Note['status'] }) => {
 export const Sidebar: React.FC<SidebarProps> = ({ 
   notes = [], 
   title = 'Vibe-Architect',
-  sidebarMode,
-  onModeChange,
   projects = [],
   currentProjectId,
   onSelectProject,
@@ -82,11 +78,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const toggleNoteSelection = (id: string, e: React.MouseEvent) => {
+  const getAllNoteIds = (item: TreeItem): string[] => {
+    const ids: string[] = [];
+    if (item.type === 'note') {
+      ids.push(item.id);
+    }
+    item.children.forEach(child => {
+      ids.push(...getAllNoteIds(child));
+    });
+    return ids;
+  };
+
+  const toggleSelection = (item: TreeItem, e: React.MouseEvent) => {
     e.stopPropagation();
+    const ids = getAllNoteIds(item);
+    if (ids.length === 0) return;
+
     const newSet = new Set(selectedNotes);
-    if (newSet.has(id)) newSet.delete(id);
-    else newSet.add(id);
+    const allSelected = ids.every(id => newSet.has(id));
+    
+    if (allSelected) {
+      ids.forEach(id => newSet.delete(id));
+    } else {
+      ids.forEach(id => newSet.add(id));
+    }
     setSelectedNotes(newSet);
   };
 
@@ -201,6 +216,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     const isTemporaryMerge = note?.status === 'Temporary Merge';
 
+    const itemNoteIds = getAllNoteIds(item);
+    const isAllSelected = itemNoteIds.length > 0 && itemNoteIds.every(id => selectedNotes.has(id));
+    const isSomeSelected = itemNoteIds.length > 0 && !isAllSelected && itemNoteIds.some(id => selectedNotes.has(id));
+
     return (
       <div key={item.id} className="select-none">
         <div 
@@ -210,7 +229,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               : 'hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
           }`}
           style={{ paddingLeft: `${level * 12 + 8}px` }}
-          onClick={() => item.type === 'note' ? onSelectNote(item.id) : toggleExpand(item.id, { stopPropagation: () => {} } as any)}
+          onClick={() => {
+            if (isSelectMode) {
+              toggleSelection(item, { stopPropagation: () => {} } as any);
+            } else {
+              item.type === 'note' ? onSelectNote(item.id) : toggleExpand(item.id, { stopPropagation: () => {} } as any);
+            }
+          }}
         >
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             {hasChildren ? (
@@ -224,13 +249,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="w-4.5" /> // Spacer
             )}
             
-            {isSelectMode && item.type === 'note' && (
+            {isSelectMode && (
               <div 
                 className="cursor-pointer shrink-0 mr-1" 
-                onClick={(e) => toggleNoteSelection(item.id, e)}
+                onClick={(e) => toggleSelection(item, e)}
               >
-                {selectedNotes.has(item.id) ? (
+                {isAllSelected ? (
                   <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
+                ) : isSomeSelected ? (
+                  <div className="w-3.5 h-3.5 border border-indigo-500 rounded flex items-center justify-center">
+                    <div className="w-1.5 h-0.5 bg-indigo-500" />
+                  </div>
                 ) : (
                   <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
                 )}
@@ -318,31 +347,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div className="w-72 bg-slate-900 dark:bg-slate-950 text-slate-300 h-full flex flex-col border-r border-slate-800 transition-colors duration-200">
       <div className="p-4 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className={`w-8 h-8 ${title === 'Code Snapshot' ? 'bg-emerald-500' : 'bg-indigo-500'} rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/10`}>
-            <span className="text-white text-sm font-bold">{title === 'Code Snapshot' ? 'CS' : 'VA'}</span>
+          <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/10">
+            <span className="text-white text-sm font-bold">VA</span>
           </div>
           <h1 className="text-base font-bold text-white tracking-tight">
             {title}
           </h1>
         </div>
         <div className="flex items-center gap-1">
-          {onModeChange && (
-            <div className="flex items-center bg-slate-800 rounded-md p-0.5 mr-2 lg:hidden">
-              <button
-                onClick={() => onModeChange('design')}
-                className={`p-1.5 rounded-md transition-colors ${sidebarMode === 'design' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                <FileText className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => onModeChange('snapshots')}
-                className={`p-1.5 rounded-md transition-colors ${sidebarMode === 'snapshots' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                <FolderTree className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          {title !== 'Code Snapshot' && onDeleteMultiple && (
+          {onDeleteMultiple && (
             <>
               {isSelectMode && selectedNotes.size > 0 && (
                 <button 
@@ -370,15 +383,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
             </>
           )}
-          {title !== 'Code Snapshot' && (
-            <button 
-              onClick={onAddNote}
-              className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
-              title="새 노트 추가"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          )}
+          <button 
+            onClick={onAddNote}
+            className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors"
+            title="새 노트 추가"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
           {onClose && (
             <button 
               onClick={onClose}
@@ -390,9 +401,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Vault Switcher - Only show for Design Notes */}
-      {title !== 'Code Snapshot' && (
-        <div className="p-4 border-b border-slate-800">
+      {/* Vault Switcher */}
+      <div className="p-4 border-b border-slate-800">
           <div className="flex items-center justify-between mb-2">
             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
               <Database className="w-3 h-3" />
@@ -474,9 +484,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </select>
           )}
         </div>
-      )}
-      
-      <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
+        
+        <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
         {tree.length > 0 ? (
           tree.map(item => renderTreeItem(item))
         ) : (

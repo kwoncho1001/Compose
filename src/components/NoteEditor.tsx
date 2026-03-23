@@ -162,14 +162,13 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     onUpdateNote({ ...note, noteType: newType });
   };
 
-  const handleSaveManual = () => {
-    if (isSnapshotNote) {
-      showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다. GitHub 동기화를 이용하세요.', 'info');
-      setIsEditing(false);
-      return;
-    }
+  const syncChanges = (updatedData: Partial<typeof editData>) => {
+    if (isSnapshotNote || !note) return;
+    
+    const finalData = { ...editData, ...updatedData };
+    
     // Sync relatedNoteIds from YAML before saving
-    const meta = parseMetadata(editData.yamlMetadata);
+    const meta = parseMetadata(finalData.yamlMetadata);
     let relatedIdsFromYaml: string[] = [];
     if (meta && typeof meta.relatedNoteIds === 'string') {
       if (meta.relatedNoteIds.startsWith('[') && meta.relatedNoteIds.endsWith(']')) {
@@ -181,9 +180,18 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
 
     onUpdateNote({
       ...note,
-      ...editData,
-      relatedNoteIds: relatedIdsFromYaml.length > 0 ? relatedIdsFromYaml : editData.relatedNoteIds
+      ...finalData,
+      relatedNoteIds: relatedIdsFromYaml.length > 0 ? relatedIdsFromYaml : finalData.relatedNoteIds
     });
+  };
+
+  const handleSaveManual = () => {
+    if (isSnapshotNote) {
+      showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다. GitHub 동기화를 이용하세요.', 'info');
+      setIsEditing(false);
+      return;
+    }
+    syncChanges(editData);
     setIsEditing(false);
   };
 
@@ -277,125 +285,116 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
         />
       )}
       <div className="max-w-3xl mx-auto w-full flex-1">
-        {/* Header */}
+        {/* --- Header: Title Only --- */}
+        <div className="mb-4">
+          <input
+            type="text"
+            value={editData.title}
+            onChange={(e) => !isSnapshotNote && setEditData({ ...editData, title: e.target.value })}
+            onBlur={() => syncChanges({ title: editData.title })}
+            readOnly={isSnapshotNote}
+            className={`text-4xl font-extrabold text-slate-900 dark:text-white border-b-2 border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-100 focus:border-indigo-500'} bg-transparent focus:outline-none w-full transition-all py-2`}
+            placeholder="노트 제목"
+          />
+        </div>
+
+        {/* --- Action Menu Bar: Below Title --- */}
         <div className="mb-8 pb-6 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex-1">
-              <input
-                type="text"
-                value={editData.title}
-                onChange={(e) => !isSnapshotNote && setEditData({ ...editData, title: e.target.value })}
-                readOnly={isSnapshotNote}
-                className={`text-3xl font-bold text-slate-900 dark:text-white border-b border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-200 focus:border-indigo-500'} bg-transparent focus:outline-none w-full transition-colors`}
-                placeholder="노트 제목"
-              />
+          <div className="flex flex-wrap items-center gap-3 mb-6">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                if (isSnapshotNote) {
+                  showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다.', 'info');
+                  return;
+                }
+                setIsGeneratingSub(true);
+                await onGenerateSubModules(note);
+                setIsGeneratingSub(false);
+              }}
+              disabled={isSnapshotNote}
+              isLoading={isGeneratingSub}
+              icon={<Layers className="w-4 h-4" />}
+            >
+              하위 모듈 생성
+            </Button>
+
+            <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">상위:</span>
+              <select
+                value={note.parentNoteId || ''}
+                onChange={handleParentChange}
+                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5 min-w-[120px]"
+              >
+                <option value="">없음</option>
+                {allNotes.filter(n => n.id !== note.id).map(n => (
+                  <option key={n.id} value={n.id}>{n.title}</option>
+                ))}
+              </select>
             </div>
-            <div className="flex items-center gap-3">
-              {isSnapshotNote && (
-                <span className="px-2 py-1 text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded border border-slate-200 dark:border-slate-700 tracking-wider">
-                  READ ONLY
-                </span>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={async () => {
-                  if (isSnapshotNote) {
-                    showAlert('알림', '코드 스냅샷 노트는 직접 수정할 수 없습니다.', 'info');
-                    return;
-                  }
-                  setIsGeneratingSub(true);
-                  await onGenerateSubModules(note);
-                  setIsGeneratingSub(false);
-                }}
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">유형:</span>
+              <select
+                value={note.noteType || 'Feature'}
+                onChange={handleNoteTypeChange}
                 disabled={isSnapshotNote}
-                isLoading={isGeneratingSub}
-                icon={<Layers className="w-4 h-4" />}
+                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5"
               >
-                하위 모듈 생성
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleSaveManual}
-                disabled={isSnapshotNote}
-                icon={<Save className="w-4 h-4" />}
-              >
-                저장
-              </Button>
-              <button
-                onClick={() => onDeleteNote(note.id)}
-                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all"
-                title="노트 삭제"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-              <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">상위:</span>
-                <select
-                  value={note.parentNoteId || ''}
-                  onChange={handleParentChange}
-                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2 max-w-[150px]"
-                >
-                  <option value="">없음</option>
-                  {allNotes
-                    .filter(n => n.id !== note.id)
-                    .map(n => (
-                      <option key={n.id} value={n.id}>{n.title}</option>
-                    ))
-                  }
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">유형:</span>
-                <select
-                  value={note.noteType || 'Feature'}
-                  onChange={handleNoteTypeChange}
-                  disabled={isSnapshotNote}
-                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2"
-                >
-                  <option value="Epic">Epic</option>
-                  <option value="Feature">Feature</option>
-                  <option value="Task">Task</option>
-                  <option value="Reference">Reference</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-500 dark:text-slate-400">상태:</span>
-                <select
-                  value={note.status}
-                  onChange={handleStatusChange}
-                  className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-2"
-                >
-                  <option value="Planned">계획됨</option>
-                  <option value="In-Progress">진행 중</option>
-                  <option value="Done">완료</option>
-                  <option value="Conflict">충돌</option>
-                  <option value="Review-Required">검토 필요</option>
-                  <option value="Deprecated">폐기됨</option>
-                </select>
-              </div>
+                <option value="Epic">Epic</option>
+                <option value="Feature">Feature</option>
+                <option value="Task">Task</option>
+                <option value="Reference">Reference</option>
+              </select>
             </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">상태:</span>
+              <select
+                value={note.status}
+                onChange={handleStatusChange}
+                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5"
+              >
+                <option value="Planned">계획됨</option>
+                <option value="In-Progress">진행 중</option>
+                <option value="Done">완료</option>
+                <option value="Conflict">충돌</option>
+                <option value="Review-Required">검토 필요</option>
+                <option value="Deprecated">폐기됨</option>
+              </select>
+            </div>
+
+            {isSnapshotNote && (
+              <span className="px-2 py-1 text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded border border-slate-200 dark:border-slate-700 tracking-wider">
+                READ ONLY
+              </span>
+            )}
+
+            <button
+              onClick={() => onDeleteNote(note.id)}
+              className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-all ml-auto"
+              title="노트 삭제"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
-          <div className="flex items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
-            <span className="flex items-center gap-1">
-              <FolderTree className="w-4 h-4" />
+
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded">
+              <FolderTree className="w-3.5 h-3.5" />
               <input
                 type="text"
                 value={editData.folder}
                 onChange={(e) => !isSnapshotNote && setEditData({ ...editData, folder: e.target.value })}
+                onBlur={() => syncChanges({ folder: editData.folder })}
                 readOnly={isSnapshotNote}
-                className={`border-b border-transparent ${isSnapshotNote ? 'cursor-default' : 'hover:border-slate-200 focus:border-indigo-500'} bg-transparent focus:outline-none transition-colors`}
-                placeholder="폴더명 (예: 대분류/소분류)"
+                className="bg-transparent focus:outline-none min-w-[150px]"
+                placeholder="도메인/서브도메인"
               />
             </span>
-            {note.parentNoteId && (
-              <span className="flex items-center gap-1">
-                <Layers className="w-4 h-4" />
-                상위: {allNotes.find(n => n.id === note.parentNoteId)?.title || '알 수 없음'}
-              </span>
-            )}
             {note.githubLink && (
               <a
                 href={note.githubLink}
@@ -403,13 +402,13 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
                 rel="noopener noreferrer"
                 className="flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline"
               >
-                <Code className="w-4 h-4" />
+                <Code className="w-3.5 h-3.5" />
                 코드 보기
               </a>
             )}
             {parseMetadata(note.yamlMetadata).sourceFiles && (
               <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                <ExternalLink className="w-4 h-4" />
+                <ExternalLink className="w-3.5 h-3.5" />
                 구현 추적: {parseMetadata(note.yamlMetadata).sourceFiles}
               </div>
             )}
@@ -523,6 +522,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
           <textarea
             value={editData.summary}
             onChange={(e) => !isSnapshotNote && setEditData({ ...editData, summary: e.target.value })}
+            onBlur={() => syncChanges({ summary: editData.summary })}
             readOnly={isSnapshotNote}
             className={`w-full border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 dark:text-white rounded-lg p-3 text-sm focus:outline-none ${isSnapshotNote ? 'cursor-default' : 'focus:ring-2 focus:ring-indigo-500'} h-20 transition-all`}
             placeholder="이 기능에 대한 간단한 요약..."
@@ -543,6 +543,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
               theme={darkMode ? vscodeDark : vscodeLight}
               extensions={[yaml()]}
               onChange={(val) => !isSnapshotNote && onYamlChange(val)}
+              onBlur={() => syncChanges({ yamlMetadata: editData.yamlMetadata })}
               readOnly={isSnapshotNote}
               className="text-xs"
             />
@@ -572,12 +573,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
             </h2>
             <div className="flex gap-2">
               {isEditing ? (
-                <button
-                  onClick={handleSaveManual}
-                  className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
-                >
-                  <Save className="w-3 h-3" /> 저장 (Esc)
-                </button>
+                <div className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-medium">
+                  <Edit3 className="w-3 h-3" /> 편집 중... (Esc로 완료)
+                </div>
               ) : (
                 <button
                   onClick={() => {
@@ -597,7 +595,10 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
           
           <div className="min-h-[600px] relative group">
             {isEditing ? (
-              <div className="border border-indigo-500 dark:border-indigo-400 rounded-xl overflow-hidden shadow-lg transition-all">
+              <div 
+                className="border border-indigo-500 dark:border-indigo-400 rounded-xl overflow-hidden shadow-lg transition-all"
+                onBlur={() => handleSaveManual()}
+              >
                 <CodeMirror
                   value={editData.content}
                   height="600px"

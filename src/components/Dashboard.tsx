@@ -32,7 +32,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, updateDoc, query, orderBy } from 'firebase/firestore';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, getDocs, updateDoc, query, orderBy } from 'firebase/firestore';
 import { Auth } from './Auth';
 
 export const Dashboard: React.FC = () => {
@@ -106,20 +106,24 @@ export const Dashboard: React.FC = () => {
           lastSyncedSha: data.lastSyncedSha || '',
         }));
       } else {
-        setState(prev => ({
-          ...prev,
-          gcm: { entities: {}, variables: {} },
-          githubRepo: '',
-          githubToken: process.env.Github_Token || '',
-          lastSyncedAt: '',
-          lastSyncedSha: '',
-        }));
-        setDoc(projectRef, {
-          id: currentProjectId,
-          name: currentProjectId === 'default-project' ? 'Default Project' : currentProjectId,
-          gcm: { entities: {}, variables: {} },
-          lastUpdated: new Date().toISOString()
-        }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
+        // 삭제 시 자동 재생성을 방지하기 위해, 오직 default-project가 없을 때만 생성하도록 수정
+        if (currentProjectId === 'default-project') {
+          setState(prev => ({
+            ...prev,
+            gcm: { entities: {}, variables: {} },
+            githubRepo: '',
+            githubToken: process.env.Github_Token || '',
+            lastSyncedAt: '',
+            lastSyncedSha: '',
+          }));
+          setDoc(projectRef, {
+            id: currentProjectId,
+            name: 'Default Project',
+            gcm: { entities: {}, variables: {} },
+            lastUpdated: new Date().toISOString()
+          }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
+        }
+        // 일반 프로젝트가 삭제된 경우에는 아무것도 하지 않고 리스너가 종료되기를 기다립니다.
       }
     }, (e) => handleFirestoreError(e, OperationType.GET, projectRef.path));
 
@@ -753,65 +757,73 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleWipeSnapshots = async () => {
-    if (!window.confirm('GitHub에서 가져온 모든 코드 스냅샷 노트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
-      return;
-    }
+    setDialogConfig({
+      isOpen: true,
+      title: '스냅샷 초기화',
+      message: 'GitHub에서 가져온 모든 코드 스냅샷 노트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
+      type: 'warning',
+      confirmText: '초기화',
+      cancelText: '취소',
+      onConfirm: async () => {
+        setDialogConfig(null);
+        try {
+          setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
+          
+          if (userId && currentProjectId) {
+            await clearSyncLog(userId, currentProjectId);
+          }
+          await syncProject({ lastSyncedSha: undefined });
 
-    try {
-      setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
-      
-      if (userId && currentProjectId) {
-        await clearSyncLog(userId, currentProjectId);
-      }
-      await syncProject({ lastSyncedSha: undefined });
+          // 모든 'Reference' 타입의 노트를 싹 다 잡습니다.
+          const snapshotNotes = state.notes.filter(n => n.noteType === 'Reference');
+          const snapshotNoteIds = snapshotNotes.map(n => n.id);
+          
+          if (snapshotNoteIds.length > 0) {
+            // Firestore에서 일괄 삭제
+            await deleteNotesFromFirestore(snapshotNoteIds);
+          }
+          
+          let remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
 
-      // 모든 'Reference' 타입의 노트를 싹 다 잡습니다.
-      const snapshotNotes = state.notes.filter(n => n.noteType === 'Reference');
-      const snapshotNoteIds = snapshotNotes.map(n => n.id);
-      
-      if (snapshotNoteIds.length > 0) {
-        // Firestore에서 일괄 삭제
-        await deleteNotesFromFirestore(snapshotNoteIds);
-      }
-      
-      let remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
+          // 빈 SHA 장부 노트 생성
+          const logTitle = '[로그] SHA 동기화 장부';
+          const logFolder = '시스템/동기화 로그';
+          const now = new Date().toISOString();
+          const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
+          
+          const newLogNote: Note = {
+            id: Math.random().toString(36).substr(2, 9),
+            title: logTitle,
+            content: emptyLogContent,
+            folder: logFolder,
+            status: 'Done',
+            lastUpdated: now,
+            summary: 'GitHub 동기화된 파일들의 SHA 값을 추적하는 장부입니다.',
+            yamlMetadata: 'type: system-log\n',
+            relatedNoteIds: [],
+            childNoteIds: []
+          };
+          
+          await saveNotesToFirestore([newLogNote]);
+          remainingNotes.push(newLogNote);
 
-      // 빈 SHA 장부 노트 생성
-      const logTitle = '[로그] SHA 동기화 장부';
-      const logFolder = '시스템/동기화 로그';
-      const now = new Date().toISOString();
-      const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
-      
-      const newLogNote: Note = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: logTitle,
-        content: emptyLogContent,
-        folder: logFolder,
-        status: 'Done',
-        lastUpdated: now,
-        summary: 'GitHub 동기화된 파일들의 SHA 값을 추적하는 장부입니다.',
-        yamlMetadata: 'type: system-log\n',
-        relatedNoteIds: [],
-        childNoteIds: []
-      };
-      
-      await saveNotesToFirestore([newLogNote]);
-      remainingNotes.push(newLogNote);
+          setState(prev => ({
+            ...prev,
+            notes: remainingNotes,
+            fileSyncLogs: {},
+            lastSyncedSha: undefined
+          }));
 
-      setState(prev => ({
-        ...prev,
-        notes: remainingNotes,
-        fileSyncLogs: {},
-        lastSyncedSha: undefined
-      }));
-
-      showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되고 SHA 장부가 초기화되었습니다.`, 'success');
-    } catch (error) {
-      console.error('Failed to wipe snapshots:', error);
-      showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
-    } finally {
-      setProcessStatus(null);
-    }
+          showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되고 SHA 장부가 초기화되었습니다.`, 'success');
+        } catch (error) {
+          console.error('Failed to wipe snapshots:', error);
+          showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
+        } finally {
+          setProcessStatus(null);
+        }
+      },
+      onCancel: () => setDialogConfig(null)
+    });
   };
 
   const reconcileNoteRelationships = async (allNotes: Note[]) => {
@@ -1096,18 +1108,19 @@ export const Dashboard: React.FC = () => {
             targetParent = currentNotes.find(n => n.title === parent.title && n.folder === parent.folder);
           }
 
+          // AI가 제안한 parentNoteId (설계도 ID) 처리
+          const suggestedParentId = parent.parentNoteId ? (tempIdMap.get(parent.parentNoteId) || parent.parentNoteId) : undefined;
+
           let finalParent: Note;
           if (targetParent) {
             setProcessStatus(prev => ({ ...prev!, message: `기존 부모 스냅샷 업데이트 중: ${targetParent!.title}` }));
             finalParent = await mergeLogicIntoNote(parent, targetParent, signal);
             if (signal.aborted) return;
             
-            // --- [여기서부터 새로 추가/변경되는 부분] ---
-            finalParent.noteType = 'Reference'; // 계급 강제 부여
-            // 기존에 연결된 Task들과 AI가 새로 찾은 Task들을 병합
+            finalParent.noteType = 'Reference';
+            finalParent.parentNoteId = suggestedParentId || finalParent.parentNoteId;
             finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
             finalParent.yamlMetadata = appendRelatedNoteIdsToYaml(finalParent.yamlMetadata, finalParent.relatedNoteIds);
-            // ------------------------------------------
             
             currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
             updateCount++;
@@ -1120,11 +1133,9 @@ export const Dashboard: React.FC = () => {
               summary: parent.summary,
               yamlMetadata: appendRelatedNoteIdsToYaml(parent.yamlMetadata, parent.relatedNoteIds || []),
               status: 'Done',
-              
-              // --- [여기서부터 새로 추가/변경되는 부분] ---
               noteType: 'Reference',
+              parentNoteId: suggestedParentId,
               relatedNoteIds: parent.relatedNoteIds || []
-              // ------------------------------------------
             };
             currentNotes.push(finalParent);
             newCount++;
@@ -1731,28 +1742,57 @@ export const Dashboard: React.FC = () => {
   const handleDeleteProject = async (id: string) => {
     if (!userId) return;
     if (id === 'default-project') {
-      alert('기본 프로젝트는 삭제할 수 없습니다.');
+      showAlert('오류', '기본 프로젝트는 삭제할 수 없습니다.', 'error');
       return;
     }
 
     const projectName = projects.find(p => p.id === id)?.name || id;
-    if (!window.confirm(`'${projectName}' 프로젝트를 영구적으로 삭제하시겠습니까? 모든 노트와 데이터가 삭제됩니다.`)) {
-      return;
-    }
+    
+    setDialogConfig({
+      isOpen: true,
+      title: '프로젝트 삭제',
+      message: `'${projectName}'의 모든 데이터(노트, 채팅 포함)를 영구적으로 삭제하시겠습니까? 이 작업은 복구할 수 없습니다.`,
+      type: 'warning',
+      confirmText: '영구 삭제',
+      cancelText: '취소',
+      onConfirm: async () => {
+        setDialogConfig(null);
+        setProcessStatus({ message: '프로젝트 데이터 삭제 중...' });
+        try {
+          const batch = writeBatch(db);
+          
+          // 1. 해당 프로젝트의 모든 노트 조회 및 삭제 예약
+          const notesRef = collection(db, 'users', userId, 'projects', id, 'notes');
+          const notesSnap = await getDocs(notesRef);
+          notesSnap.forEach((doc) => batch.delete(doc.ref));
 
-    try {
-      // Delete the project document
-      const projectRef = doc(db, 'users', userId, 'projects', id);
-      await deleteDoc(projectRef);
-      
-      // If we deleted the current project, switch to another one
-      if (id === currentProjectId) {
-        const otherProject = projects.find(p => p.id !== id);
-        setCurrentProjectId(otherProject ? otherProject.id : 'default-project');
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, `project-${id}`);
-    }
+          // 2. 해당 프로젝트의 모든 채팅 내역 조회 및 삭제 예약
+          const chatsRef = collection(db, 'users', userId, 'projects', id, 'chats');
+          const chatsSnap = await getDocs(chatsRef);
+          chatsSnap.forEach((doc) => batch.delete(doc.ref));
+
+          // 3. 프로젝트 문서 자체 삭제 예약
+          const projectRef = doc(db, 'users', userId, 'projects', id);
+          batch.delete(projectRef);
+
+          // 원자적으로 한 번에 실행 (최대 500개 제한이 있으나 보통 프로젝트당 500개 미만으로 가정)
+          await batch.commit();
+          
+          // If we deleted the current project, switch to another one
+          if (id === currentProjectId) {
+            const otherProject = projects.find(p => p.id !== id);
+            setCurrentProjectId(otherProject ? otherProject.id : 'default-project');
+          }
+          
+          showAlert('성공', '프로젝트와 모든 하위 데이터가 삭제되었습니다.', 'success');
+        } catch (e) {
+          handleFirestoreError(e, OperationType.DELETE, `project-${id}`);
+        } finally {
+          setProcessStatus(null);
+        }
+      },
+      onCancel: () => setDialogConfig(null)
+    });
   };
 
   return (

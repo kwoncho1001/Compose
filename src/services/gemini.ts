@@ -376,6 +376,7 @@ export const updateCodeSnapshot = async (
     matchedNoteId?: string;
     isNew: boolean;
     noteType: string;
+    parentNoteId?: string;
     relatedNoteIds: string[];
   };
   children: {
@@ -429,8 +430,10 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 3. **자식 노트 (함수/로직 단위)**:
    - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
 4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
-5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 역공학(Reverse Engineering)**: 
-   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오. 관련된 설계도의 ID를 'relatedNoteIds' 배열에 포함시키십시오.
+5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 계층 구조(parentNoteId)**: 
+   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
+   - **구조적 자식 설정**: 매칭되는 'Task'나 'Feature'가 있다면, 해당 ID를 Reference 노드의 'parentNoteId'로 설정하여 설계도 아래에 구조적 자식으로 배치하십시오.
+   - **관련성 연결**: 관련된 설계도의 ID를 'relatedNoteIds' 배열에도 포함시키십시오.
    - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
    - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
    - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
@@ -447,6 +450,7 @@ Return JSON:
     "matchedNoteId": "기존_노트_ID",
     "isNew": boolean,
     "noteType": "Reference",
+    "parentNoteId": "연결할_Task_ID_또는_tempId",
     "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
   },
   "children": [
@@ -514,6 +518,7 @@ Return JSON:
               matchedNoteId: { type: Type.STRING },
               isNew: { type: Type.BOOLEAN },
               noteType: { type: Type.STRING },
+              parentNoteId: { type: Type.STRING },
               relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
             required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],

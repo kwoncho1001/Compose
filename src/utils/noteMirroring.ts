@@ -40,31 +40,31 @@ const syncHierarchy = (
   allNotes: Note[],
   affectedNotes: Map<string, Note>
 ) => {
-  // Case A: parentNoteId 변경
-  if (oldNote.parentNoteId !== newNote.parentNoteId) {
-    // 이전 부모에서 제거
-    if (oldNote.parentNoteId) {
-      const oldParent = affectedNotes.get(oldNote.parentNoteId) || allNotes.find(n => n.id === oldNote.parentNoteId);
-      if (oldParent) {
-        const updatedOldParent = {
-          ...oldParent,
-          childNoteIds: oldParent.childNoteIds.filter(id => id !== newNote.id)
-        };
-        affectedNotes.set(updatedOldParent.id, updatedOldParent);
-      }
+  // Case A: parentNoteIds 변경
+  const addedParents = newNote.parentNoteIds.filter(id => !oldNote.parentNoteIds.includes(id));
+  const removedParents = oldNote.parentNoteIds.filter(id => !newNote.parentNoteIds.includes(id));
+
+  addedParents.forEach(pId => {
+    const parent = affectedNotes.get(pId) || allNotes.find(n => n.id === pId);
+    if (parent && !parent.childNoteIds.includes(newNote.id)) {
+      const updatedParent = {
+        ...parent,
+        childNoteIds: Array.from(new Set([...parent.childNoteIds, newNote.id]))
+      };
+      affectedNotes.set(updatedParent.id, updatedParent);
     }
-    // 새 부모에 추가
-    if (newNote.parentNoteId) {
-      const newParent = affectedNotes.get(newNote.parentNoteId) || allNotes.find(n => n.id === newNote.parentNoteId);
-      if (newParent) {
-        const updatedNewParent = {
-          ...newParent,
-          childNoteIds: Array.from(new Set([...newParent.childNoteIds, newNote.id]))
-        };
-        affectedNotes.set(updatedNewParent.id, updatedNewParent);
-      }
+  });
+
+  removedParents.forEach(pId => {
+    const parent = affectedNotes.get(pId) || allNotes.find(n => n.id === pId);
+    if (parent && parent.childNoteIds.includes(newNote.id)) {
+      const updatedParent = {
+        ...parent,
+        childNoteIds: parent.childNoteIds.filter(id => id !== newNote.id)
+      };
+      affectedNotes.set(updatedParent.id, updatedParent);
     }
-  }
+  });
 
   // Case B: childNoteIds 변경
   const addedChildren = newNote.childNoteIds.filter(id => !oldNote.childNoteIds.includes(id));
@@ -72,25 +72,21 @@ const syncHierarchy = (
 
   addedChildren.forEach(childId => {
     const child = affectedNotes.get(childId) || allNotes.find(n => n.id === childId);
-    if (child && child.parentNoteId !== newNote.id) {
-      // 자식의 이전 부모에서 자식 제거 (재귀적 처리는 복잡하므로 여기서는 단순 할당)
-      if (child.parentNoteId) {
-        const prevParent = affectedNotes.get(child.parentNoteId) || allNotes.find(n => n.id === child.parentNoteId);
-        if (prevParent && prevParent.id !== newNote.id) {
-          affectedNotes.set(prevParent.id, {
-            ...prevParent,
-            childNoteIds: prevParent.childNoteIds.filter(id => id !== childId)
-          });
-        }
-      }
-      affectedNotes.set(childId, { ...child, parentNoteId: newNote.id });
+    if (child && !child.parentNoteIds.includes(newNote.id)) {
+      affectedNotes.set(childId, { 
+        ...child, 
+        parentNoteIds: Array.from(new Set([...child.parentNoteIds, newNote.id])) 
+      });
     }
   });
 
   removedChildren.forEach(childId => {
     const child = affectedNotes.get(childId) || allNotes.find(n => n.id === childId);
-    if (child && child.parentNoteId === newNote.id) {
-      affectedNotes.set(childId, { ...child, parentNoteId: undefined });
+    if (child && child.parentNoteIds.includes(newNote.id)) {
+      affectedNotes.set(childId, { 
+        ...child, 
+        parentNoteIds: child.parentNoteIds.filter(id => id !== newNote.id) 
+      });
     }
   });
 };
@@ -136,8 +132,8 @@ export const cleanupNoteRelationships = (
     let updatedNote = { ...note };
 
     // 1. 부모 관계 정리
-    if (updatedNote.parentNoteId === deletedNoteId) {
-      updatedNote.parentNoteId = undefined;
+    if (updatedNote.parentNoteIds.includes(deletedNoteId)) {
+      updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => id !== deletedNoteId);
       changed = true;
     }
 

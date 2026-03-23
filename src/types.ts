@@ -18,7 +18,7 @@ export interface Note {
   noteType: NoteType;
   
   // 계층 관계 (양방향 자동 동기화 대상)
-  parentNoteId?: string;
+  parentNoteIds: string[];
   childNoteIds: string[]; 
   
   // 연관 관계 (양방향 자동 동기화 대상)

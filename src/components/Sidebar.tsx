@@ -128,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const item = noteMap.get(note.id)!;
       
       // If it has a parent note, it will be handled in step 3
-      if (note.parentNoteId && noteMap.has(note.parentNoteId)) return;
+      if (note.parentNoteIds && note.parentNoteIds.length > 0 && note.parentNoteIds.some(pid => noteMap.has(pid))) return;
 
       const folderPath = note.folder || '미분류';
       const folderParts = folderPath.split('/').filter(Boolean);
@@ -158,14 +158,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     // 3. Handle note hierarchy (children of notes)
     notes.forEach(note => {
-      if (note.parentNoteId && noteMap.has(note.parentNoteId)) {
-        const parentItem = noteMap.get(note.parentNoteId)!;
-        const childItem = noteMap.get(note.id)!;
-        // Avoid duplicate additions if any
-        if (!parentItem.children.find(c => c.id === childItem.id)) {
-          parentItem.children.push(childItem);
+      (note.parentNoteIds || []).forEach(parentId => {
+        if (noteMap.has(parentId)) {
+          const parentItem = noteMap.get(parentId)!;
+          const childItem = noteMap.get(note.id)!;
+          // Avoid duplicate additions if any
+          if (!parentItem.children.find(c => c.id === childItem.id)) {
+            parentItem.children.push(childItem);
+          }
         }
-      }
+      });
     });
 
     // Sort: Folders first, then notes alphabetically

@@ -7,15 +7,17 @@ import { Note } from '../types';
  */
 export const findOrphanNotes = (notes: Note[]): Note[] => {
   return notes.filter(note => {
-    // 1. Task인 경우: 상위 Feature가 반드시 있어야 함
+    // 1. Task인 경우: 적어도 하나의 Feature 타입 부모가 있는지 확인
     if (note.noteType === 'Task') {
-      const parent = notes.find(n => n.id === note.parentNoteId);
-      return !parent || parent.noteType !== 'Feature';
+      return !note.parentNoteIds.some(pId => 
+        notes.find(n => n.id === pId && n.noteType === 'Feature')
+      );
     }
-    // 2. Feature인 경우: 상위 Epic이 반드시 있어야 함
+    // 2. Feature인 경우: 적어도 하나의 Epic 타입 부모가 있는지 확인
     if (note.noteType === 'Feature') {
-      const parent = notes.find(n => n.id === note.parentNoteId);
-      return !parent || parent.noteType !== 'Epic';
+      return !note.parentNoteIds.some(pId => 
+        notes.find(n => n.id === pId && n.noteType === 'Epic')
+      );
     }
     return false;
   });

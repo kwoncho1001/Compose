@@ -465,7 +465,8 @@ export const Dashboard: React.FC = () => {
           tags: ['imported'],
           noteType: 'Task',
           relatedNoteIds: [],
-          childNoteIds: []
+          childNoteIds: [],
+          parentNoteIds: []
         };
         newNotes.push(newNote);
       } catch (err) {
@@ -541,75 +542,83 @@ export const Dashboard: React.FC = () => {
   const handleEnforceHierarchy = async () => {
     if (state.notes.length === 0) return;
 
-    const orphans = findOrphanNotes(state.notes);
-    if (orphans.length === 0) {
-      showAlert('알림', '모든 노트가 올바른 계층 구조를 가지고 있습니다.', 'success');
-      return;
-    }
-
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const signal = abortController.signal;
 
     setIsSyncing(true);
-    setProcessStatus({ message: `고아 노트 ${orphans.length}개에 대한 상위 계층 생성 중...` });
-
+    
     try {
-      const newNotes: Note[] = [];
-      const updatedOrphans: Note[] = [];
+      let currentNotes = [...state.notes];
+      let iterationCount = 0;
+      const maxIterations = 5; // 무한 루프 방지를 위한 안전 장치
 
-      for (const orphan of orphans) {
-        if (signal.aborted) break;
-        
-        const parentType: NoteType = orphan.noteType === 'Task' ? 'Feature' : 'Epic';
-        setProcessStatus({ message: `"${orphan.title}"의 상위 ${parentType} 설계 중...` });
-        
-        const suggestedParent = await generateParentNode(orphan, parentType, signal);
-        
-        const newParentId = Math.random().toString(36).substr(2, 9);
-        const newParentNode: Note = {
-          id: newParentId,
-          title: suggestedParent.title || `New ${parentType}`,
-          folder: suggestedParent.folder || orphan.folder,
-          content: suggestedParent.content || '',
-          summary: suggestedParent.summary || '',
-          noteType: parentType,
-          status: 'Planned',
-          priority: 'C',
-          version: '1.0.0',
-          lastUpdated: new Date().toISOString(),
-          importance: suggestedParent.importance || 3,
-          tags: suggestedParent.tags || [],
-          childNoteIds: [orphan.id],
-          relatedNoteIds: suggestedParent.relatedNoteIds || []
-        };
+      // 1. 고아 노드가 없을 때까지 반복 검사
+      while (true) {
+        const orphans = findOrphanNotes(currentNotes);
+        if (orphans.length === 0 || iterationCount >= maxIterations) break;
 
-        newNotes.push(newParentNode);
-        updatedOrphans.push({
-          ...orphan,
-          parentNoteId: newParentId,
-          lastUpdated: new Date().toISOString()
+        iterationCount++;
+        setProcessStatus({ 
+          message: `계층 보정 ${iterationCount}단계: 고아 노드 ${orphans.length}개 처리 중...` 
         });
+
+        const newParentNotes: Note[] = [];
+        const updatedOrphans: Note[] = [];
+
+        for (const orphan of orphans) {
+          if (signal.aborted) break;
+          
+          const parentType: NoteType = orphan.noteType === 'Task' ? 'Feature' : 'Epic';
+          setProcessStatus({ message: `"${orphan.title}"의 상위 ${parentType} 설계 중...` });
+
+          // AI를 통해 상위 노드 데이터 생성
+          const suggestedParent = await generateParentNode(orphan, parentType, signal);
+          
+          const newParentId = Math.random().toString(36).substr(2, 9);
+          const newParentNode: Note = {
+            id: newParentId,
+            title: suggestedParent.title || `New ${parentType}`,
+            folder: suggestedParent.folder || orphan.folder,
+            content: suggestedParent.content || '',
+            summary: suggestedParent.summary || '',
+            noteType: parentType,
+            status: 'Planned',
+            priority: 'C',
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+            importance: suggestedParent.importance || 3,
+            tags: [...(suggestedParent.tags || []), 'auto-generated'],
+            parentNoteIds: [],
+            childNoteIds: [orphan.id],
+            relatedNoteIds: suggestedParent.relatedNoteIds || []
+          };
+
+          newParentNotes.push(newParentNode);
+          updatedOrphans.push({
+            ...orphan,
+            parentNoteIds: Array.from(new Set([...(orphan.parentNoteIds || []), newParentId])),
+            lastUpdated: new Date().toISOString()
+          });
+        }
+
+        if (signal.aborted) return;
+
+        // 2. 현재 단계에서 생성/수정된 노드들을 즉시 반영하여 다음 'while' 반복에서 검사 대상이 되게 함
+        const iterationResultsMap = new Map(currentNotes.map(n => [n.id, n]));
+        newParentNotes.forEach(n => iterationResultsMap.set(n.id, n));
+        updatedOrphans.forEach(uo => iterationResultsMap.set(uo.id, uo));
+        
+        currentNotes = Array.from(iterationResultsMap.values());
+
+        // Firestore 중간 저장
+        saveNotesToFirestore([...newParentNotes, ...updatedOrphans]);
       }
 
-      if (signal.aborted) return;
+      // 3. 최종 상태 반영
+      setState(prev => ({ ...prev, notes: currentNotes }));
+      showAlert('보정 완료', '모든 노드가 Epic -> Feature -> Task 계층에 편입되었습니다.', 'success');
 
-      // Update state and Firestore
-      const finalNotes = [...state.notes];
-      
-      // Add new parents
-      newNotes.forEach(n => finalNotes.push(n));
-      
-      // Update orphans
-      updatedOrphans.forEach(uo => {
-        const idx = finalNotes.findIndex(n => n.id === uo.id);
-        if (idx !== -1) finalNotes[idx] = uo;
-      });
-
-      saveNotesToFirestore([...newNotes, ...updatedOrphans]);
-      setState(prev => ({ ...prev, notes: finalNotes }));
-      
-      showAlert('완료', `${newNotes.length}개의 상위 노드가 생성되어 계층 구조가 보정되었습니다.`, 'success');
     } catch (error) {
       if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Hierarchy enforcement cancelled');
@@ -754,6 +763,7 @@ export const Dashboard: React.FC = () => {
       tags: [],
       childNoteIds: [],
       relatedNoteIds: [],
+      parentNoteIds: [],
       noteType: 'Feature'
     };
     handleUpdateNote(newNote);
@@ -770,7 +780,7 @@ export const Dashboard: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       title: '새 하위 노트',
       folder: parentNote ? parentNote.folder : '미분류',
-      parentNoteId: parentId,
+      parentNoteIds: [parentId],
       content: `# ${parentNote?.title || ''}의 하위 기능\n여기에 세부 기능을 설명하세요.`,
       summary: '하위 기능 설명',
       status: 'Planned',
@@ -917,6 +927,7 @@ export const Dashboard: React.FC = () => {
             tags: ['system-log'],
             childNoteIds: [],
             relatedNoteIds: [],
+            parentNoteIds: [],
             noteType: 'Reference'
           };
           
@@ -949,8 +960,8 @@ export const Dashboard: React.FC = () => {
     // 1. 부모-자식 관계 전수 조사 및 복구
     for (const note of Array.from(notesMap.values())) {
       // 부모 -> 자식 방향 확인
-      if (note.parentNoteId) {
-        const parent = notesMap.get(note.parentNoteId);
+      for (const parentId of (note.parentNoteIds || [])) {
+        const parent = notesMap.get(parentId);
         if (parent && !parent.childNoteIds.includes(note.id)) {
           parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
           changed = true;
@@ -960,8 +971,8 @@ export const Dashboard: React.FC = () => {
       // 자식 -> 부모 방향 확인
       for (const childId of note.childNoteIds) {
         const child = notesMap.get(childId);
-        if (child && child.parentNoteId !== note.id) {
-          child.parentNoteId = note.id;
+        if (child && !(child.parentNoteIds || []).includes(note.id)) {
+          child.parentNoteIds = Array.from(new Set([...(child.parentNoteIds || []), note.id]));
           changed = true;
         }
       }
@@ -1096,6 +1107,7 @@ export const Dashboard: React.FC = () => {
               tags: ['system-log'],
               childNoteIds: [],
               relatedNoteIds: [],
+              parentNoteIds: [],
               noteType: 'Reference'
             };
             currentNotes.push(newLogNote);
@@ -1180,7 +1192,7 @@ export const Dashboard: React.FC = () => {
                 tags: ['auto-generated', 'design-leading-code'],
                 relatedNoteIds: [],
                 childNoteIds: [],
-                ...(parentNoteId ? { parentNoteId } : {})
+                parentNoteIds: parentNoteId ? [parentNoteId] : []
               };
               
               currentNotes.push(newDesignNote);
@@ -1218,7 +1230,7 @@ export const Dashboard: React.FC = () => {
           }
 
           // AI가 제안한 parentNoteId (설계도 ID) 처리
-          const suggestedParentId = parent.parentNoteId ? (tempIdMap.get(parent.parentNoteId) || parent.parentNoteId) : undefined;
+          const suggestedParentId = parent.parentNoteIds?.[0] ? (tempIdMap.get(parent.parentNoteIds[0]) || parent.parentNoteIds[0]) : undefined;
 
           let finalParent: Note;
           if (targetParent) {
@@ -1227,7 +1239,9 @@ export const Dashboard: React.FC = () => {
             if (signal.aborted) return;
             
             finalParent.noteType = 'Reference';
-            finalParent.parentNoteId = suggestedParentId || finalParent.parentNoteId;
+            if (suggestedParentId) {
+              finalParent.parentNoteIds = Array.from(new Set([...(finalParent.parentNoteIds || []), suggestedParentId]));
+            }
             finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
             finalParent.tags = Array.from(new Set([...(finalParent.tags || []), ...((parent as any).tags || [])]));
             finalParent.githubLink = file.path;
@@ -1248,7 +1262,7 @@ export const Dashboard: React.FC = () => {
               status: 'Done',
               priority: (parent as any).priority || 'C',
               noteType: 'Reference',
-              parentNoteId: suggestedParentId,
+              parentNoteIds: suggestedParentId ? [suggestedParentId] : [],
               relatedNoteIds: parent.relatedNoteIds || [],
               childNoteIds: [],
               githubLink: file.path
@@ -1272,8 +1286,7 @@ export const Dashboard: React.FC = () => {
               setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
               finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
               if (signal.aborted) return;
-              finalNote.parentNoteId = parentNoteId; // Force link
-              if (!parentNoteId) delete finalNote.parentNoteId;
+              finalNote.parentNoteIds = Array.from(new Set([...(finalNote.parentNoteIds || []), parentNoteId]));
               
               finalNote.noteType = 'Reference';
               finalNote.relatedNoteIds = Array.from(new Set([...(finalNote.relatedNoteIds || []), ...(unit.relatedNoteIds || [])]));
@@ -1295,7 +1308,7 @@ export const Dashboard: React.FC = () => {
                 status: 'Done',
                 priority: (unit as any).priority || 'C',
                 childNoteIds: [],
-                ...(parentNoteId ? { parentNoteId } : {}),
+                parentNoteIds: parentNoteId ? [parentNoteId] : [],
                 noteType: 'Reference',
                 relatedNoteIds: unit.relatedNoteIds || []
               };
@@ -1404,7 +1417,8 @@ export const Dashboard: React.FC = () => {
           tags: ['system-log'],
           noteType: 'Task',
           relatedNoteIds: [],
-          childNoteIds: []
+          childNoteIds: [],
+          parentNoteIds: []
         };
         currentNotes.push(newLogNote);
         await saveNotesToFirestore([newLogNote]);

@@ -17,8 +17,8 @@ const systemInstruction = `
 2. 오버뷰(Overview) 생성: 실제 노트를 만들기 전, Epic-Feature-Task의 트리 구조를 텍스트로 먼저 설계합니다.
 3. 순차적 생성: 
    - 최상위 Epic 노드를 생성합니다.
-   - Epic의 자식인 Feature 노드들을 생성하고 parentNoteId를 Epic ID로 연결합니다.
-   - Feature의 자식인 Task 노드들을 생성하고 parentNoteId를 각 Feature ID로 연결합니다.
+   - Epic의 자식인 Feature 노드들을 생성하고 parentNoteIds에 Epic ID를 연결합니다.
+   - Feature의 자식인 Task 노드들을 생성하고 parentNoteIds에 각 Feature ID로 연결합니다.
 
 [태그 및 메타데이터 규칙]
 1. 태그(tags)는 반드시 해당 기능의 '역할'이나 '기술 스택'을 나타내야 합니다. 
@@ -28,7 +28,7 @@ const systemInstruction = `
    - 구현 순서에 따라 A(필수/선행), B(보통), C(지연/후행), Done(완료)으로 배정합니다.
    - 예: 의존성이 있는 선행 작업은 'A', 결과물은 'C'.
 3. 모든 텍스트는 한국어로 작성합니다.
-3. parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
+3. parentNoteIds, relatedNoteIds, tags를 적절히 설정하십시오. 하나의 작업(Task)이 여러 기능(Feature)에 기여한다면 parentNoteIds에 복수의 ID를 포함시켜 계층적 다중 소속을 명시하십시오.
 4. 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
 
@@ -39,7 +39,7 @@ const noteSchema: Schema = {
     folder: { type: Type.STRING, description: "폴더 카테고리 (반드시 한국어)" },
     content: { type: Type.STRING, description: "상세 설명 및 기술 명세 (반드시 한국어, 가독성을 위해 적절한 줄바꿈 포함, Markdown)" },
     summary: { type: Type.STRING, description: "이 기능/모듈이 수행하는 역할에 대한 1-2문장 요약 (반드시 한국어)" },
-    parentNoteId: { type: Type.STRING, description: "주요 부모 기능의 ID" },
+    parentNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "주요 부모 기능의 ID 목록" },
     relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 고유 ID(id) 목록. 제목을 넣지 마십시오. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
     tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "본문에서 추출한 핵심 키워드 태그 목록" },
     importance: { type: Type.NUMBER, description: "중요도 (1~5점)" },
@@ -78,15 +78,15 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
   return updatedNotes.map(note => {
     const existingNote = note.id ? allNotesMap.get(note.id) : null;
     
-    let sanitizedParentId = note.parentNoteId;
-    if (sanitizedParentId) {
-      if (titleToIdMap.has(sanitizedParentId)) {
-        sanitizedParentId = titleToIdMap.get(sanitizedParentId)!;
-      }
-    }
+    const rawParentIds = Array.isArray(note.parentNoteIds) ? note.parentNoteIds : (note.parentNoteId ? [note.parentNoteId] : (existingNote?.parentNoteIds || []));
+    const sanitizedParentIds = rawParentIds.map((idOrTitle: string) => {
+      if (allNotesMap.has(idOrTitle)) return idOrTitle;
+      if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
+      return idOrTitle;
+    }).filter((id: any) => id && typeof id === 'string');
 
     const rawRelatedIds = Array.isArray(note.relatedNoteIds) ? note.relatedNoteIds : (existingNote?.relatedNoteIds || []);
-    const sanitizedIds = rawRelatedIds.map((idOrTitle: string) => {
+    const sanitizedRelatedIds = rawRelatedIds.map((idOrTitle: string) => {
       if (allNotesMap.has(idOrTitle)) return idOrTitle;
       if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
       return idOrTitle;
@@ -95,8 +95,8 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
     return { 
       ...existingNote,
       ...note, 
-      parentNoteId: sanitizedParentId, 
-      relatedNoteIds: Array.from(new Set(sanitizedIds)),
+      parentNoteIds: Array.from(new Set(sanitizedParentIds)), 
+      relatedNoteIds: Array.from(new Set(sanitizedRelatedIds)),
       childNoteIds: Array.isArray(note.childNoteIds) ? note.childNoteIds : (existingNote?.childNoteIds || []),
       tags: Array.isArray(note.tags) ? note.tags : (existingNote?.tags || []),
       priority: note.priority || existingNote?.priority || 'C',
@@ -189,6 +189,7 @@ export const decomposeFeature = async (
     importance: mainFeature.importance || 3,
     tags: mainFeature.tags || [],
     relatedNoteIds: mainFeature.relatedNoteIds || [],
+    parentNoteIds: [],
     childNoteIds: [],
     noteType: parentType as NoteType,
     status: 'Planned',
@@ -229,7 +230,7 @@ export const decomposeFeature = async (
     childNoteIds: [],
     ...n,
     id: Math.random().toString(36).substr(2, 9),
-    parentNoteId: mainNoteId, // 부모 ID와 강제 연결
+    parentNoteIds: [mainNoteId], // 부모 ID와 강제 연결
     noteType: childType,      // 부모가 E면 F, 부모가 F면 T 강제 할당
     status: 'Planned'
   }));

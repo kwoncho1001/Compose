@@ -91,7 +91,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     version: string;
     importance: number;
     tags: string[];
-    parentNoteId?: string;
+    parentNoteIds: string[];
     relatedNoteIds: string[];
     noteType: NoteType;
   }>({
@@ -104,6 +104,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     version: '1.0.0',
     importance: 3,
     tags: [],
+    parentNoteIds: [],
     relatedNoteIds: [],
     noteType: 'Feature'
   });
@@ -120,7 +121,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
         version: note.version,
         importance: note.importance,
         tags: note.tags || [],
-        parentNoteId: note.parentNoteId,
+        parentNoteIds: note.parentNoteIds || [],
         relatedNoteIds: note.relatedNoteIds || [],
         noteType: note.noteType || 'Feature'
       });
@@ -146,10 +147,18 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     syncChanges({ status });
   };
 
-  const handleParentChange = (parentNoteId: string | undefined) => {
+  const handleParentAdd = (pId: string) => {
+    if (isSnapshotNote || editData.parentNoteIds.includes(pId)) return;
+    const newParentIds = [...editData.parentNoteIds, pId];
+    setEditData(prev => ({ ...prev, parentNoteIds: newParentIds }));
+    syncChanges({ parentNoteIds: newParentIds });
+  };
+
+  const handleParentRemove = (pId: string) => {
     if (isSnapshotNote) return;
-    setEditData(prev => ({ ...prev, parentNoteId }));
-    syncChanges({ parentNoteId });
+    const newParentIds = editData.parentNoteIds.filter(id => id !== pId);
+    setEditData(prev => ({ ...prev, parentNoteIds: newParentIds }));
+    syncChanges({ parentNoteIds: newParentIds });
   };
 
   const handleNoteTypeChange = (noteType: NoteType) => {
@@ -582,16 +591,28 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
               </MetadataRow>
 
               <MetadataRow label="상위 노트" icon={<ChevronRight className="w-3 h-3" />}>
-                <select
-                  value={editData.parentNoteId || ''}
-                  onChange={(e) => handleParentChange(e.target.value || undefined)}
-                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
-                >
-                  <option value="">없음</option>
-                  {allNotes.filter(n => n.id !== note.id).map(n => (
-                    <option key={n.id} value={n.id}>{n.title}</option>
-                  ))}
-                </select>
+                <div className="flex flex-wrap gap-1 mb-1">
+                  {(editData.parentNoteIds || []).map(pId => {
+                    const pNote = allNotes.find(n => n.id === pId);
+                    return (
+                      <span key={pId} className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-[10px] rounded flex items-center gap-1 text-slate-600 dark:text-slate-400">
+                        {pNote?.title || '...'}
+                        {!isSnapshotNote && <X className="w-2 h-2 cursor-pointer" onClick={() => handleParentRemove(pId)} />}
+                      </span>
+                    );
+                  })}
+                </div>
+                {!isSnapshotNote && (
+                  <select 
+                    onChange={(e) => e.target.value && handleParentAdd(e.target.value)}
+                    className="w-full bg-transparent text-[10px] text-slate-400 focus:outline-none"
+                  >
+                    <option value="">+ 상위 계층 추가</option>
+                    {allNotes.filter(n => n.id !== note.id && !(editData.parentNoteIds || []).includes(n.id)).map(n => (
+                      <option key={n.id} value={n.id}>{n.title}</option>
+                    ))}
+                  </select>
+                )}
               </MetadataRow>
 
               <MetadataRow label="하위 노트" icon={<Layers className="w-3 h-3" />}>

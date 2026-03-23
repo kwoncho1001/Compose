@@ -40,15 +40,17 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       const nodeMap = new Map(filteredNotes.map(n => [n.id, n]));
 
       filteredNotes.forEach(note => {
-        if (note.parentNoteId && nodeMap.has(note.parentNoteId)) {
-          const parentNote = nodeMap.get(note.parentNoteId);
-          links.push({
-            source: note.parentNoteId,
-            target: note.id,
-            type: 'parent',
-            isReferenceLink: note.noteType === 'Reference' || parentNote?.noteType === 'Reference'
-          });
-        }
+        (note.parentNoteIds || []).forEach(parentId => {
+          if (nodeMap.has(parentId)) {
+            const parentNote = nodeMap.get(parentId);
+            links.push({
+              source: parentId,
+              target: note.id,
+              type: 'parent',
+              isReferenceLink: note.noteType === 'Reference' || parentNote?.noteType === 'Reference'
+            });
+          }
+        });
         if (note.relatedNoteIds) {
           note.relatedNoteIds.forEach(relId => {
             if (nodeMap.has(relId)) {
@@ -83,7 +85,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       notes.forEach(note => {
         const sourceDomain = note.folder || '미분류';
         const targets = [
-          ...(note.parentNoteId ? [note.parentNoteId] : []),
+          ...(note.parentNoteIds || []),
           ...(note.relatedNoteIds || [])
         ];
 
@@ -119,7 +121,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       const connectedDomainNames = new Set<string>();
       notes.forEach(note => {
         const noteDomain = note.folder || '미분류';
-        const targets = [...(note.parentNoteId ? [note.parentNoteId] : []), ...(note.relatedNoteIds || [])];
+        const targets = [...(note.parentNoteIds || []), ...(note.relatedNoteIds || [])];
 
         // 케이스 A: 선택된 도메인의 노트가 가리키는 대상의 도메인
         if (noteDomain === selectedDomain) {
@@ -186,10 +188,10 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       const neighborIds = new Set<string>();
       notes.forEach(n => {
         if (significantIds.has(n.id)) {
-          if (n.parentNoteId) neighborIds.add(n.parentNoteId);
+          (n.parentNoteIds || []).forEach(id => neighborIds.add(id));
           if (n.relatedNoteIds) n.relatedNoteIds.forEach(id => neighborIds.add(id));
         } else {
-          if (n.parentNoteId && significantIds.has(n.parentNoteId)) neighborIds.add(n.id);
+          if ((n.parentNoteIds || []).some(id => significantIds.has(id))) neighborIds.add(n.id);
           if (n.relatedNoteIds && n.relatedNoteIds.some(id => significantIds.has(id))) neighborIds.add(n.id);
         }
       });

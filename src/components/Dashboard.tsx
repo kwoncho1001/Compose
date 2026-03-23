@@ -24,10 +24,12 @@ import {
   refineSearchGoal,
   summarizeReposShort,
   parseMetadata,
-  chatWithNotes
+  chatWithNotes,
+  generateParentNode
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
+import { findOrphanNotes } from '../utils/hierarchyValidator';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -529,6 +531,91 @@ export const Dashboard: React.FC = () => {
       } else {
         console.error('Optimization failed', error);
         showAlert('오류', '설계도 최적화 중 오류가 발생했습니다.', 'error');
+      }
+    } finally {
+      setIsSyncing(false);
+      setProcessStatus(null);
+    }
+  };
+
+  const handleEnforceHierarchy = async () => {
+    if (state.notes.length === 0) return;
+
+    const orphans = findOrphanNotes(state.notes);
+    if (orphans.length === 0) {
+      showAlert('알림', '모든 노트가 올바른 계층 구조를 가지고 있습니다.', 'success');
+      return;
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
+    setIsSyncing(true);
+    setProcessStatus({ message: `고아 노트 ${orphans.length}개에 대한 상위 계층 생성 중...` });
+
+    try {
+      const newNotes: Note[] = [];
+      const updatedOrphans: Note[] = [];
+
+      for (const orphan of orphans) {
+        if (signal.aborted) break;
+        
+        const parentType: NoteType = orphan.noteType === 'Task' ? 'Feature' : 'Epic';
+        setProcessStatus({ message: `"${orphan.title}"의 상위 ${parentType} 설계 중...` });
+        
+        const suggestedParent = await generateParentNode(orphan, parentType, signal);
+        
+        const newParentId = Math.random().toString(36).substr(2, 9);
+        const newParentNode: Note = {
+          id: newParentId,
+          title: suggestedParent.title || `New ${parentType}`,
+          folder: suggestedParent.folder || orphan.folder,
+          content: suggestedParent.content || '',
+          summary: suggestedParent.summary || '',
+          noteType: parentType,
+          status: 'Planned',
+          priority: 'C',
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          importance: suggestedParent.importance || 3,
+          tags: suggestedParent.tags || [],
+          childNoteIds: [orphan.id],
+          relatedNoteIds: suggestedParent.relatedNoteIds || []
+        };
+
+        newNotes.push(newParentNode);
+        updatedOrphans.push({
+          ...orphan,
+          parentNoteId: newParentId,
+          lastUpdated: new Date().toISOString()
+        });
+      }
+
+      if (signal.aborted) return;
+
+      // Update state and Firestore
+      const finalNotes = [...state.notes];
+      
+      // Add new parents
+      newNotes.forEach(n => finalNotes.push(n));
+      
+      // Update orphans
+      updatedOrphans.forEach(uo => {
+        const idx = finalNotes.findIndex(n => n.id === uo.id);
+        if (idx !== -1) finalNotes[idx] = uo;
+      });
+
+      saveNotesToFirestore([...newNotes, ...updatedOrphans]);
+      setState(prev => ({ ...prev, notes: finalNotes }));
+      
+      showAlert('완료', `${newNotes.length}개의 상위 노드가 생성되어 계층 구조가 보정되었습니다.`, 'success');
+    } catch (error) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        console.log('Hierarchy enforcement cancelled');
+      } else {
+        console.error('Hierarchy enforcement failed', error);
+        showAlert('오류', '계층 구조 보정 중 오류가 발생했습니다.', 'error');
       }
     } finally {
       setIsSyncing(false);
@@ -2274,6 +2361,13 @@ export const Dashboard: React.FC = () => {
                       className="col-span-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 py-2.5 rounded-md text-[10px] font-bold border border-emerald-100 dark:border-emerald-800/50 flex items-center justify-center gap-1 shadow-sm"
                     >
                       {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />} 일관성 검증
+                    </button>
+                    <button
+                      onClick={handleEnforceHierarchy}
+                      disabled={isSyncing || state.notes.length === 0}
+                      className="col-span-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 py-2.5 rounded-md text-[10px] font-bold border border-amber-100 dark:border-amber-800/50 flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />} 계층 구조 자동 보정 (고아 노트 해결)
                     </button>
                     <button
                       onClick={handleAnalyzeNextSteps}

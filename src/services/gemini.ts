@@ -76,6 +76,8 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
   const titleToIdMap = new Map(allNotes.map(n => [n.title, n.id]));
   
   return updatedNotes.map(note => {
+    const existingNote = note.id ? allNotesMap.get(note.id) : null;
+    
     let sanitizedParentId = note.parentNoteId;
     if (sanitizedParentId) {
       if (titleToIdMap.has(sanitizedParentId)) {
@@ -83,18 +85,70 @@ const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]) => {
       }
     }
 
-    if (!note.relatedNoteIds) return { ...note, parentNoteId: sanitizedParentId };
-    
-    const sanitizedIds = note.relatedNoteIds.map((idOrTitle: string) => {
+    const rawRelatedIds = Array.isArray(note.relatedNoteIds) ? note.relatedNoteIds : (existingNote?.relatedNoteIds || []);
+    const sanitizedIds = rawRelatedIds.map((idOrTitle: string) => {
       if (allNotesMap.has(idOrTitle)) return idOrTitle;
       if (titleToIdMap.has(idOrTitle)) return titleToIdMap.get(idOrTitle)!;
       return idOrTitle;
     }).filter((id: any) => id && typeof id === 'string');
     
-    return { ...note, parentNoteId: sanitizedParentId, relatedNoteIds: Array.from(new Set(sanitizedIds)) };
+    return { 
+      ...existingNote,
+      ...note, 
+      parentNoteId: sanitizedParentId, 
+      relatedNoteIds: Array.from(new Set(sanitizedIds)),
+      childNoteIds: Array.isArray(note.childNoteIds) ? note.childNoteIds : (existingNote?.childNoteIds || []),
+      tags: Array.isArray(note.tags) ? note.tags : (existingNote?.tags || []),
+      priority: note.priority || existingNote?.priority || 'C',
+      status: note.status || existingNote?.status || 'Planned',
+      version: note.version || existingNote?.version || '1.0.0',
+      lastUpdated: note.lastUpdated || new Date().toISOString(),
+      importance: note.importance || existingNote?.importance || 3
+    };
   });
 };
 
+export const generateParentNode = async (
+  orphanNote: Note,
+  parentType: NoteType,
+  signal?: AbortSignal
+): Promise<Partial<Note>> => {
+  const prompt = `
+당신은 시스템 아키텍트입니다. 아래의 ${orphanNote.noteType} 노트를 포함할 수 있는 가장 적합한 상위 ${parentType} 노트를 설계하십시오.
+
+[하위 노트 정보]
+제목: ${orphanNote.title}
+유형: ${orphanNote.noteType}
+요약: ${orphanNote.summary}
+내용: ${orphanNote.content.slice(0, 1000)}
+
+[작업 지침]
+1. 이 하위 노트를 논리적으로 포괄할 수 있는 상위 ${parentType}의 제목과 내용을 작성하십시오.
+2. 폴더는 하위 노트와 동일하거나 상위 개념의 폴더를 사용하십시오.
+3. 모든 텍스트는 한국어로 작성하십시오.
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: noteSchema,
+    },
+  });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  const result = safeJsonParse(response.text || "{}");
+  return {
+    ...result,
+    noteType: parentType,
+    status: 'Planned',
+    version: '1.0.0',
+    lastUpdated: new Date().toISOString(),
+  };
+};
 export const decomposeFeature = async (
   featureRequest: string,
   currentGcm: GCM,

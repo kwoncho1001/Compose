@@ -32,6 +32,8 @@ export interface Note {
   
   // (기존 충돌 정보 등은 필요에 따라 유지)
   githubLink?: string;
+  originPath?: string; // 소스 파일의 물리적 경로 (예: src/services/gemini.ts)
+  logicHash?: string;  // 로직 단위의 지문 (코드 조각의 해시값)
   isMainFeature?: boolean;
   conflictInfo?: {
     filePath: string;

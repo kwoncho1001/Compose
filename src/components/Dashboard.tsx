@@ -17,7 +17,7 @@ import {
   checkConsistency,
   generateSubModules,
   updateCodeSnapshot,
-  mergeLogicIntoNote,
+  analyzeLogicUnitDeeply,
   summarizeRepoFeatures,
   transpileExternalLogic,
   translateQueryForGithub,
@@ -1268,204 +1268,148 @@ export const Dashboard: React.FC = () => {
           if (signal.aborted) return;
           const snapshotNotes = currentNotes.filter(n => n.noteType === 'Reference');
           
-          // Find existing parent to get old child IDs for cleanup
-          const existingParent = snapshotNotes.find(n => n.githubLink === file.path);
-          const oldChildIds = existingParent?.childNoteIds || [];
+          // Find all existing Reference notes linked to this file for cleanup
+          const existingFileNotes = snapshotNotes.filter(n => n.githubLink === file.path || n.originPath === file.path);
+          const oldNoteIds = existingFileNotes.map(n => n.id);
 
-          const { parent, children, newDesignNotes } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
+          const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
           if (signal.aborted) return;
           const touchedNotes: Note[] = [];
-          const childIds: string[] = [];
+          const processedNoteIds: string[] = [];
           
-          // 0. Process newDesignNotes (Reverse Engineering)
-          const tempIdMap = new Map<string, string>();
-          if (newDesignNotes && newDesignNotes.length > 0) {
-            setProcessStatus(prev => ({ ...prev!, message: `새로운 설계 노트 생성 중... (${newDesignNotes.length}개)` }));
+          // 1. Process logicUnits (Significant Logic Units)
+          for (const unit of logicUnits) {
+            if (signal.aborted) return;
             
-            // Sort to ensure Epics are created before Features, and Features before Tasks
-            const sortedDesignNotes = [...newDesignNotes].sort((a, b) => {
-              const order = { 'Epic': 1, 'Feature': 2, 'Task': 3 };
-              return (order[a.noteType] || 4) - (order[b.noteType] || 4);
-            });
-
-            for (const dNote of sortedDesignNotes) {
-              const newId = Math.random().toString(36).substr(2, 9);
-              tempIdMap.set(dNote.tempId, newId);
+            // Step 2: Determine Task ID
+            let taskId = unit.matchedTaskId;
+            if (!taskId && unit.suggestedTask) {
+              // Check if we already created this task in this sync session or if it exists
+              const existingTask = currentNotes.find(n => 
+                n.title === unit.suggestedTask!.title && 
+                (n.noteType === 'Task' || n.noteType === 'Feature')
+              );
               
-              let parentNoteId = undefined;
-              if (dNote.parentTempId && tempIdMap.has(dNote.parentTempId)) {
-                parentNoteId = tempIdMap.get(dNote.parentTempId);
-              } else if (dNote.matchedNoteId) {
-                parentNoteId = dNote.matchedNoteId;
-              }
-
-              const newDesignNote: Note = {
-                id: newId,
-                title: dNote.title,
-                folder: dNote.folder,
-                content: dNote.content,
-                summary: dNote.summary,
-                noteType: dNote.noteType,
-                status: 'Planned',
-                priority: 'C',
-                version: '1.0.0',
-                lastUpdated: new Date().toISOString(),
-                importance: 3,
-                tags: ['auto-generated', 'design-leading-code'],
-                relatedNoteIds: [],
-                childNoteIds: [],
-                parentNoteIds: parentNoteId ? [parentNoteId] : []
-              };
-              
-              currentNotes.push(newDesignNote);
-              touchedNotes.push(newDesignNote);
-              newCount++;
-            }
-          }
-
-          const replaceTempIds = (ids: string[]) => {
-            if (!ids) return [];
-            return ids.map(id => tempIdMap.get(id) || id);
-          };
-
-          const appendRelatedNoteIdsToYaml = (yaml: string | undefined, relatedIds: string[]) => {
-            let newYaml = yaml || '';
-            if (relatedIds && relatedIds.length > 0) {
-              if (!newYaml.includes('relatedNoteIds:')) {
-                newYaml += `\nrelatedNoteIds: [${relatedIds.join(', ')}]`;
+              if (existingTask) {
+                taskId = existingTask.id;
               } else {
-                newYaml = newYaml.replace(/relatedNoteIds:.*(\n|$)/g, `relatedNoteIds: [${relatedIds.join(', ')}]\n`);
+                // Create new leaf Task
+                const newTaskId = Math.random().toString(36).substr(2, 9);
+                const newTask: Note = {
+                  id: newTaskId,
+                  title: unit.suggestedTask.title,
+                  folder: unit.suggestedTask.folder,
+                  content: unit.suggestedTask.content,
+                  summary: unit.suggestedTask.summary,
+                  noteType: 'Task',
+                  status: 'Planned',
+                  priority: 'C',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                  importance: 3,
+                  tags: ['auto-generated', 'design-leading-code'],
+                  relatedNoteIds: [],
+                  childNoteIds: [],
+                  parentNoteIds: [] // Hierarchy validator will fix this
+                };
+                currentNotes.push(newTask);
+                touchedNotes.push(newTask);
+                newCount++;
+                taskId = newTaskId;
               }
             }
-            return newYaml.trim();
-          };
 
-          parent.relatedNoteIds = replaceTempIds(parent.relatedNoteIds);
-          children.forEach(child => {
-            child.relatedNoteIds = replaceTempIds(child.relatedNoteIds);
-          });
+            if (!taskId) continue;
 
-          // 1. Process parent first to get its ID
-          let targetParent = currentNotes.find(n => n.id === parent.matchedNoteId);
-          if (!targetParent && parent.title && parent.folder) {
-            targetParent = currentNotes.find(n => n.title === parent.title && n.folder === parent.folder);
-          }
+            // Step 3: Deep-Dive Analysis
+            const taskNote = currentNotes.find(n => n.id === taskId);
+            if (!taskNote) continue;
 
-          // AI가 제안한 parentNoteIds (설계도 ID) 처리
-          const suggestedParentIds = parent.parentNoteIds ? parent.parentNoteIds.map(pid => tempIdMap.get(pid) || pid) : [];
+            // Smart Sync: Check if logicHash matches existing note
+            const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
+                                currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
 
-          let finalParent: Note;
-          if (targetParent) {
-            setProcessStatus(prev => ({ ...prev!, message: `기존 부모 스냅샷 업데이트 중: ${targetParent!.title}` }));
-            finalParent = await mergeLogicIntoNote(parent, targetParent, signal);
-            if (signal.aborted) return;
-            
-            finalParent.noteType = 'Reference';
-            if (suggestedParentIds.length > 0) {
-              finalParent.parentNoteIds = Array.from(new Set([...(finalParent.parentNoteIds || []), ...suggestedParentIds]));
-            }
-            finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
-            finalParent.tags = Array.from(new Set([...(finalParent.tags || []), ...((parent as any).tags || [])]));
-            finalParent.githubLink = file.path;
-            
-            currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
-            updateCount++;
-          } else {
-            finalParent = {
-              id: Math.random().toString(36).substr(2, 9),
-              title: parent.title,
-              folder: parent.folder,
-              content: parent.content,
-              summary: parent.summary,
-              version: '1.0.0',
-              lastUpdated: new Date().toISOString(),
-              importance: (parent as any).importance || 3,
-              tags: (parent as any).tags || [],
-              status: 'Done',
-              priority: (parent as any).priority || 'C',
-              noteType: 'Reference',
-              parentNoteIds: suggestedParentIds,
-              relatedNoteIds: parent.relatedNoteIds || [],
-              childNoteIds: [],
-              githubLink: file.path
-            };
-            currentNotes.push(finalParent);
-            newCount++;
-          }
-          const parentNoteId = finalParent.id;
-
-          // 2. Process children and link to parent
-          for (const unit of children) {
-            if (signal.aborted) return;
-            let targetNote = currentNotes.find(n => n.id === unit.matchedNoteId);
-            
-            if (!targetNote && unit.title && unit.folder) {
-              targetNote = currentNotes.find(n => n.title === unit.title && n.folder === unit.folder);
-            }
-
-            let finalNote: Note;
-            if (targetNote) {
-              setProcessStatus(prev => ({ ...prev!, message: `기존 자식 스냅샷 업데이트 중: ${targetNote!.title}` }));
-              finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
+            let analysis;
+            if (existingRef && existingRef.logicHash === unit.logicHash) {
+              // logicHash matches, skip deep-dive
+              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches.`);
+              analysis = {
+                content: existingRef.content,
+                summary: existingRef.summary,
+                importance: existingRef.importance,
+                tags: existingRef.tags
+              };
+            } else {
+              setProcessStatus(prev => ({ ...prev!, message: `로직 심층 분석 중: ${unit.title}` }));
+              analysis = await analyzeLogicUnitDeeply(unit.title, unit.codeSnippet, {
+                title: taskNote.title,
+                content: taskNote.content,
+                summary: taskNote.summary
+              }, signal);
               if (signal.aborted) return;
-              finalNote.parentNoteIds = Array.from(new Set([...(finalNote.parentNoteIds || []), parentNoteId]));
-              
-              finalNote.noteType = 'Reference';
-              finalNote.relatedNoteIds = Array.from(new Set([...(finalNote.relatedNoteIds || []), ...(unit.relatedNoteIds || [])]));
-              finalNote.tags = Array.from(new Set([...(finalNote.tags || []), ...((unit as any).tags || [])]));
-              
+            }
+
+            // Create or Update Reference note
+            let finalNote: Note;
+            if (existingRef) {
+              finalNote = {
+                ...existingRef,
+                content: analysis.content,
+                summary: analysis.summary,
+                importance: analysis.importance,
+                tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
+                lastUpdated: new Date().toISOString(),
+                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId])),
+                folder: taskNote.folder, // Inherit folder from Task
+                logicHash: unit.logicHash,
+                originPath: file.path
+              };
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
             } else {
               finalNote = {
                 id: Math.random().toString(36).substr(2, 9),
                 title: unit.title,
-                folder: unit.folder,
-                content: unit.content,
-                summary: unit.summary,
+                folder: taskNote.folder,
+                content: analysis.content,
+                summary: analysis.summary,
                 version: '1.0.0',
                 lastUpdated: new Date().toISOString(),
-                importance: (unit as any).importance || 3,
-                tags: (unit as any).tags || [],
+                importance: analysis.importance,
+                tags: analysis.tags,
                 status: 'Done',
-                priority: (unit as any).priority || 'C',
+                priority: 'C',
                 childNoteIds: [],
-                parentNoteIds: parentNoteId ? [parentNoteId] : [],
+                parentNoteIds: [taskId],
                 noteType: 'Reference',
-                relatedNoteIds: unit.relatedNoteIds || []
+                relatedNoteIds: [taskId],
+                githubLink: file.path,
+                originPath: file.path,
+                logicHash: unit.logicHash
               };
               currentNotes.push(finalNote);
               newCount++;
             }
             touchedNotes.push(finalNote);
-            childIds.push(finalNote.id);
+            processedNoteIds.push(finalNote.id);
           }
 
-          // 3. Cleanup discarded children
-          const discardedChildIds = oldChildIds.filter(id => !childIds.includes(id));
-          for (const id of discardedChildIds) {
+          // 2. Cleanup discarded logic units (Notes previously linked to this file but no longer present)
+          const discardedNoteIds = oldNoteIds.filter(id => !processedNoteIds.includes(id));
+          for (const id of discardedNoteIds) {
             const noteIndex = currentNotes.findIndex(n => n.id === id);
             if (noteIndex !== -1) {
               const discardedNote = { ...currentNotes[noteIndex] };
               discardedNote.folder = '시스템/폐기된 소스';
+              discardedNote.parentNoteIds = []; // 부모 연결 해제
               discardedNote.status = 'Deprecated';
-              
               if (!discardedNote.tags.includes('discarded')) {
-                discardedNote.tags = [...discardedNote.tags, 'discarded'];
+                discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
               }
-              
               currentNotes[noteIndex] = discardedNote;
               touchedNotes.push(discardedNote);
             }
           }
-
-          // 4. Update parent with childNoteIds and finalize
-          const finalParentWithChildren = {
-            ...finalParent,
-            childNoteIds: childIds
-          };
-          currentNotes = currentNotes.map(n => n.id === finalParentWithChildren.id ? finalParentWithChildren : n);
-          touchedNotes.push(finalParentWithChildren);
 
           // 1개 파일 진행이 끝나고 즉시 해당 파일의 로그와 노트를 업데이트
           if (touchedNotes.length > 0) {

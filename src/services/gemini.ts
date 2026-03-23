@@ -662,51 +662,33 @@ Return JSON:
 export const updateCodeSnapshot = async (
   fileName: string,
   fileContent: string,
-  allNotes: Note[], // 기존 existingSnapshotNotes 에서 allNotes로 변경 (설계도 목록을 보기 위함)
+  allNotes: Note[],
   fileSha: string,
   signal?: AbortSignal
 ): Promise<{
-  parent: {
+  logicUnits: {
     title: string;
-    folder: string;
-    content: string;
-    summary: string;
-    yamlMetadata: string;
-    matchedNoteId?: string;
-    isNew: boolean;
-    noteType: string;
-    parentNoteIds?: string[];
-    relatedNoteIds: string[];
-  };
-  children: {
-    title: string;
-    folder: string;
-    content: string;
-    summary: string;
-    yamlMetadata: string;
-    matchedNoteId?: string;
-    isNew: boolean;
-    noteType: string;
-    relatedNoteIds: string[];
-  }[];
-  newDesignNotes?: {
-    tempId: string;
-    title: string;
-    folder: string;
-    content: string;
-    summary: string;
-    noteType: 'Epic' | 'Feature' | 'Task';
-    parentTempId?: string; // To link Epic -> Feature -> Task
-    matchedNoteId?: string; // If it links to an existing parent
+    codeSnippet: string;
+    logicHash: string;
+    purpose: string;
+    matchedTaskId?: string;
+    suggestedTask?: {
+      title: string;
+      folder: string;
+      content: string;
+      summary: string;
+    };
+    matchedReferenceId?: string;
+    tags: string[];
+    importance: number;
   }[];
 }> => {
-  // 스냅샷(Reference) 목록과 설계도(Epic/Feature/Task) 목록을 분리
-  const snapshotNotes = allNotes.filter(n => n.noteType === 'Reference');
   const designNotes = allNotes.filter(n => n.noteType !== 'Reference');
+  const referenceNotes = allNotes.filter(n => n.noteType === 'Reference');
 
   const prompt = `
-당신은 소스 코드 분석 및 문서화 전문가입니다. 제공된 소스 코드를 분석하여 'Reference(참고 자료)' 노트를 생성하거나 업데이트하십시오.
-이제 더 이상 'Code Snapshot/' 같은 기술적 격리 폴더를 사용하지 않습니다. 실제 업무 도메인 폴더 내에 설계(Task)와 구현(Reference)이 공존하도록 배치하십시오.
+당신은 '아키텍처 역공학 및 설계-구현 동기화 전문가'입니다. 
+제공된 소스 코드를 분석하여, 파일의 물리적 구조가 아닌 **'비즈니스 책임(Responsibility)'** 중심의 논리적 단위를 추출하십시오.
 
 [분석 대상 코드]
 파일 경로: ${fileName}
@@ -714,101 +696,46 @@ export const updateCodeSnapshot = async (
 소스 코드:
 ${fileContent.slice(0, 15000)}
 
-[기존 Reference 목록 (유사도 매칭용)]
-${JSON.stringify(snapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder, tags: n.tags })))}
+[기존 설계도 (Task/Feature) 목록]
+${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary, folder: n.folder })))}
 
-[기존 설계도 (Task/Feature) 목록 - 자동 연결 및 폴더 결정용]
-${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary, folder: n.folder, tags: n.tags })))}
+[기존 Reference 목록 (업데이트 매칭용)]
+${JSON.stringify(referenceNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, githubLink: n.githubLink, logicHash: n.logicHash })))}
 
 [작업 지침]
-1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
-2. **부모 노트 (파일 단위)**:
-   - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
-   - 폴더: [매우 중요] 이 코드가 구현하고 있는 [기존 설계도 목록]의 Task/Feature가 속한 **동일한 도메인 폴더**를 사용하십시오. 만약 적절한 설계도를 찾지 못했다면, 코드의 성격에 맞는 "상위도메인/하위도메인" 폴더를 새로 정의하십시오.
-   - 메타데이터: tags: ['UI', 'Logic' 등 기능적 역할], importance: 3, priority: 'A' (선행 작업인 경우) 또는 'C'
-3. **자식 노트 (함수/로직 단위)**:
-   - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
-   - 메타데이터: priority: 'C' (일반적으로 후행 분석 결과물)
-4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
-5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 계층 구조(parentNoteIds)**: 
-   - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
-   - **구조적 자식 설정**: 매칭되는 'Task'나 'Feature'가 있다면, 해당 ID를 Reference 노드의 'parentNoteIds'에 포함시켜 설계도 아래에 구조적 자식으로 배치하십시오.
-   - **관련성 연결**: 관련된 설계도의 ID를 'relatedNoteIds' 배열에도 포함시키십시오.
-   - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
-   - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
-   - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
-[엄격한 계층 구조 규칙]
-- 모든 'Feature' 타입의 노트는 반드시 'Epic' 타입의 노트를 부모(parentNoteIds)로 가져야 합니다.
-- 기존 설계도 목록에 적절한 Epic이 없다면, 반드시 새로운 Epic을 생성하여 'newDesignNotes'에 포함시키고 해당 Feature를 그 아래에 배치하십시오.
-- 모든 'Task' 타입의 노트는 반드시 'Feature' 타입의 노트를 부모로 가져야 합니다.
-- 계층은 무조건 Epic -> Feature -> Task 순서를 유지해야 하며, 고립된 Feature나 Task가 생기지 않도록 하십시오.
+1. **책임 중심 로직 추출 (Step 1)**: 
+   - 단순한 함수 나열이 아니라, 특정 비즈니스 요구사항이나 기능을 해결하는 **'논리적 덩어리(Significant Logic Unit)'**를 식별하십시오.
+   - 파일 크기에 상관없이 설계적 가치가 있는 독립된 로직이라면 개수 제한 없이 모두 추출하십시오.
+   - 각 유닛에 대해 해당 로직을 포함하는 **정확한 코드 조각(codeSnippet)**을 추출하십시오.
+   - 각 로직 유닛에 대해 고유한 **logicHash**를 생성하십시오. 이는 코드 내용이 변하지 않으면 유지되어야 하는 지문입니다. (예: 코드의 핵심 구조를 기반으로 한 짧은 해시 문자열)
 
-[가장 중요: 연관성 및 태그 부여]
-1. 새로 생성되는 'newDesignNotes'들은 분석 중인 소스 코드(Reference)와 반드시 'relatedNoteIds'로 연결되어야 합니다.
-2. 각 설계 노트(Epic, Feature, Task)의 태그는 코드의 실제 도메인 역할(예: '인증 로직', '데이터 매핑')을 반영해야 합니다.
-3. 'newDesignNotes' 간에도 계층에 따라 parentNoteIds와 childNoteIds(또는 tempId 기반 연결)가 완벽하게 구성되어야 합니다.
+2. **설계도 매핑 및 자동 Task 생성 (Step 2 & 2-1)**:
+   - 추출된 각 로직 유닛이 [기존 설계도 목록] 중 어떤 'Task'를 구현하고 있는지 ID를 매핑하십시오 (\`matchedTaskId\`).
+   - 만약 매핑할 적절한 Task가 없다면, 도메인을 분석하여 새로운 **말단 Task**를 제안하십시오 (\`suggestedTask\`).
+   - **전략적 생략**: 상위 계층(Epic, Feature)은 여기서 생성하지 마십시오. 오직 이 로직을 담을 '말단 Task'만 제안하십시오. (계층 구조 보정 시스템이 나중에 부모를 찾아줄 것입니다.)
+   - 제안된 Task의 폴더는 도메인 맥락에 맞게 설정하십시오.
 
-6. 생성되는 모든 코드 분석 노트의 'noteType'은 반드시 "Reference"로 지정하십시오.
+3. **기존 구현체 업데이트 매칭**:
+   - 만약 기존 Reference 목록에 이 파일과 관련된 동일한 목적의 구현 노트가 있다면 \`matchedReferenceId\`를 지정하십시오.
 
 Return JSON:
 {
-    "parent": {
-      "title": "제목",
-      "folder": "도메인/서브도메인",
-      "content": "...",
-      "summary": "...",
+  "logicUnits": [
+    {
+      "title": "[구현] 로직의 기능적 역할",
+      "codeSnippet": "해당 로직의 전체 소스 코드 (문자열)",
+      "logicHash": "로직_고유_해시",
+      "purpose": "이 로직이 해결하고자 하는 설계적 목표",
+      "matchedTaskId": "기존_Task_ID",
+      "suggestedTask": {
+        "title": "새로 제안하는 Task 제목",
+        "folder": "도메인/경로",
+        "content": "Task의 상세 설계 내용",
+        "summary": "Task 요약"
+      },
+      "matchedReferenceId": "기존_Reference_ID",
       "tags": ["tag1"],
-      "importance": 4,
-      "priority": "A",
-      "matchedNoteId": "기존_노트_ID",
-      "isNew": boolean,
-      "noteType": "Reference",
-      "parentNoteIds": ["연결할_Task_ID_또는_tempId"],
-      "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
-    },
-    "children": [
-      {
-        "title": "함수명",
-        "folder": "도메인/서브도메인",
-        "content": "...",
-        "summary": "...",
-        "tags": ["tag1"],
-        "importance": 3,
-        "priority": "C",
-        "matchedNoteId": "기존_노트_ID",
-        "isNew": boolean,
-        "noteType": "Reference",
-        "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
-      }
-    ],
-  "newDesignNotes": [
-    {
-      "tempId": "temp_epic_1",
-      "title": "새로 발견된 Epic",
-      "folder": "도메인",
-      "content": "...",
-      "summary": "...",
-      "noteType": "Epic",
-      "priority": "A"
-    },
-    {
-      "tempId": "temp_feature_1",
-      "title": "새로 발견된 Feature",
-      "folder": "도메인/서브도메인",
-      "content": "...",
-      "summary": "...",
-      "noteType": "Feature",
-      "parentTempId": "temp_epic_1"
-    },
-    {
-      "tempId": "temp_task_1",
-      "title": "새로 발견된 Task",
-      "folder": "도메인/서브도메인",
-      "content": "...",
-      "summary": "...",
-      "noteType": "Task",
-      "parentTempId": "temp_feature_1",
-      "matchedNoteId": "기존_Feature_ID에_연결할경우_사용"
+      "importance": 4
     }
   ]
 }
@@ -823,68 +750,111 @@ Return JSON:
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          parent: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              folder: { type: Type.STRING },
-              content: { type: Type.STRING },
-              summary: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-              importance: { type: Type.NUMBER },
-              matchedNoteId: { type: Type.STRING },
-              isNew: { type: Type.BOOLEAN },
-              noteType: { type: Type.STRING },
-              parentNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-              relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
-            },
-            required: ["title", "folder", "content", "summary", "isNew", "noteType"],
-          },
-          children: {
+          logicUnits: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
                 title: { type: Type.STRING },
-                folder: { type: Type.STRING },
-                content: { type: Type.STRING },
-                summary: { type: Type.STRING },
+                codeSnippet: { type: Type.STRING },
+                logicHash: { type: Type.STRING },
+                purpose: { type: Type.STRING },
+                matchedTaskId: { type: Type.STRING },
+                suggestedTask: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    folder: { type: Type.STRING },
+                    content: { type: Type.STRING },
+                    summary: { type: Type.STRING }
+                  },
+                  required: ["title", "folder", "content", "summary"]
+                },
+                matchedReferenceId: { type: Type.STRING },
                 tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-                importance: { type: Type.NUMBER },
-                matchedNoteId: { type: Type.STRING },
-                isNew: { type: Type.BOOLEAN },
-                noteType: { type: Type.STRING },
-                relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
+                importance: { type: Type.NUMBER }
               },
-              required: ["title", "folder", "content", "summary", "isNew", "noteType"],
+              required: ["title", "codeSnippet", "logicHash", "purpose", "tags", "importance"],
             },
-          },
-          newDesignNotes: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                tempId: { type: Type.STRING },
-                title: { type: Type.STRING },
-                folder: { type: Type.STRING },
-                content: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                noteType: { type: Type.STRING },
-                parentTempId: { type: Type.STRING },
-                matchedNoteId: { type: Type.STRING }
-              },
-              required: ["tempId", "title", "folder", "content", "summary", "noteType"]
-            }
           }
         },
-        required: ["parent", "children"],
-      },
+        required: ["logicUnits"]
+      }
     },
   });
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  return safeJsonParse(response.text || '{"parent": {}, "children": []}');
+  const result = safeJsonParse(response.text || "{}");
+  return {
+    logicUnits: result.logicUnits || []
+  };
+};
+
+export const analyzeLogicUnitDeeply = async (
+  unitTitle: string,
+  codeSnippet: string,
+  taskContext: { title: string; content: string; summary: string },
+  signal?: AbortSignal
+): Promise<{
+  content: string;
+  summary: string;
+  importance: number;
+  tags: string[];
+}> => {
+  const prompt = `
+당신은 '기술 명세 및 구현 증빙 전문가'입니다. 
+특정 코드 조각이 설계상의 요구사항을 어떻게 기술적으로 충족하고 있는지 심층 분석하여 **'Technical Specification'**을 작성하십시오.
+
+[대상 로직]
+제목: ${unitTitle}
+코드:
+${codeSnippet}
+
+[관련 설계(Task) 정보]
+제목: ${taskContext.title}
+설계 내용: ${taskContext.content}
+설계 요약: ${taskContext.summary}
+
+[작업 지침]
+1. **기술적 증빙 중심 (Deep-Dive)**: 
+   - 코드를 단순히 설명하지 말고, "이 로직이 왜 이 Task를 해결하는가?"에 집중하십시오.
+   - 상세 알고리즘, 데이터 흐름, 설계적 근거, 예외 처리 전략 등을 풍성하게 서술하십시오.
+   - 'Technical Specification' 섹션에 모든 분석 역량을 집중하십시오.
+2. **구조**: 시스템 지침의 4개 섹션 구조(Context, Specification, Constraints, Impact)를 따르되, Specification 섹션을 가장 상세히 작성하십시오.
+3. 모든 텍스트는 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "content": "심층 분석된 상세 내용 (Markdown)",
+  "summary": "구현 핵심 요약 (한국어)",
+  "importance": 1~5,
+  "tags": ["tag1", "tag2"]
+}
+`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          content: { type: Type.STRING },
+          summary: { type: Type.STRING },
+          importance: { type: Type.NUMBER },
+          tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+        },
+        required: ["content", "summary", "importance", "tags"],
+      }
+    },
+  });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  return safeJsonParse(response.text || "{}");
 };
 
 export const checkConsistency = async (
@@ -1070,7 +1040,8 @@ ${fileContent.slice(0, 15000)}
 export const updateSpecFromCode = async (content: string, fileContent: string, signal?: AbortSignal): Promise<string> => {
   const prompt = `
 다음 설계 내용을 제공된 소스 코드와 일치하도록 업데이트하십시오.
-동일한 형식을 유지하되, 코드의 내용을 반영하여 로직과 세부 사항을 조정하십시오.
+단순히 코드를 설명하는 것이 아니라, **'Technical Specification'** 관점에서 이 코드가 설계상의 요구사항을 어떻게 기술적으로 충족하고 있는지 상세히 기술하십시오.
+동일한 형식을 유지하되, 코드의 실제 구현 로직(알고리즘, 데이터 흐름, 예외 처리 등)을 반영하여 세부 사항을 조정하십시오.
 모든 텍스트는 한국어로 작성하십시오.
 
 현재 설계 내용:
@@ -1319,7 +1290,7 @@ export const mergeLogicIntoNote = async (
 - 태그: ${((logicUnit as any).tags || []).join(', ')}
 
 [작업 지침]
-1. **내용 통합**: 기존 설계의 핵심 개념을 유지하면서, 코드에서 발견된 구체적인 알고리즘과 데이터 흐름을 반영하여 'Detailed Algorithm & Technical Specification' 섹션을 보강하십시오. 단순히 내용을 이어 붙이지 말고, 중복을 제거하고 논리적으로 자연스럽게 융합하십시오.
+1. **내용 통합**: 기존 설계의 핵심 개념을 유지하면서, 코드에서 발견된 구체적인 알고리즘과 데이터 흐름을 반영하여 'Technical Specification' 섹션을 보강하십시오. 이 코드가 설계서의 어떤 요구사항을 어떻게 기술적으로 해결했는지(Design Fulfillment)를 명확히 기술하십시오. 단순히 내용을 이어 붙이지 말고, 중복을 제거하고 논리적으로 자연스럽게 융합하십시오.
 2. **충돌 처리**: 기존 설계와 실제 코드가 다를 경우, 두 방식을 비교 설명하거나 더 나은 방식을 채택하여 상세히 기술하십시오.
 3. **구조 유지**: 업데이트된 'content'는 반드시 시스템 지침의 4개 섹션 구조를 엄격히 따라야 합니다.
 4. **요약 업데이트**: 통합된 기능을 잘 나타내도록 'summary'를 갱신하십시오.

@@ -3,8 +3,8 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Note, NoteType, GCM } from '../types';
-import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Save, X, Layers, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge, ExternalLink } from 'lucide-react';
+import { Note, NoteType, GCM, NoteStatus } from '../types';
+import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge, ExternalLink, Hash, Clock, Star, Tag, Link2, ChevronRight, Info, Layers, X } from 'lucide-react';
 import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge, generateImpactAnalysis } from '../services/gemini';
 import { Button } from './common/Button';
 import { Input } from './common/Input';
@@ -27,17 +27,17 @@ interface NoteEditorProps {
   darkMode: boolean;
 }
 
-const parseMetadata = (yaml: string) => {
-  const meta: Record<string, string> = {};
-  if (!yaml) return meta;
-  yaml.split('\n').forEach(line => {
-    const [key, ...val] = line.split(':');
-    if (key && val.length > 0) {
-      meta[key.trim()] = val.join(':').trim();
-    }
-  });
-  return meta;
-};
+const MetadataRow: React.FC<{ label: string; icon: React.ReactNode; children: React.ReactNode }> = ({ label, icon, children }) => (
+  <div className="flex items-center px-4 py-2 border-b border-slate-200 dark:border-slate-800 last:border-b-0">
+    <div className="w-24 flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+      {icon}
+      {label}
+    </div>
+    <div className="flex-1">
+      {children}
+    </div>
+  </div>
+);
 
 export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onUpdateNote, onTargetedUpdate, onGenerateSubModules, onDeleteNote, darkMode }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -85,52 +85,43 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     folder: string;
     content: string;
     summary: string;
-    yamlMetadata: string;
+    status: NoteStatus;
+    version: string;
+    importance: number;
+    tags: string[];
+    parentNoteId?: string;
     relatedNoteIds: string[];
-    noteType?: NoteType;
+    noteType: NoteType;
   }>({
     title: '',
     folder: '',
     content: '',
     summary: '',
-    yamlMetadata: '',
+    status: 'Planned',
+    version: '1.0.0',
+    importance: 3,
+    tags: [],
     relatedNoteIds: [],
     noteType: 'Feature'
   });
 
   useEffect(() => {
     if (note) {
-      // Parse relatedNoteIds from YAML if possible
-      const meta = parseMetadata(note.yamlMetadata);
-      let relatedIdsFromYaml: string[] = [];
-      if (meta && typeof meta.relatedNoteIds === 'string') {
-        try {
-          // Try to parse as array if it looks like one
-          if (meta.relatedNoteIds.startsWith('[') && meta.relatedNoteIds.endsWith(']')) {
-            relatedIdsFromYaml = meta.relatedNoteIds.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-          } else {
-            relatedIdsFromYaml = meta.relatedNoteIds.split(',').map(s => s.trim()).filter(Boolean);
-          }
-        } catch (e) {
-          console.error("Failed to parse relatedNoteIds from YAML", e);
-        }
-      }
-
-      const combinedRelatedIds = Array.from(new Set([...(note.relatedNoteIds || []), ...relatedIdsFromYaml])).filter(id => 
-        allNotes.some(n => n.id === id)
-      );
-      
       setEditData({
         title: note.title,
         folder: note.folder,
         content: note.content,
         summary: note.summary,
-        yamlMetadata: note.yamlMetadata,
-        relatedNoteIds: combinedRelatedIds,
+        status: note.status,
+        version: note.version,
+        importance: note.importance,
+        tags: note.tags || [],
+        parentNoteId: note.parentNoteId,
+        relatedNoteIds: note.relatedNoteIds || [],
         noteType: note.noteType || 'Feature'
       });
     }
-  }, [note?.id, allNotes]);
+  }, [note?.id]);
 
   if (!note) {
     return (
@@ -145,21 +136,22 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
 
   const isSnapshotNote = note.noteType === 'Reference' || note.folder?.startsWith('시스템/');
 
-  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleStatusChange = (status: NoteStatus) => {
     if (isSnapshotNote) return;
-    onUpdateNote({ ...note, status: e.target.value as Note['status'] });
+    setEditData(prev => ({ ...prev, status }));
+    onUpdateNote({ ...note, status });
   };
 
-  const handleParentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleParentChange = (parentNoteId: string | undefined) => {
     if (isSnapshotNote) return;
-    onUpdateNote({ ...note, parentNoteId: e.target.value || undefined });
+    setEditData(prev => ({ ...prev, parentNoteId }));
+    onUpdateNote({ ...note, parentNoteId });
   };
 
-  const handleNoteTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleNoteTypeChange = (noteType: NoteType) => {
     if (isSnapshotNote) return;
-    const newType = e.target.value as NoteType;
-    setEditData({ ...editData, noteType: newType });
-    onUpdateNote({ ...note, noteType: newType });
+    setEditData(prev => ({ ...prev, noteType }));
+    onUpdateNote({ ...note, noteType });
   };
 
   const syncChanges = (updatedData: Partial<typeof editData>) => {
@@ -167,21 +159,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     
     const finalData = { ...editData, ...updatedData };
     
-    // Sync relatedNoteIds from YAML before saving
-    const meta = parseMetadata(finalData.yamlMetadata);
-    let relatedIdsFromYaml: string[] = [];
-    if (meta && typeof meta.relatedNoteIds === 'string') {
-      if (meta.relatedNoteIds.startsWith('[') && meta.relatedNoteIds.endsWith(']')) {
-        relatedIdsFromYaml = meta.relatedNoteIds.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-      } else {
-        relatedIdsFromYaml = meta.relatedNoteIds.split(',').map(s => s.trim()).filter(Boolean);
-      }
-    }
-
     onUpdateNote({
       ...note,
-      ...finalData,
-      relatedNoteIds: relatedIdsFromYaml.length > 0 ? relatedIdsFromYaml : finalData.relatedNoteIds
+      ...finalData
     });
   };
 
@@ -300,7 +280,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
 
         {/* --- Action Menu Bar: Below Title --- */}
         <div className="mb-8 pb-6 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex flex-wrap items-center gap-3 mb-6">
+          <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="outline"
               size="sm"
@@ -322,51 +302,6 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
 
             <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">상위:</span>
-              <select
-                value={note.parentNoteId || ''}
-                onChange={handleParentChange}
-                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5 min-w-[120px]"
-              >
-                <option value="">없음</option>
-                {allNotes.filter(n => n.id !== note.id).map(n => (
-                  <option key={n.id} value={n.id}>{n.title}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">유형:</span>
-              <select
-                value={note.noteType || 'Feature'}
-                onChange={handleNoteTypeChange}
-                disabled={isSnapshotNote}
-                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5"
-              >
-                <option value="Epic">Epic</option>
-                <option value="Feature">Feature</option>
-                <option value="Task">Task</option>
-                <option value="Reference">Reference</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-tight">상태:</span>
-              <select
-                value={note.status}
-                onChange={handleStatusChange}
-                className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs rounded-md p-1.5"
-              >
-                <option value="Planned">계획됨</option>
-                <option value="In-Progress">진행 중</option>
-                <option value="Done">완료</option>
-                <option value="Conflict">충돌</option>
-                <option value="Review-Required">검토 필요</option>
-                <option value="Deprecated">폐기됨</option>
-              </select>
-            </div>
-
             {isSnapshotNote && (
               <span className="px-2 py-1 text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded border border-slate-200 dark:border-slate-700 tracking-wider">
                 READ ONLY
@@ -380,38 +315,6 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
             >
               <Trash2 className="w-4 h-4" />
             </button>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-            <span className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 px-2 py-1 rounded">
-              <FolderTree className="w-3.5 h-3.5" />
-              <input
-                type="text"
-                value={editData.folder}
-                onChange={(e) => !isSnapshotNote && setEditData({ ...editData, folder: e.target.value })}
-                onBlur={() => syncChanges({ folder: editData.folder })}
-                readOnly={isSnapshotNote}
-                className="bg-transparent focus:outline-none min-w-[150px]"
-                placeholder="도메인/서브도메인"
-              />
-            </span>
-            {note.githubLink && (
-              <a
-                href={note.githubLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline"
-              >
-                <Code className="w-3.5 h-3.5" />
-                코드 보기
-              </a>
-            )}
-            {parseMetadata(note.yamlMetadata).sourceFiles && (
-              <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                <ExternalLink className="w-3.5 h-3.5" />
-                구현 추적: {parseMetadata(note.yamlMetadata).sourceFiles}
-              </div>
-            )}
           </div>
         </div>
 
@@ -529,40 +432,197 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
           />
         </div>
 
-        {/* YAML Metadata */}
-        <div className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-            <Activity className="w-4 h-4" />
-            메타데이터 (YAML)
-            {yamlErrors.length > 0 && <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">오류 {yamlErrors.length}</span>}
-          </h2>
-          <div className={`border rounded-lg overflow-hidden transition-all ${yamlErrors.length > 0 ? 'border-red-500 ring-1 ring-red-500' : 'border-slate-200 dark:border-slate-800 focus-within:ring-2 focus-within:ring-indigo-500'} ${isSnapshotNote ? 'opacity-80' : ''}`}>
-            <CodeMirror
-              value={editData.yamlMetadata}
-              height="150px"
-              theme={darkMode ? vscodeDark : vscodeLight}
-              extensions={[yaml()]}
-              onChange={(val) => !isSnapshotNote && onYamlChange(val)}
-              onBlur={() => syncChanges({ yamlMetadata: editData.yamlMetadata })}
-              readOnly={isSnapshotNote}
-              className="text-xs"
-            />
+        {/* Structured Metadata Table */}
+        <div className="mb-8 bg-slate-50/50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-2">
+              <Activity className="w-3.5 h-3.5" />
+              구조화된 메타데이터
+            </h3>
+            <span className="text-[10px] text-slate-400 font-mono">ID: {note.id}</span>
           </div>
-          {yamlErrors.map((err, i) => (
-            <p key={i} className={`text-[10px] mt-1 ml-1 ${err.includes('GCM 경고') ? 'text-orange-500 font-bold' : 'text-red-500'}`}>{err}</p>
-          ))}
-          {yamlErrors.some(e => e.includes('GCM 경고')) && (
-            <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/50 rounded text-[10px] text-orange-700 dark:text-orange-400">
-              <AlertTriangle className="w-3 h-3 inline mr-1" />
-              GCM 정합성 오류가 발견되었습니다. 설계와 GCM을 일치시키거나 GCM을 업데이트하십시오.
-              <button 
-                onClick={() => onUpdateNote({ ...note, status: 'Conflict' })}
-                className="ml-2 underline font-bold"
-              >
-                Conflict 상태로 전환
-              </button>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2">
+            {/* Left Column */}
+            <div className="border-r border-slate-200 dark:border-slate-800">
+              <MetadataRow label="상태" icon={<Activity className="w-3 h-3" />}>
+                <select
+                  value={editData.status}
+                  onChange={(e) => handleStatusChange(e.target.value as NoteStatus)}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                >
+                  <option value="Planned">Planned</option>
+                  <option value="In-Progress">In-Progress</option>
+                  <option value="Done">Done</option>
+                  <option value="Conflict">Conflict</option>
+                  <option value="Review-Required">Review-Required</option>
+                  <option value="Deprecated">Deprecated</option>
+                </select>
+              </MetadataRow>
+              
+              <MetadataRow label="유형" icon={<Layers className="w-3 h-3" />}>
+                <select
+                  value={editData.noteType}
+                  onChange={(e) => handleNoteTypeChange(e.target.value as NoteType)}
+                  disabled={isSnapshotNote}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300 disabled:opacity-50"
+                >
+                  <option value="Epic">Epic</option>
+                  <option value="Feature">Feature</option>
+                  <option value="Task">Task</option>
+                  <option value="Reference">Reference</option>
+                </select>
+              </MetadataRow>
+
+              <MetadataRow label="폴더" icon={<FolderTree className="w-3 h-3" />}>
+                <input
+                  type="text"
+                  value={editData.folder}
+                  onChange={(e) => !isSnapshotNote && setEditData({ ...editData, folder: e.target.value })}
+                  onBlur={() => syncChanges({ folder: editData.folder })}
+                  readOnly={isSnapshotNote}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                  placeholder="도메인/경로"
+                />
+              </MetadataRow>
+
+              <MetadataRow label="중요도" icon={<Star className="w-3 h-3" />}>
+                <select
+                  value={editData.importance}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setEditData(prev => ({ ...prev, importance: val }));
+                    syncChanges({ importance: val });
+                  }}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                >
+                  <option value={1}>1 - Low</option>
+                  <option value={2}>2 - Normal</option>
+                  <option value={3}>3 - High</option>
+                  <option value={4}>4 - Critical</option>
+                  <option value={5}>5 - Blocker</option>
+                </select>
+              </MetadataRow>
             </div>
-          )}
+
+            {/* Right Column */}
+            <div>
+              <MetadataRow label="버전" icon={<Hash className="w-3 h-3" />}>
+                <input
+                  type="text"
+                  value={editData.version}
+                  onChange={(e) => !isSnapshotNote && setEditData({ ...editData, version: e.target.value })}
+                  onBlur={() => syncChanges({ version: editData.version })}
+                  readOnly={isSnapshotNote}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                />
+              </MetadataRow>
+
+              <MetadataRow label="최종 수정" icon={<Clock className="w-3 h-3" />}>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {new Date(note.lastUpdated).toLocaleString()}
+                </span>
+              </MetadataRow>
+
+              <MetadataRow label="태그" icon={<Tag className="w-3 h-3" />}>
+                <input
+                  type="text"
+                  value={editData.tags.join(', ')}
+                  onChange={(e) => {
+                    const tags = e.target.value.split(',').map(t => t.trim()).filter(Boolean);
+                    setEditData(prev => ({ ...prev, tags }));
+                  }}
+                  onBlur={() => syncChanges({ tags: editData.tags })}
+                  readOnly={isSnapshotNote}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                  placeholder="태그1, 태그2"
+                />
+              </MetadataRow>
+
+              <MetadataRow label="상위 노트" icon={<ChevronRight className="w-3 h-3" />}>
+                <select
+                  value={editData.parentNoteId || ''}
+                  onChange={(e) => handleParentChange(e.target.value || undefined)}
+                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
+                >
+                  <option value="">없음</option>
+                  {allNotes.filter(n => n.id !== note.id).map(n => (
+                    <option key={n.id} value={n.id}>{n.title}</option>
+                  ))}
+                </select>
+              </MetadataRow>
+            </div>
+          </div>
+
+          {/* Bottom Full-Width Section: Relationships */}
+          <div className="border-t border-slate-200 dark:border-slate-800 p-4 space-y-4">
+            {/* Child Notes (Read Only) */}
+            <div>
+              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                <Layers className="w-3 h-3" />
+                하위 노트 (Child Notes)
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {note.childNoteIds.length > 0 ? (
+                  note.childNoteIds.map(childId => {
+                    const child = allNotes.find(n => n.id === childId);
+                    return (
+                      <div key={childId} className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-[11px] text-slate-600 dark:text-slate-400">
+                        <FileText className="w-3 h-3" />
+                        {child?.title || '알 수 없는 노트'}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <span className="text-[11px] text-slate-400 italic">하위 노트가 없습니다.</span>
+                )}
+              </div>
+            </div>
+
+            {/* Related Notes */}
+            <div>
+              <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                <Link2 className="w-3 h-3" />
+                연관 노트 (Related Notes)
+              </div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {editData.relatedNoteIds.map(relId => {
+                  const rel = allNotes.find(n => n.id === relId);
+                  return (
+                    <div key={relId} className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/30 rounded text-[11px] text-indigo-600 dark:text-indigo-400">
+                      <FileText className="w-3 h-3" />
+                      {rel?.title || '알 수 없는 노트'}
+                      <button 
+                        onClick={() => {
+                          const newRelIds = editData.relatedNoteIds.filter(id => id !== relId);
+                          setEditData(prev => ({ ...prev, relatedNoteIds: newRelIds }));
+                          syncChanges({ relatedNoteIds: newRelIds });
+                        }}
+                        className="ml-1 hover:text-indigo-800 dark:hover:text-indigo-200"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <select
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const newRelIds = Array.from(new Set([...editData.relatedNoteIds, e.target.value]));
+                  setEditData(prev => ({ ...prev, relatedNoteIds: newRelIds }));
+                  syncChanges({ relatedNoteIds: newRelIds });
+                  e.target.value = '';
+                }}
+                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] rounded px-2 py-1 focus:outline-none"
+              >
+                <option value="">+ 연관 노트 추가</option>
+                {allNotes.filter(n => n.id !== note.id && !editData.relatedNoteIds.includes(n.id)).map(n => (
+                  <option key={n.id} value={n.id}>{n.title}</option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Content (Obsidian-like Live Preview) */}

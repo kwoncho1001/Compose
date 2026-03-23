@@ -22,7 +22,7 @@ const systemInstruction = `
 
 [메타데이터 및 가독성]
 - 모든 텍스트는 한국어로 작성합니다.
-- yamlMetadata에는 반드시 noteId, parentNoteId, noteType을 포함하십시오.
+- parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
 - 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
 
@@ -35,13 +35,11 @@ const noteSchema: Schema = {
     summary: { type: Type.STRING, description: "이 기능/모듈이 수행하는 역할에 대한 1-2문장 요약 (반드시 한국어)" },
     parentNoteId: { type: Type.STRING, description: "주요 부모 기능의 ID" },
     relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 고유 ID(id) 목록. 제목을 넣지 마십시오. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
-    yamlMetadata: { 
-      type: Type.STRING, 
-      description: "표준화된 YAML: noteId: [id], version: 1.0.0, lastUpdated: YYYY-MM-DD, tags: [tag1], componentType: Core|UI|Shared|Feature, dependencies: [lib1], relatedNoteIds: [id1, id2]" 
-    },
+    tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "본문에서 추출한 핵심 키워드 태그 목록" },
+    importance: { type: Type.NUMBER, description: "중요도 (1~5점)" },
     noteType: { type: Type.STRING, description: "노트의 유형 (Epic, Feature, Task, Reference 중 하나)" },
   },
-  required: ["title", "folder", "content", "summary", "yamlMetadata"],
+  required: ["title", "folder", "content", "summary", "noteType"],
 };
 
 export const parseMetadata = (yaml: string): Record<string, string> => {
@@ -125,8 +123,12 @@ export const decomposeFeature = async (
     folder: mainFeature.folder || "Uncategorized",
     content: mainFeature.content || "No content provided.",
     summary: mainFeature.summary || "No summary provided.",
-    yamlMetadata: mainFeature.yamlMetadata || `noteId: ${mainNoteId}\nversion: 1.0.0`,
-    relatedNoteIds: mainFeature.reusedNoteIds || [],
+    version: "1.0.0",
+    lastUpdated: new Date().toISOString(),
+    importance: mainFeature.importance || 3,
+    tags: mainFeature.tags || [],
+    relatedNoteIds: mainFeature.relatedNoteIds || [],
+    childNoteIds: [],
     noteType: parentType as NoteType,
     status: 'Planned'
   };
@@ -158,7 +160,11 @@ export const decomposeFeature = async (
     folder: n.folder || `${mainNote.folder}/${mainNote.title}`,
     content: n.content || "No content provided.",
     summary: n.summary || "No summary provided.",
-    yamlMetadata: n.yamlMetadata || `noteId: temp\nversion: 1.0.0`,
+    version: "1.0.0",
+    lastUpdated: new Date().toISOString(),
+    importance: n.importance || 3,
+    tags: n.tags || [],
+    childNoteIds: [],
     ...n,
     id: Math.random().toString(36).substr(2, 9),
     parentNoteId: mainNoteId, // 부모 ID와 강제 연결
@@ -194,7 +200,9 @@ export const optimizeBlueprint = async (
     content: n.content.slice(0, 2000),
     relatedNoteIds: n.relatedNoteIds,
     parentNoteId: n.parentNoteId,
-    noteType: n.noteType
+    noteType: n.noteType,
+    tags: n.tags,
+    importance: n.importance
   }));
 
   const analysisPrompt = `
@@ -212,7 +220,7 @@ export const optimizeBlueprint = async (
 
 Return JSON:
 {
-  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "yamlMetadata": "string", "parentNoteId": "string", "relatedNoteIds": ["string"], "status": "string", "noteType": "string" } ],
+  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "parentNoteId": "string", "relatedNoteIds": ["string"], "tags": ["string"], "importance": number, "status": "string", "noteType": "string" } ],
   "deletedNoteIds": ["string"],
   "updatedGcm": { "entities": {}, "variables": {} },
   "report": "최적화 작업 내용 요약 (Markdown)"
@@ -242,13 +250,14 @@ Return JSON:
                 folder: { type: Type.STRING },
                 content: { type: Type.STRING },
                 summary: { type: Type.STRING },
-                yamlMetadata: { type: Type.STRING },
                 parentNoteId: { type: Type.STRING },
                 relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                importance: { type: Type.NUMBER },
                 status: { type: Type.STRING },
                 noteType: { type: Type.STRING }
               },
-              required: ["id", "title", "folder", "content", "summary", "yamlMetadata"]
+              required: ["id", "title", "folder", "content", "summary"]
             }
           },
           deletedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -285,7 +294,7 @@ export const updateSingleNote = async (
   signal?: AbortSignal
 ): Promise<{ updatedNote: Note; updatedGcm: GCM; affectedNoteIds: string[] }> => {
   const relevantNotes = allNotes.filter(n => 
-    n.id !== note.id && (n.folder === note.folder || parseInt(parseMetadata(n.yamlMetadata).importance || '0') >= 4)
+    n.id !== note.id && (n.folder === note.folder || n.importance >= 4)
   );
 
   const prompt = `
@@ -294,9 +303,8 @@ Also determine if this change affects the Global Context Map (GCM) and identify 
 
 [중요] 지시사항:
 1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
-2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
-3. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
-4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
+2. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
+3. parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
 
 Target Note:
 ${JSON.stringify(note, null, 2)}
@@ -311,7 +319,7 @@ ${JSON.stringify(relevantNotes.map(n => ({ id: n.id, title: n.title, folder: n.f
 
 Return JSON:
 {
-  "updatedNote": { ...note with updated content, summary, yamlMetadata, parentNoteId, relatedNoteIds },
+  "updatedNote": { ...note with updated content, summary, parentNoteId, relatedNoteIds, tags, importance },
   "updatedGcm": { ...updated GCM if affected, else current GCM },
   "affectedNoteIds": ["id1", "id2"]
 }
@@ -416,17 +424,17 @@ export const updateCodeSnapshot = async (
 ${fileContent.slice(0, 15000)}
 
 [기존 Reference 목록 (유사도 매칭용)]
-${JSON.stringify(snapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder })))}
+${JSON.stringify(snapshotNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, folder: n.folder, tags: n.tags })))}
 
 [기존 설계도 (Task/Feature) 목록 - 자동 연결 및 폴더 결정용]
-${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary, folder: n.folder })))}
+${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, summary: n.summary, folder: n.folder, tags: n.tags })))}
 
 [작업 지침]
 1. **계층 구조**: 부모(파일 단위)와 자식(함수/클래스 단위)으로 나누어 분석하십시오.
 2. **부모 노트 (파일 단위)**:
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
    - 폴더: [매우 중요] 이 코드가 구현하고 있는 [기존 설계도 목록]의 Task/Feature가 속한 **동일한 도메인 폴더**를 사용하십시오. 만약 적절한 설계도를 찾지 못했다면, 코드의 성격에 맞는 "상위도메인/하위도메인" 폴더를 새로 정의하십시오.
-   - 메타데이터: sourceFiles: [${fileName}], sourceVersion: ${fileSha}, tags: [discovered-from-github]
+   - 메타데이터: tags: [discovered-from-github, reference], importance: 3
 3. **자식 노트 (함수/로직 단위)**:
    - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
 4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
@@ -441,31 +449,33 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 
 Return JSON:
 {
-  "parent": {
-    "title": "제목",
-    "folder": "도메인/서브도메인",
-    "content": "...",
-    "summary": "...",
-    "yamlMetadata": "sourceFiles: [${fileName}]\\nsourceVersion: ${fileSha}\\ntags: [discovered-from-github]",
-    "matchedNoteId": "기존_노트_ID",
-    "isNew": boolean,
-    "noteType": "Reference",
-    "parentNoteId": "연결할_Task_ID_또는_tempId",
-    "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
-  },
-  "children": [
-    {
-      "title": "함수명",
+    "parent": {
+      "title": "제목",
       "folder": "도메인/서브도메인",
       "content": "...",
       "summary": "...",
-      "yamlMetadata": "...",
+      "tags": ["tag1"],
+      "importance": 4,
       "matchedNoteId": "기존_노트_ID",
       "isNew": boolean,
       "noteType": "Reference",
+      "parentNoteId": "연결할_Task_ID_또는_tempId",
       "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
-    }
-  ],
+    },
+    "children": [
+      {
+        "title": "함수명",
+        "folder": "도메인/서브도메인",
+        "content": "...",
+        "summary": "...",
+        "tags": ["tag1"],
+        "importance": 3,
+        "matchedNoteId": "기존_노트_ID",
+        "isNew": boolean,
+        "noteType": "Reference",
+        "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
+      }
+    ],
   "newDesignNotes": [
     {
       "tempId": "temp_epic_1",
@@ -514,14 +524,15 @@ Return JSON:
               folder: { type: Type.STRING },
               content: { type: Type.STRING },
               summary: { type: Type.STRING },
-              yamlMetadata: { type: Type.STRING },
+              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+              importance: { type: Type.NUMBER },
               matchedNoteId: { type: Type.STRING },
               isNew: { type: Type.BOOLEAN },
               noteType: { type: Type.STRING },
               parentNoteId: { type: Type.STRING },
               relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
-            required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],
+            required: ["title", "folder", "content", "summary", "isNew", "noteType"],
           },
           children: {
             type: Type.ARRAY,
@@ -532,13 +543,14 @@ Return JSON:
                 folder: { type: Type.STRING },
                 content: { type: Type.STRING },
                 summary: { type: Type.STRING },
-                yamlMetadata: { type: Type.STRING },
+                tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+                importance: { type: Type.NUMBER },
                 matchedNoteId: { type: Type.STRING },
                 isNew: { type: Type.BOOLEAN },
                 noteType: { type: Type.STRING },
                 relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
               },
-              required: ["title", "folder", "content", "summary", "yamlMetadata", "isNew", "noteType"],
+              required: ["title", "folder", "content", "summary", "isNew", "noteType"],
             },
           },
           newDesignNotes: {
@@ -812,7 +824,6 @@ export const generateImpactAnalysis = async (
   signal?: AbortSignal
 ): Promise<string> => {
   const context = allNotes.map(n => `- ${n.title} (${n.noteType}): ${n.summary}`).join('\n');
-  const currentNoteMeta = note.yamlMetadata;
 
   const prompt = `
 당신은 대규모 프로젝트의 아키텍트입니다.
@@ -824,13 +835,15 @@ export const generateImpactAnalysis = async (
 유형: ${note.noteType}
 요약: ${note.summary}
 메타데이터:
-${currentNoteMeta}
+- 중요도: ${note.importance}
+- 태그: ${note.tags.join(', ')}
+- 깃허브 링크: ${note.githubLink || 'N/A'}
 
 [전체 프로젝트 컨텍스트]
 ${context}
 
 [지시 사항]
-1. 메타데이터의 'sourceFiles' 필드와 'relatedNoteIds'를 참고하여 연관된 코드 파일들을 식별하세요.
+1. 'githubLink' 필드와 'relatedNoteIds'를 참고하여 연관된 코드 파일들을 식별하세요.
 2. 설계 변경의 내용을 바탕으로, 어떤 파일의 어떤 로직이 수정되어야 하는지 구체적으로 리스트업하세요.
 3. 마크다운 형식으로 출력하세요.
 4. 파일 경로는 프로젝트 루트 기준(예: src/components/...)으로 표시하세요.
@@ -866,9 +879,7 @@ export const generateNoteFromCode = async (
 
 [중요] 지시사항:
 1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
-2. 모든 메타데이터는 'yamlMetadata'에만 포함시키고 'content'에는 넣지 마십시오.
-3. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
-4. 'yamlMetadata'에 'noteId'를 포함시키십시오.
+2. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
 
 파일 이름: ${fileName}
 소스 코드:
@@ -882,14 +893,12 @@ ${JSON.stringify(existingNotes.map(n => ({ id: n.id, title: n.title, summary: n.
 2. 상세 기술 명세(content)를 Markdown 형식으로 작성합니다. (한국어 필수, 줄바꿈 필수)
 3. 적절한 폴더(folder)를 지정합니다. (반드시 "상위범주/하위범주" 형태 사용. 'Imported' 또는 기술 계층 명칭 사용 금지.)
 4. 기존 노트 중 이 코드와 논리적으로 연결된 것이 있다면 relatedNoteIds에 포함시킵니다. AI가 스스로 판단하여 자동으로 연결하십시오. (반드시 ID 사용)
-5. Metadata(yamlMetadata)를 작성합니다:
+5. 메타데이터를 작성합니다:
    - version: 1.0.0
    - tags: [discovered-from-github, ...]
-   - componentType: Core|UI|Shared|Feature
-   - dependencies: [코드에서 발견된 주요 라이브러리]
    - importance: 1~5
 
-Return JSON matching the Note schema (title, folder, content, summary, yamlMetadata, relatedNoteIds).
+Return JSON matching the Note schema (title, folder, content, summary, importance, tags, relatedNoteIds).
 `;
 
   try {
@@ -916,8 +925,13 @@ Return JSON matching the Note schema (title, folder, content, summary, yamlMetad
       folder: "시스템/미분류 소스",
       content: "분석 중 오류가 발생했습니다.",
       summary: "분석 중 오류가 발생했습니다.",
-      yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}`,
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      importance: 1,
+      tags: ['error'],
+      noteType: 'Reference',
       relatedNoteIds: [],
+      childNoteIds: []
     };
   }
 };
@@ -984,27 +998,32 @@ export const mergeLogicIntoNote = async (
 [기존 노트]
 제목: ${targetNote.title}
 내용: ${targetNote.content}
-메타데이터: ${targetNote.yamlMetadata || ''}
+메타데이터:
+- 중요도: ${targetNote.importance}
+- 태그: ${targetNote.tags.join(', ')}
 
 [새로운 코드 분석 결과]
 제목: ${logicUnit.title}
 내용: ${logicUnit.content}
 요약: ${logicUnit.summary}
-새 메타데이터: ${logicUnit.yamlMetadata || ''}
+새 메타데이터:
+- 중요도: ${(logicUnit as any).importance || 3}
+- 태그: ${((logicUnit as any).tags || []).join(', ')}
 
 [작업 지침]
 1. **내용 통합**: 기존 설계의 핵심 개념을 유지하면서, 코드에서 발견된 구체적인 알고리즘과 데이터 흐름을 반영하여 'Detailed Algorithm & Technical Specification' 섹션을 보강하십시오. 단순히 내용을 이어 붙이지 말고, 중복을 제거하고 논리적으로 자연스럽게 융합하십시오.
 2. **충돌 처리**: 기존 설계와 실제 코드가 다를 경우, 두 방식을 비교 설명하거나 더 나은 방식을 채택하여 상세히 기술하십시오.
 3. **구조 유지**: 업데이트된 'content'는 반드시 시스템 지침의 4개 섹션 구조를 엄격히 따라야 합니다.
 4. **요약 업데이트**: 통합된 기능을 잘 나타내도록 'summary'를 갱신하십시오.
-5. **메타데이터 병합**: 기존 메타데이터와 새 메타데이터를 병합하십시오. 특히 'sourceFiles', 'sourceVersion', 'tags', 'childNoteIds' 등의 필드는 유실되지 않도록 반드시 포함하십시오.
+5. **메타데이터 병합**: 기존 메타데이터와 새 메타데이터를 병합하십시오. 특히 'githubLink', 'tags', 'childNoteIds' 등의 필드는 유실되지 않도록 반드시 포함하십시오.
 6. 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
 {
   "content": "통합된 상세 내용 (Markdown)",
   "summary": "통합된 요약 (한국어)",
-  "yamlMetadata": "병합된 YAML 메타데이터"
+  "importance": 1~5,
+  "tags": ["tag1", "tag2"]
 }
 `;
 
@@ -1019,9 +1038,10 @@ Return JSON:
         properties: {
           content: { type: Type.STRING },
           summary: { type: Type.STRING },
-          yamlMetadata: { type: Type.STRING },
+          importance: { type: Type.NUMBER },
+          tags: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
-        required: ["content", "summary", "yamlMetadata"],
+        required: ["content", "summary", "importance", "tags"],
       },
     },
   });
@@ -1033,9 +1053,10 @@ Return JSON:
     ...targetNote,
     content: result.content || targetNote.content,
     summary: result.summary || targetNote.summary,
-    yamlMetadata: result.yamlMetadata || targetNote.yamlMetadata,
+    importance: result.importance || targetNote.importance,
+    tags: Array.from(new Set([...targetNote.tags, ...(result.tags || [])])),
     status: 'Done',
-    lastUpdated: new Date().toISOString().split('T')[0]
+    lastUpdated: new Date().toISOString()
   };
 };
 
@@ -1096,7 +1117,8 @@ Return JSON:
     "folder": "핵심 도메인/인증",
     "content": "...",
     "summary": "...",
-    "yamlMetadata": "...",
+    "importance": 5,
+    "tags": ["auth"],
     "noteType": "Epic" 
   },
   "newChildNotes": [ 
@@ -1105,7 +1127,8 @@ Return JSON:
       "folder": "...",
       "content": "...",
       "summary": "...",
-      "yamlMetadata": "...",
+      "importance": 3,
+      "tags": ["setup"],
       "noteType": "Task", 
       "parentNoteId": "${mainNote.id}",
       "relatedNoteIds": []

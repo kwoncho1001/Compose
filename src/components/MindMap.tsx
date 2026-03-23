@@ -13,18 +13,6 @@ interface MindMapProps {
 
 type ViewMode = 'TOTAL' | 'DOMAIN';
 
-const parseMetadata = (yaml: string) => {
-  const meta: Record<string, string> = {};
-  if (!yaml) return meta;
-  yaml.split('\n').forEach(line => {
-    const [key, ...val] = line.split(':');
-    if (key && val.length > 0) {
-      meta[key.trim()] = val.join(':').trim();
-    }
-  });
-  return meta;
-};
-
 export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedNoteId, darkMode }) => {
   const fgRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -160,7 +148,6 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       }));
 
       const noteNodes = filteredNotes.map(note => {
-        const meta = parseMetadata(note.yamlMetadata);
         return {
           id: note.id,
           name: note.title,
@@ -170,7 +157,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           summary: note.summary,
           domain: note.folder || '미분류',
           noteType: note.noteType,
-          sourceFiles: meta.sourceFiles || ''
+          sourceFiles: note.githubLink || ''
         };
       });
 
@@ -191,8 +178,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
       const significantIds = new Set(
         notes
           .filter(n => {
-            const meta = parseMetadata(n.yamlMetadata);
-            return n.isMainFeature || meta.componentType === 'Feature' || meta.componentType === 'Core';
+            return n.isMainFeature || n.noteType === 'Epic' || n.noteType === 'Feature';
           })
           .map(n => n.id)
       );
@@ -222,7 +208,6 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
     }));
 
     const noteNodes = filteredNotes.map(note => {
-      const meta = parseMetadata(note.yamlMetadata);
       return {
         id: note.id,
         name: note.title,
@@ -232,7 +217,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         summary: note.summary,
         domain: note.folder || '미분류',
         noteType: note.noteType,
-        sourceFiles: meta.sourceFiles || ''
+        sourceFiles: note.githubLink || ''
       };
     });
 

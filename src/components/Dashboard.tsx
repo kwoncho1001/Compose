@@ -4,7 +4,8 @@ import { NoteEditor } from './NoteEditor';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
-import { Note, GCM, AppState, ChatMessage, NoteType } from '../types';
+import { Note, GCM, AppState, ChatMessage, NoteType, NoteStatus } from '../types';
+import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { 
@@ -455,7 +456,13 @@ export const Dashboard: React.FC = () => {
           content: content,
           summary: `파일에서 가져옴: ${file.name}`,
           status: 'Planned',
-          yamlMetadata: `type: imported\nsource: ${file.name}`
+          version: '1.0.0',
+          lastUpdated: new Date().toISOString(),
+          importance: 3,
+          tags: ['imported'],
+          noteType: 'Task',
+          relatedNoteIds: [],
+          childNoteIds: []
         };
         newNotes.push(newNote);
       } catch (err) {
@@ -651,14 +658,15 @@ export const Dashboard: React.FC = () => {
       content: '# 새 노트\n여기에 기능을 설명하세요.',
       summary: '새로운 기능 설명',
       status: 'Planned',
-      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []',
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      importance: 3,
+      tags: [],
+      childNoteIds: [],
+      relatedNoteIds: [],
       noteType: 'Feature'
     };
-    syncNote(newNote);
-    setState(prev => ({
-      ...prev,
-      notes: [...prev.notes, newNote]
-    }));
+    handleUpdateNote(newNote);
     setSelectedNoteId(newNote.id);
   };
 
@@ -676,14 +684,15 @@ export const Dashboard: React.FC = () => {
       content: `# ${parentNote?.title || ''}의 하위 기능\n여기에 세부 기능을 설명하세요.`,
       summary: '하위 기능 설명',
       status: 'Planned',
-      yamlMetadata: 'version: 1.0.0\nlastUpdated: 2026-03-15\ntags: []',
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      importance: 3,
+      tags: [],
+      childNoteIds: [],
+      relatedNoteIds: [],
       noteType: childNoteType
     };
-    syncNote(newNote);
-    setState(prev => ({
-      ...prev,
-      notes: [...prev.notes, newNote]
-    }));
+    handleUpdateNote(newNote);
     setSelectedNoteId(newNote.id);
   };
 
@@ -696,11 +705,23 @@ export const Dashboard: React.FC = () => {
       confirmText: '삭제',
       cancelText: '취소',
       onConfirm: () => {
+        // 관계 정리
+        const affectedNotes = cleanupNoteRelationships(noteId, state.notes);
+        if (affectedNotes.length > 0) {
+          saveNotesToFirestore(affectedNotes);
+        }
+        
         deleteNoteFromFirestore(noteId);
-        setState(prev => ({
-          ...prev,
-          notes: prev.notes.filter(n => n.id !== noteId)
-        }));
+        setState(prev => {
+          const notesMap = new Map(prev.notes.map(n => [n.id, n]));
+          affectedNotes.forEach(an => notesMap.set(an.id, an));
+          const filteredNotes = Array.from(notesMap.values()).filter(n => n.id !== noteId);
+          
+          return {
+            ...prev,
+            notes: filteredNotes
+          };
+        });
         if (selectedNoteId === noteId) {
           setSelectedNoteId(null);
         }
@@ -796,12 +817,15 @@ export const Dashboard: React.FC = () => {
             title: logTitle,
             content: emptyLogContent,
             folder: logFolder,
-            status: 'Done',
-            lastUpdated: now,
             summary: 'GitHub 동기화된 파일들의 SHA 값을 추적하는 장부입니다.',
-            yamlMetadata: 'type: system-log\n',
+            status: 'Done',
+            version: '1.0.0',
+            lastUpdated: now,
+            importance: 1,
+            tags: ['system-log'],
+            childNoteIds: [],
             relatedNoteIds: [],
-            childNoteIds: []
+            noteType: 'Reference'
           };
           
           await saveNotesToFirestore([newLogNote]);
@@ -827,59 +851,45 @@ export const Dashboard: React.FC = () => {
   };
 
   const reconcileNoteRelationships = async (allNotes: Note[]) => {
-    const updatedNotes: Note[] = [];
-    const notesMap = new Map(allNotes.map(n => [n.id, n]));
+    const notesMap = new Map(allNotes.map(n => [n.id, { ...n }]));
+    let changed = false;
 
-    for (const parentNote of allNotes) {
-      const meta = parseMetadata(parentNote.yamlMetadata);
-      const childIds = meta.childNoteIds 
-        ? meta.childNoteIds.replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
-        : [];
-
-      // Ensure parentNote has childNoteIds array synced
-      if (JSON.stringify(parentNote.childNoteIds) !== JSON.stringify(childIds)) {
-        parentNote.childNoteIds = childIds;
-        // We don't necessarily need to save the parent just for this if we're focused on children,
-        // but it's good for consistency.
+    // 1. 부모-자식 관계 전수 조사 및 복구
+    for (const note of Array.from(notesMap.values())) {
+      // 부모 -> 자식 방향 확인
+      if (note.parentNoteId) {
+        const parent = notesMap.get(note.parentNoteId);
+        if (parent && !parent.childNoteIds.includes(note.id)) {
+          parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
+          changed = true;
+        }
       }
 
-      for (const childId of childIds) {
-        const childNote = notesMap.get(childId);
-        if (childNote) {
-          const childMeta = parseMetadata(childNote.yamlMetadata);
-          let parentIds = childMeta.parentNoteIds 
-            ? childMeta.parentNoteIds.replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
-            : [];
+      // 자식 -> 부모 방향 확인
+      for (const childId of note.childNoteIds) {
+        const child = notesMap.get(childId);
+        if (child && child.parentNoteId !== note.id) {
+          child.parentNoteId = note.id;
+          changed = true;
+        }
+      }
 
-          if (!parentIds.includes(parentNote.id)) {
-            parentIds.push(parentNote.id);
-            
-            // Update yamlMetadata
-            const newYaml = childNote.yamlMetadata.replace(/parentNoteIds:.*(\n|$)/, '').trim() + 
-                            `\nparentNoteIds: [${parentIds.join(', ')}]`;
-            
-            const updatedChild = { 
-              ...childNote, 
-              yamlMetadata: newYaml,
-              parentNoteId: parentNote.id, // Primary parent (singular)
-              parentNoteIds: parentIds // Multi-parent support (plural)
-            };
-            
-            notesMap.set(childId, updatedChild);
-            updatedNotes.push(updatedChild);
-          }
+      // 연관 관계 양방향 확인
+      for (const relId of note.relatedNoteIds) {
+        const relNote = notesMap.get(relId);
+        if (relNote && !relNote.relatedNoteIds.includes(note.id)) {
+          relNote.relatedNoteIds = Array.from(new Set([...relNote.relatedNoteIds, note.id]));
+          changed = true;
         }
       }
     }
 
-    if (updatedNotes.length > 0) {
+    if (changed) {
+      const updatedNotes = Array.from(notesMap.values());
       await saveNotesToFirestore(updatedNotes);
       setState(prev => ({
         ...prev,
-        notes: prev.notes.map(n => {
-          const updated = updatedNotes.find(un => un.id === n.id);
-          return updated || n;
-        })
+        notes: updatedNotes
       }));
     }
   };
@@ -987,8 +997,13 @@ export const Dashboard: React.FC = () => {
               content: logContent,
               summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
               status: 'Done',
+              version: '1.0.0',
               lastUpdated: now,
-              yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}\nversion: 1.0.0\ntags: [system-log]`
+              importance: 1,
+              tags: ['system-log'],
+              childNoteIds: [],
+              relatedNoteIds: [],
+              noteType: 'Reference'
             };
             currentNotes.push(newLogNote);
             await saveNotesToFirestore([newLogNote]);
@@ -1027,13 +1042,8 @@ export const Dashboard: React.FC = () => {
           const snapshotNotes = currentNotes.filter(n => n.noteType === 'Reference');
           
           // Find existing parent to get old child IDs for cleanup
-          const existingParent = snapshotNotes.find(n => {
-            const meta = parseMetadata(n.yamlMetadata);
-            return meta.sourceFiles?.includes(file.path) && meta.childNoteIds;
-          });
-          const oldChildIds = existingParent 
-            ? (parseMetadata(existingParent.yamlMetadata).childNoteIds || '').replace(/[\[\]]/g, '').split(',').map(id => id.trim()).filter(Boolean)
-            : [];
+          const existingParent = snapshotNotes.find(n => n.githubLink === file.path);
+          const oldChildIds = existingParent?.childNoteIds || [];
 
           const { parent, children, newDesignNotes } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
           if (signal.aborted) return;
@@ -1070,7 +1080,12 @@ export const Dashboard: React.FC = () => {
                 summary: dNote.summary,
                 noteType: dNote.noteType,
                 status: 'Planned',
-                yamlMetadata: `tags: [auto-generated, design-leading-code]\nrelatedNoteIds: []`,
+                version: '1.0.0',
+                lastUpdated: new Date().toISOString(),
+                importance: 3,
+                tags: ['auto-generated', 'design-leading-code'],
+                relatedNoteIds: [],
+                childNoteIds: [],
                 ...(parentNoteId ? { parentNoteId } : {})
               };
               
@@ -1120,7 +1135,8 @@ export const Dashboard: React.FC = () => {
             finalParent.noteType = 'Reference';
             finalParent.parentNoteId = suggestedParentId || finalParent.parentNoteId;
             finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
-            finalParent.yamlMetadata = appendRelatedNoteIdsToYaml(finalParent.yamlMetadata, finalParent.relatedNoteIds);
+            finalParent.tags = Array.from(new Set([...(finalParent.tags || []), ...((parent as any).tags || [])]));
+            finalParent.githubLink = file.path;
             
             currentNotes = currentNotes.map(n => n.id === finalParent.id ? finalParent : n);
             updateCount++;
@@ -1131,11 +1147,16 @@ export const Dashboard: React.FC = () => {
               folder: parent.folder,
               content: parent.content,
               summary: parent.summary,
-              yamlMetadata: appendRelatedNoteIdsToYaml(parent.yamlMetadata, parent.relatedNoteIds || []),
+              version: '1.0.0',
+              lastUpdated: new Date().toISOString(),
+              importance: (parent as any).importance || 3,
+              tags: (parent as any).tags || [],
               status: 'Done',
               noteType: 'Reference',
               parentNoteId: suggestedParentId,
-              relatedNoteIds: parent.relatedNoteIds || []
+              relatedNoteIds: parent.relatedNoteIds || [],
+              childNoteIds: [],
+              githubLink: file.path
             };
             currentNotes.push(finalParent);
             newCount++;
@@ -1159,11 +1180,9 @@ export const Dashboard: React.FC = () => {
               finalNote.parentNoteId = parentNoteId; // Force link
               if (!parentNoteId) delete finalNote.parentNoteId;
               
-              // --- [여기서부터 새로 추가/변경되는 부분] ---
               finalNote.noteType = 'Reference';
               finalNote.relatedNoteIds = Array.from(new Set([...(finalNote.relatedNoteIds || []), ...(unit.relatedNoteIds || [])]));
-              finalNote.yamlMetadata = appendRelatedNoteIdsToYaml(finalNote.yamlMetadata, finalNote.relatedNoteIds);
-              // ------------------------------------------
+              finalNote.tags = Array.from(new Set([...(finalNote.tags || []), ...((unit as any).tags || [])]));
               
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
@@ -1174,14 +1193,15 @@ export const Dashboard: React.FC = () => {
                 folder: unit.folder,
                 content: unit.content,
                 summary: unit.summary,
-                yamlMetadata: appendRelatedNoteIdsToYaml(unit.yamlMetadata, unit.relatedNoteIds || []),
+                version: '1.0.0',
+                lastUpdated: new Date().toISOString(),
+                importance: (unit as any).importance || 3,
+                tags: (unit as any).tags || [],
                 status: 'Done',
+                childNoteIds: [],
                 ...(parentNoteId ? { parentNoteId } : {}),
-                
-                // --- [여기서부터 새로 추가/변경되는 부분] ---
                 noteType: 'Reference',
                 relatedNoteIds: unit.relatedNoteIds || []
-                // ------------------------------------------
               };
               currentNotes.push(finalNote);
               newCount++;
@@ -1199,11 +1219,8 @@ export const Dashboard: React.FC = () => {
               discardedNote.folder = '시스템/폐기된 소스';
               discardedNote.status = 'Deprecated';
               
-              const meta = parseMetadata(discardedNote.yamlMetadata);
-              let tags = meta.tags ? meta.tags.replace(/[\[\]]/g, '').split(',').map(t => t.trim()) : [];
-              if (!tags.includes('discarded')) {
-                tags.push('discarded');
-                discardedNote.yamlMetadata = discardedNote.yamlMetadata.replace(/tags:.*(\n|$)/, '') + `\ntags: [${tags.join(', ')}]`;
+              if (!discardedNote.tags.includes('discarded')) {
+                discardedNote.tags = [...discardedNote.tags, 'discarded'];
               }
               
               currentNotes[noteIndex] = discardedNote;
@@ -1214,8 +1231,7 @@ export const Dashboard: React.FC = () => {
           // 4. Update parent with childNoteIds and finalize
           const finalParentWithChildren = {
             ...finalParent,
-            childNoteIds: childIds,
-            yamlMetadata: finalParent.yamlMetadata.replace(/childNoteIds:.*(\n|$)/, '') + `\nchildNoteIds: [${childIds.join(', ')}]`
+            childNoteIds: childIds
           };
           currentNotes = currentNotes.map(n => n.id === finalParentWithChildren.id ? finalParentWithChildren : n);
           touchedNotes.push(finalParentWithChildren);
@@ -1286,7 +1302,12 @@ export const Dashboard: React.FC = () => {
           summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
           status: 'Done',
           lastUpdated: new Date().toISOString(),
-          yamlMetadata: `noteId: ${Math.random().toString(36).substr(2, 9)}\nversion: 1.0.0\ntags: [system-log]`
+          version: '1.0.0',
+          importance: 1,
+          tags: ['system-log'],
+          noteType: 'Task',
+          relatedNoteIds: [],
+          childNoteIds: []
         };
         currentNotes.push(newLogNote);
         await saveNotesToFirestore([newLogNote]);
@@ -1317,12 +1338,20 @@ export const Dashboard: React.FC = () => {
 
 
   const handleUpdateNote = (updatedNote: Note) => {
-    syncNote(updatedNote);
+    // 양방향 역참조 동기화 수행
+    const affectedNotes = syncNoteRelationships(updatedNote, state.notes);
+    
+    // 모든 영향을 받는 노트를 Firestore에 저장
+    saveNotesToFirestore(affectedNotes);
+    
+    // 로컬 상태 업데이트
     setState((prev) => {
-      const newNotes = prev.notes.map((n) => (n.id === updatedNote.id ? updatedNote : n));
+      const notesMap = new Map(prev.notes.map(n => [n.id, n]));
+      affectedNotes.forEach(an => notesMap.set(an.id, an));
+      
       return {
         ...prev,
-        notes: newNotes,
+        notes: Array.from(notesMap.values()),
       };
     });
   };

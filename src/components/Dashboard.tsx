@@ -405,8 +405,8 @@ export const Dashboard: React.FC = () => {
       }));
       setFeatureInput('');
       
-      if (newNotesWithIds.length > 0) {
-        setSelectedNoteId(newNotesWithIds[0].id);
+      if (newNotes.length > 0) {
+        setSelectedNoteId(newNotes[0].id);
       } else if (updatedNotes.length > 0) {
         setSelectedNoteId(updatedNotes[0].id);
       }

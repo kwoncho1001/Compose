@@ -104,7 +104,11 @@ export const decomposeFeature = async (
   const step1Response = await ai.models.generateContent({
     model: MODEL_NAME,
     contents: `사용자의 요청 "${featureRequest}"을 분석하여 Epic(대목표) 또는 Feature(기능)로 설계하십시오.`,
-    config: { systemInstruction, responseMimeType: "application/json" }
+    config: { 
+      systemInstruction, 
+      responseMimeType: "application/json",
+      responseSchema: noteSchema
+    }
   });
   if (signal?.aborted) throw new Error("Operation cancelled");
   const mainFeature = safeJsonParse(step1Response.text);
@@ -116,11 +120,11 @@ export const decomposeFeature = async (
 
   const mainNote: Note = {
     id: mainNoteId,
-    title: mainFeature.title,
-    folder: mainFeature.folder,
-    content: mainFeature.content,
-    summary: mainFeature.summary,
-    yamlMetadata: mainFeature.yamlMetadata,
+    title: mainFeature.title || "Untitled Note",
+    folder: mainFeature.folder || "Uncategorized",
+    content: mainFeature.content || "No content provided.",
+    summary: mainFeature.summary || "No summary provided.",
+    yamlMetadata: mainFeature.yamlMetadata || `noteId: ${mainNoteId}\nversion: 1.0.0`,
     relatedNoteIds: mainFeature.reusedNoteIds || [],
     noteType: parentType as NoteType,
     status: 'Planned'
@@ -130,18 +134,34 @@ export const decomposeFeature = async (
   const step2Response = await ai.models.generateContent({
     model: MODEL_NAME,
     contents: `메인 기능 "${mainNote.title}"에 속하는 하위 ${childType}들을 3~5개 설계하십시오.`,
-    config: { systemInstruction, responseMimeType: "application/json" }
+    config: { 
+      systemInstruction, 
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          newDetailNotes: { type: Type.ARRAY, items: noteSchema },
+          updatedDetailNotes: { type: Type.ARRAY, items: { ...noteSchema, properties: { ...noteSchema.properties, id: { type: Type.STRING } }, required: ["id", ...noteSchema.required] } },
+          updatedGcm: { type: Type.OBJECT, properties: { entities: { type: Type.OBJECT }, variables: { type: Type.OBJECT } } },
+        },
+        required: ["newDetailNotes", "updatedDetailNotes", "updatedGcm"],
+      }
+    }
   });
   if (signal?.aborted) throw new Error("Operation cancelled");
   const step2Result = safeJsonParse(step2Response.text);
 
   // --- [🔥 핵심 변경: 자식 노드들에게 부모 ID와 올바른 계급 주입] ---
   const childNotes = (step2Result.newDetailNotes || []).map((n: any) => ({
+    title: n.title || "Untitled Child Note",
+    folder: n.folder || `${mainNote.folder}/${mainNote.title}`,
+    content: n.content || "No content provided.",
+    summary: n.summary || "No summary provided.",
+    yamlMetadata: n.yamlMetadata || `noteId: temp\nversion: 1.0.0`,
     ...n,
     id: Math.random().toString(36).substr(2, 9),
     parentNoteId: mainNoteId, // 부모 ID와 강제 연결
     noteType: childType,      // 부모가 E면 F, 부모가 F면 T 강제 할당
-    folder: `${mainNote.folder}/${mainNote.title}`, // 폴더 계층 구조화
     status: 'Planned'
   }));
 

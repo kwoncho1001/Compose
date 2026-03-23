@@ -24,6 +24,16 @@ export const syncNoteRelationships = (
   return Array.from(affectedNotesMap.values());
 };
 
+/**
+ * 버전 번호를 0.0.1씩 증가시킵니다. (예: 1.0.0 -> 1.0.1)
+ */
+export const incrementVersion = (version: string): string => {
+  const parts = version.split('.').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return '1.0.1';
+  parts[2] += 1;
+  return parts.join('.');
+};
+
 const syncHierarchy = (
   oldNote: Note,
   newNote: Note,

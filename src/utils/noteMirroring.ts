@@ -34,7 +34,7 @@ export const incrementVersion = (version: string): string => {
   return parts.join('.');
 };
 
-const syncHierarchy = (
+export const syncHierarchy = (
   oldNote: Note,
   newNote: Note,
   allNotes: Note[],

@@ -513,9 +513,9 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
                   }}
                   className="w-full bg-transparent text-xs font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none"
                 >
-                  <option value="A">A - 즉시 구현 (라면 끓이기)</option>
+                  <option value="A">A - 즉시 구현</option>
                   <option value="B">B - 순차 구현</option>
-                  <option value="C">C - 추후 구현 (라면 먹기)</option>
+                  <option value="C">C - 추후 구현</option>
                   <option value="Done">Done - 완료</option>
                 </select>
               </MetadataRow>

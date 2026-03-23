@@ -113,45 +113,34 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
 
     // 2. Drill-down View (Notes within a domain)
     if (selectedDomain) {
-      // 1. 선택된 도메인에 속한 노트들 (Primary Notes)
-      const primaryNotes = notes.filter(n => (n.folder || '미분류') === selectedDomain);
-      const primaryNoteIds = new Set(primaryNotes.map(n => n.id));
+      const nodes: any[] = [];
+      const links: any[] = [];
+      const processedPaths = new Set<string>();
 
-      // 2. 선택된 도메인의 노트들과 연결된 '연관 도메인' 찾기
-      const connectedDomainNames = new Set<string>();
-      notes.forEach(note => {
-        const noteDomain = note.folder || '미분류';
-        const targets = [...(note.parentNoteIds || []), ...(note.relatedNoteIds || [])];
-
-        // 케이스 A: 선택된 도메인의 노트가 가리키는 대상의 도메인
-        if (noteDomain === selectedDomain) {
-          targets.forEach(tid => {
-            const targetNote = notes.find(n => n.id === tid);
-            if (targetNote) connectedDomainNames.add(targetNote.folder || '미분류');
-          });
-        }
-        // 케이스 B: 다른 도메인의 노트가 선택된 도메인의 노트를 가리키는 경우
-        if (targets.some(tid => primaryNoteIds.has(tid))) {
-          connectedDomainNames.add(noteDomain);
-        }
-      });
-
-      // 3. 필터링 대상: 선택 도메인 + 연관 도메인에 속한 모든 노트
-      const relevantDomains = new Set([selectedDomain, ...Array.from(connectedDomainNames)]);
-      const filteredNotes = notes.filter(n => relevantDomains.has(n.folder || '미분류'));
-
-      const domainNodes = Array.from(relevantDomains).map(domain => ({
-        id: `domain-${domain}`,
-        name: domain,
-        val: domain === selectedDomain ? 18 : 12,
+      // 1. 선택된 도메인 노드 추가
+      nodes.push({
+        id: `domain-${selectedDomain}`,
+        name: selectedDomain,
+        val: 18,
         type: 'domain',
         status: 'none',
         summary: ''
-      }));
+      });
 
-      const noteNodes = filteredNotes.map(note => {
-        return {
-          id: note.id,
+      // 2. 재귀적으로 노트 추가 (가상 ID 사용)
+      const addNoteRecursive = (noteId: string, parentPath: string = '', depth: number = 0) => {
+        const note = notes.find(n => n.id === noteId);
+        if (!note || depth > 5) return;
+
+        const currentPath = parentPath ? `${parentPath}/${noteId}` : noteId;
+        if (processedPaths.has(currentPath)) return;
+        processedPaths.add(currentPath);
+
+        const virtualId = `note-${currentPath}`;
+        
+        nodes.push({
+          id: virtualId,
+          noteId: note.id,
           name: note.title,
           val: (note.folder || '미분류') === selectedDomain ? 10 : 6,
           type: 'note',
@@ -159,32 +148,55 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           summary: note.summary,
           domain: note.folder || '미분류',
           noteType: note.noteType,
-          sourceFiles: note.githubLink || ''
-        };
+          sourceFiles: note.githubLink || '',
+          consistencyConflict: note.consistencyConflict
+        });
+
+        // 도메인과 연결 (루트 레벨인 경우)
+        if (!parentPath) {
+          links.push({
+            source: virtualId,
+            target: `domain-${note.folder || '미분류'}`,
+            type: 'hierarchy'
+          });
+        }
+
+        // 자식 노드 추가
+        (note.childNoteIds || []).forEach(childId => {
+          const childVirtualId = `note-${currentPath}/${childId}`;
+          links.push({ source: virtualId, target: childVirtualId, type: 'hierarchy' });
+          addNoteRecursive(childId, currentPath, depth + 1);
+        });
+      };
+
+      // 선택된 도메인의 '루트' 노트들부터 시작
+      const primaryNotes = notes.filter(n => (n.folder || '미분류') === selectedDomain);
+      primaryNotes.forEach(note => {
+        // 부모가 없거나 부모가 다른 도메인에 있는 경우 루트로 간주
+        const hasParentInSameDomain = (note.parentNoteIds || []).some(pid => {
+          const p = notes.find(n => n.id === pid);
+          return p && (p.folder || '미분류') === selectedDomain;
+        });
+        if (!hasParentInSameDomain) {
+          addNoteRecursive(note.id);
+        }
       });
 
-      const nodes = [...domainNodes, ...noteNodes];
-      const noteLinks = calculateLinks(filteredNotes);
-      const hierarchyLinks = filteredNotes.map(note => ({
-        source: note.id,
-        target: `domain-${note.folder || '미분류'}`,
-        type: 'hierarchy'
-      }));
-
-      return { nodes, links: [...noteLinks, ...hierarchyLinks] };
+      return { nodes, links };
     }
 
-    // 3. Total View (Existing logic with minor cleanup)
+    // 3. Total View
+    const nodes: any[] = [];
+    const links: any[] = [];
+    const processedPaths = new Set<string>();
+
     let filteredNotes = notes;
     if (featureOnly) {
       const significantIds = new Set(
         notes
-          .filter(n => {
-            return n.isMainFeature || n.noteType === 'Epic' || n.noteType === 'Feature';
-          })
+          .filter(n => n.isMainFeature || n.noteType === 'Epic' || n.noteType === 'Feature')
           .map(n => n.id)
       );
-
       const neighborIds = new Set<string>();
       notes.forEach(n => {
         if (significantIds.has(n.id)) {
@@ -195,23 +207,34 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
           if (n.relatedNoteIds && n.relatedNoteIds.some(id => significantIds.has(id))) neighborIds.add(n.id);
         }
       });
-
       filteredNotes = notes.filter(n => significantIds.has(n.id) || neighborIds.has(n.id));
     }
 
     const domains = Array.from(new Set(filteredNotes.map(n => n.folder || '미분류')));
-    const domainNodes = domains.map(domain => ({
-      id: `domain-${domain}`,
-      name: domain,
-      val: 15,
-      type: 'domain',
-      status: 'none',
-      summary: ''
-    }));
+    domains.forEach(domain => {
+      nodes.push({
+        id: `domain-${domain}`,
+        name: domain,
+        val: 15,
+        type: 'domain',
+        status: 'none',
+        summary: ''
+      });
+    });
 
-    const noteNodes = filteredNotes.map(note => {
-      return {
-        id: note.id,
+    const addNoteRecursiveTotal = (noteId: string, parentPath: string = '', depth: number = 0) => {
+      const note = filteredNotes.find(n => n.id === noteId);
+      if (!note || depth > 5) return;
+
+      const currentPath = parentPath ? `${parentPath}/${noteId}` : noteId;
+      if (processedPaths.has(currentPath)) return;
+      processedPaths.add(currentPath);
+
+      const virtualId = `note-${currentPath}`;
+      
+      nodes.push({
+        id: virtualId,
+        noteId: note.id,
         name: note.title,
         val: note.isMainFeature ? 10 : 6,
         type: 'note',
@@ -219,19 +242,43 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
         summary: note.summary,
         domain: note.folder || '미분류',
         noteType: note.noteType,
-        sourceFiles: note.githubLink || ''
-      };
+        sourceFiles: note.githubLink || '',
+        consistencyConflict: note.consistencyConflict
+      });
+
+      if (!parentPath) {
+        links.push({
+          source: virtualId,
+          target: `domain-${note.folder || '미분류'}`,
+          type: 'hierarchy'
+        });
+      }
+
+      (note.childNoteIds || []).forEach(childId => {
+        const childVirtualId = `note-${currentPath}/${childId}`;
+        links.push({ source: virtualId, target: childVirtualId, type: 'hierarchy' });
+        addNoteRecursiveTotal(childId, currentPath, depth + 1);
+      });
+
+      // Related notes (only in TOTAL view, and we use flat IDs for simplicity in related links)
+      (note.relatedNoteIds || []).forEach(relId => {
+        // Related links are tricky with virtual IDs. 
+        // For now, let's just link to the first instance found or the flat ID if it exists.
+        // A better way would be to link all instances, but that's messy.
+        // Let's just link to the base note ID for related links in TOTAL view.
+        links.push({ source: virtualId, target: `note-${relId}`, type: 'related' });
+      });
+    };
+
+    // Start from root notes in filtered set
+    filteredNotes.forEach(note => {
+      const hasParentInFiltered = (note.parentNoteIds || []).some(pid => filteredNotes.some(fn => fn.id === pid));
+      if (!hasParentInFiltered) {
+        addNoteRecursiveTotal(note.id);
+      }
     });
 
-    const nodes = [...domainNodes, ...noteNodes];
-    const noteLinks = calculateLinks(filteredNotes);
-    const hierarchyLinks = filteredNotes.map(note => ({
-      source: note.id,
-      target: `domain-${note.folder || '미분류'}`,
-      type: 'hierarchy'
-    }));
-
-    return { nodes, links: [...noteLinks, ...hierarchyLinks] };
+    return { nodes, links };
   }, [notes, featureOnly, currentView, selectedDomain]);
 
   useEffect(() => {
@@ -247,7 +294,8 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
 
   const nodeColor = (node: any) => {
     if (node.type === 'domain') return darkMode ? '#3b82f6' : '#2563eb'; // Blue
-    if (node.id === selectedNoteId) return '#6366f1'; // Indigo-500
+    const noteId = node.noteId || node.id;
+    if (noteId === selectedNoteId) return '#6366f1'; // Indigo-500
     if (node.status === 'Conflict') return '#ef4444'; // Red-500
     if (node.status === 'Done') return '#10b981'; // Emerald-500
     if (node.status === 'Planned') return '#eab308'; // Yellow-500
@@ -259,7 +307,7 @@ export const MindMap: React.FC<MindMapProps> = ({ notes, onSelectNote, selectedN
     if (node.type === 'domain') {
       setSelectedDomain(node.name);
     } else {
-      onSelectNote(node.id);
+      onSelectNote(node.noteId || node.id);
     }
   };
 

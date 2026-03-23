@@ -4,6 +4,7 @@ import { NoteEditor } from './NoteEditor';
 import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
+import HierarchyCleanupModal from './HierarchyCleanupModal';
 import { Note, GCM, AppState, ChatMessage, NoteType, NoteStatus } from '../types';
 import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import Markdown from 'react-markdown';
@@ -29,8 +30,9 @@ import {
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
-import { findOrphanNotes, wouldCreateCycle } from '../utils/hierarchyValidator';
-import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare } from 'lucide-react';
+import { findOrphanNotes, wouldCreateCycle, findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
+import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
+import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare, CheckCircle2 } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
@@ -297,6 +299,8 @@ export const Dashboard: React.FC = () => {
   const [isTranspiling, setIsTranspiling] = useState(false);
   const [refinedGoals, setRefinedGoals] = useState<string[]>([]);
   const [isRefiningGoals, setIsRefiningGoals] = useState(false);
+  const [isCleanupModalOpen, setIsCleanupModalOpen] = useState(false);
+  const [invalidNotesForCleanup, setInvalidNotesForCleanup] = useState<Note[]>([]);
   const [analysisProgress, setAnalysisProgress] = useState<{ current: number; total: number; message: string } | null>(null);
   const [transferStep, setTransferStep] = useState<1 | 2 | 3 | 4>(1);
   const [repoSummaries, setRepoSummaries] = useState<Record<string, { nickname: string; summary: string; features: string }>>({});
@@ -336,6 +340,15 @@ export const Dashboard: React.FC = () => {
       localStorage.setItem('vibe-architect-theme', 'light');
     }
   }, [darkMode]);
+
+  useEffect(() => {
+    if (!isInitialLoading && state.notes.length > 0) {
+      const timer = setTimeout(() => {
+        handleSanitizeIntegrity(true);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isInitialLoading, currentProjectId]);
 
   if (isInitialLoading && userId) {
     return (
@@ -539,93 +552,97 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleSanitizeIntegrity = async (silent = false) => {
+    if (state.notes.length === 0 || !userId || !currentProjectId) return;
+
+    const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
+
+    if (fixCount > 0) {
+      if (!silent) {
+        setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
+      }
+      
+      try {
+        const batch = writeBatch(db);
+        fixedNotes.forEach(note => {
+          const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
+          batch.set(noteRef, cleanObject(note));
+        });
+        await batch.commit();
+        
+        // 로그 기록 (콘솔 및 향후 확장 가능)
+        logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
+
+        if (!silent) {
+          showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
+        }
+      } catch (e) {
+        if (!silent) {
+          handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
+        }
+      } finally {
+        if (!silent) {
+          setProcessStatus(null);
+        }
+      }
+    } else {
+      if (!silent) {
+        showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
+      }
+    }
+  };
+
   const handleEnforceHierarchy = async () => {
     if (state.notes.length === 0) return;
 
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
+    const invalidNotes = findInvalidHierarchyNotes(state.notes);
+    
+    if (invalidNotes.length === 0) {
+      showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
+      return;
+    }
+
+    setInvalidNotesForCleanup(invalidNotes);
+    setIsCleanupModalOpen(true);
+  };
+
+  const handleApplyCleanup = async (newNotes: Note[], updatedNotes: Note[]) => {
+    if (!userId || !currentProjectId) return;
 
     setIsSyncing(true);
-    
+    setProcessStatus({ message: '계층 구조 변경사항 적용 중...' });
+
     try {
-      let currentNotes = [...state.notes];
-      let iterationCount = 0;
-      const maxIterations = 5; // 무한 루프 방지를 위한 안전 장치
-
-      // 1. 고아 노드가 없을 때까지 반복 검사
-      while (true) {
-        const orphans = findOrphanNotes(currentNotes);
-        if (orphans.length === 0 || iterationCount >= maxIterations) break;
-
-        iterationCount++;
-        setProcessStatus({ 
-          message: `계층 보정 ${iterationCount}단계: 고아 노드 ${orphans.length}개 처리 중...` 
-        });
-
-        const newParentNotes: Note[] = [];
-        const updatedOrphans: Note[] = [];
-
-        for (const orphan of orphans) {
-          if (signal.aborted) break;
-          
-          const parentType: NoteType = orphan.noteType === 'Task' ? 'Feature' : 'Epic';
-          setProcessStatus({ message: `"${orphan.title}"의 상위 ${parentType} 설계 중...` });
-
-          // AI를 통해 상위 노드 데이터 생성
-          const suggestedParent = await generateParentNode(orphan, parentType, signal);
-          
-          const newParentId = Math.random().toString(36).substr(2, 9);
-          const newParentNode: Note = {
-            id: newParentId,
-            title: suggestedParent.title || `New ${parentType}`,
-            folder: suggestedParent.folder || orphan.folder,
-            content: suggestedParent.content || '',
-            summary: suggestedParent.summary || '',
-            noteType: parentType,
-            status: 'Planned',
-            priority: 'C',
-            version: '1.0.0',
-            lastUpdated: new Date().toISOString(),
-            importance: suggestedParent.importance || 3,
-            tags: [...(suggestedParent.tags || []), 'auto-generated'],
-            parentNoteIds: [],
-            childNoteIds: [orphan.id],
-            relatedNoteIds: suggestedParent.relatedNoteIds || []
-          };
-
-          newParentNotes.push(newParentNode);
-          updatedOrphans.push({
-            ...orphan,
-            parentNoteIds: Array.from(new Set([...(orphan.parentNoteIds || []), newParentId])),
-            lastUpdated: new Date().toISOString()
-          });
-        }
-
-        if (signal.aborted) return;
-
-        // 2. 현재 단계에서 생성/수정된 노드들을 즉시 반영하여 다음 'while' 반복에서 검사 대상이 되게 함
-        const iterationResultsMap = new Map(currentNotes.map(n => [n.id, n]));
-        newParentNotes.forEach(n => iterationResultsMap.set(n.id, n));
-        updatedOrphans.forEach(uo => iterationResultsMap.set(uo.id, uo));
-        
-        currentNotes = Array.from(iterationResultsMap.values());
-
-        // Firestore 중간 저장
-        saveNotesToFirestore([...newParentNotes, ...updatedOrphans]);
+      // 1. 새 노드 저장
+      if (newNotes.length > 0) {
+        await saveNotesToFirestore(newNotes);
       }
 
-      // 3. 최종 상태 반영
-      setState(prev => ({ ...prev, notes: currentNotes }));
-      showAlert('보정 완료', '모든 노드가 Epic -> Feature -> Task 계층에 편입되었습니다.', 'success');
+      // 2. 업데이트된 노드 저장
+      if (updatedNotes.length > 0) {
+        await saveNotesToFirestore(updatedNotes);
+      }
 
+      // 3. 전체 상태 업데이트 및 계층 동기화
+      const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
+      const allNotes = [...state.notes, ...newNotes];
+      const affectedMap = new Map<string, Note>();
+
+      updatedNotes.forEach(un => {
+        const affected = syncNoteRelationships(un, allNotes);
+        affected.forEach(an => affectedMap.set(an.id, an));
+        affectedMap.set(un.id, un);
+      });
+
+      const syncedNotes = allNotes.map(note => affectedMap.get(note.id) || note);
+
+      await saveNotesToFirestore(syncedNotes);
+      setState(prev => ({ ...prev, notes: syncedNotes }));
+      
+      showAlert('성공', '계층 구조 보정이 완료되었습니다.', 'success');
     } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Hierarchy enforcement cancelled');
-      } else {
-        console.error('Hierarchy enforcement failed', error);
-        showAlert('오류', '계층 구조 보정 중 오류가 발생했습니다.', 'error');
-      }
+      console.error('Cleanup apply failed', error);
+      showAlert('오류', '변경사항 적용 중 오류가 발생했습니다.', 'error');
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
@@ -2436,6 +2453,13 @@ export const Dashboard: React.FC = () => {
                       {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />} 계층 구조 자동 보정 (고아 노트 해결)
                     </button>
                     <button
+                      onClick={() => handleSanitizeIntegrity(false)}
+                      disabled={isSyncing || state.notes.length === 0}
+                      className="col-span-2 bg-slate-50 dark:bg-slate-900/40 text-slate-700 dark:text-slate-300 py-2.5 rounded-md text-[10px] font-bold border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 text-emerald-500" />} 데이터 무결성 최적화 (관계 복구)
+                    </button>
+                    <button
                       onClick={handleAnalyzeNextSteps}
                       disabled={state.notes.length === 0}
                       className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
@@ -2554,6 +2578,15 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+      {isCleanupModalOpen && (
+        <HierarchyCleanupModal
+          isOpen={isCleanupModalOpen}
+          onClose={() => setIsCleanupModalOpen(false)}
+          invalidNotes={invalidNotesForCleanup}
+          allNotes={state.notes}
+          onApply={handleApplyCleanup}
+        />
       )}
       {dialogConfig && (
         <Dialog

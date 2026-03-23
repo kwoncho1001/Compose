@@ -152,6 +152,88 @@ export const generateParentNode = async (
     lastUpdated: new Date().toISOString(),
   };
 };
+export const suggestOrCreateParent = async (
+  orphanNote: Note,
+  candidateParents: Note[],
+  signal?: AbortSignal
+): Promise<{ 
+  action: 'match' | 'create'; 
+  parentId?: string; 
+  newNote?: Partial<Note> 
+}> => {
+  const requiredParentType = orphanNote.noteType === 'Task' ? 'Feature' : 'Epic';
+  
+  const prompt = `
+    당신은 지식 관리 전문가입니다. 아래 '고아 노드'를 적절한 부모 노드에 할당해야 합니다.
+    
+    [고아 노드 정보]
+    - 타입: ${orphanNote.noteType}
+    - 제목: ${orphanNote.title}
+    - 요약: ${orphanNote.summary}
+    - 내용: ${orphanNote.content.slice(0, 1000)}
+
+    [규칙]
+    - ${orphanNote.noteType === 'Task' ? '부모는 반드시 Feature 타입이어야 함' : '부모는 반드시 Epic 타입이어야 함'}
+
+    [기존 부모 후보 (이미 존재하는 ${requiredParentType} 목록)]
+    ${candidateParents.length > 0 
+      ? candidateParents.map(p => `- ID: ${p.id}, 제목: ${p.title}, 요약: ${p.summary}`).join('\n')
+      : '없음'}
+
+    작업:
+    1. 기존 후보 중 이 고아 노드를 논리적으로 포함할 수 있는 가장 적합한 부모가 있다면 해당 ID를 선택하세요. (action: "match")
+    2. 적합한 후보가 없거나 목록이 비어있다면, 이 노드를 아우를 수 있는 새로운 ${requiredParentType} 노드의 제목과 내용을 작성하세요. (action: "create")
+    
+    결과 포맷: JSON { "action": "match" | "create", "parentId": "string (match인 경우 필수)", "newNote": { "title": "string", "content": "string", "summary": "string" } }
+  `;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          action: { type: Type.STRING, enum: ['match', 'create'] },
+          parentId: { type: Type.STRING, description: "기존 부모와 매칭될 경우 해당 부모의 ID" },
+          newNote: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              content: { type: Type.STRING },
+              summary: { type: Type.STRING },
+            }
+          }
+        },
+        required: ["action"]
+      }
+    },
+  });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  const result = safeJsonParse(response.text || "{}");
+  
+  if (result.action === 'create' && result.newNote) {
+    return {
+      action: 'create',
+      newNote: {
+        ...result.newNote,
+        noteType: requiredParentType,
+        folder: orphanNote.folder,
+        status: 'Planned',
+        priority: 'B',
+        version: '1.0.0',
+        lastUpdated: new Date().toISOString(),
+      }
+    };
+  }
+
+  return result;
+};
+
 export const decomposeFeature = async (
   featureRequest: string,
   currentGcm: GCM,

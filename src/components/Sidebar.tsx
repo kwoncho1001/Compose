@@ -22,12 +22,12 @@ interface SidebarProps {
 }
 
 interface TreeItem {
-  id: string;
+  id: string; // Unique path-based ID (e.g., "folder-path/noteId" or "parentPath/noteId")
+  noteId?: string; // Original note ID if it's a note
   type: 'folder' | 'note';
   name: string;
-  children: TreeItem[];
+  path: string; // Breadcrumb-like path for UI state
   note?: Note;
-  path: string;
 }
 
 const StatusIcon = ({ status }: { status: Note['status'] }) => {
@@ -75,135 +75,115 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
 
-  const toggleExpand = (id: string, e: React.MouseEvent) => {
+  const toggleExpand = (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+    setExpanded(prev => ({ ...prev, [path]: !prev[path] }));
   };
 
-  const getAllNoteIds = (item: TreeItem): string[] => {
-    const ids: string[] = [];
-    if (item.type === 'note') {
-      ids.push(item.id);
-    }
-    item.children.forEach(child => {
-      ids.push(...getAllNoteIds(child));
-    });
-    return ids;
-  };
+  const noteMap = useMemo(() => new Map(notes.map(n => [n.id, n])), [notes]);
 
-  const toggleSelection = (item: TreeItem, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const ids = getAllNoteIds(item);
-    if (ids.length === 0) return;
+  // Root folders and notes (notes with no parents)
+  const rootItems = useMemo(() => {
+    const roots: TreeItem[] = [];
+    const folderMap = new Map<string, TreeItem>();
 
-    const newSet = new Set(selectedNotes);
-    const allSelected = ids.every(id => newSet.has(id));
-    
-    if (allSelected) {
-      ids.forEach(id => newSet.delete(id));
-    } else {
-      ids.forEach(id => newSet.add(id));
-    }
-    setSelectedNotes(newSet);
-  };
-
-  const tree = useMemo(() => {
-    const root: TreeItem[] = [];
-    const noteMap = new Map<string, TreeItem>();
-
-    // 1. Create items for all notes
     notes.forEach(note => {
-      noteMap.set(note.id, {
-        id: note.id,
-        type: 'note',
-        name: note.title,
-        children: [],
-        note,
-        path: note.id
-      });
-    });
-
-    // 2. Build folder structure and place top-level notes
-    notes.forEach(note => {
-      const item = noteMap.get(note.id)!;
-      
-      // If it has a parent note, it will be handled in step 3
-      if (note.parentNoteIds && note.parentNoteIds.length > 0 && note.parentNoteIds.some(pid => noteMap.has(pid))) return;
+      // Check if it's a root note (no parents or parents don't exist in current project)
+      const hasValidParent = (note.parentNoteIds || []).some(pid => noteMap.has(pid));
+      if (hasValidParent) return;
 
       const folderPath = note.folder || '미분류';
       const folderParts = folderPath.split('/').filter(Boolean);
       
-      let currentLevel = root;
-      let currentPath = '';
+      let currentLevel = roots;
+      let currentPath = 'root';
 
       folderParts.forEach((part) => {
-        currentPath = currentPath ? `${currentPath}/${part}` : part;
-        const folderId = `folder-${currentPath}`;
-        let folderItem = currentLevel.find(i => i.type === 'folder' && i.name === part);
+        currentPath = `${currentPath}/${part}`;
+        let folderItem = folderMap.get(currentPath);
         if (!folderItem) {
           folderItem = {
-            id: folderId,
+            id: `folder-${currentPath}`,
             type: 'folder',
             name: part,
-            children: [],
             path: currentPath
           };
+          folderMap.set(currentPath, folderItem);
           currentLevel.push(folderItem);
         }
-        currentLevel = folderItem.children;
+        // This is a bit tricky with the flat rootItems array, 
+        // but since we are building a folder tree for roots, we need to manage children for folders.
+        // We'll add a temporary children array for folders during construction.
+        if (!(folderItem as any).tempChildren) (folderItem as any).tempChildren = [];
+        currentLevel = (folderItem as any).tempChildren;
       });
 
-      currentLevel.push(item);
-    });
-
-    // 3. Handle note hierarchy (children of notes)
-    notes.forEach(note => {
-      (note.parentNoteIds || []).forEach(parentId => {
-        if (noteMap.has(parentId)) {
-          const parentItem = noteMap.get(parentId)!;
-          const childItem = noteMap.get(note.id)!;
-          // Avoid duplicate additions if any
-          if (!parentItem.children.find(c => c.id === childItem.id)) {
-            parentItem.children.push(childItem);
-          }
-        }
+      currentLevel.push({
+        id: `note-root-${note.id}`,
+        noteId: note.id,
+        type: 'note',
+        name: note.title,
+        path: `root/${note.id}`,
+        note
       });
     });
 
-    // Sort: Folders first, then notes alphabetically
-    const sortTree = (items: TreeItem[]) => {
+    // Recursive helper to clean up tempChildren and sort
+    const finalize = (items: TreeItem[]) => {
       items.sort((a, b) => {
         if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
       items.forEach(item => {
-        if (item.children.length > 0) sortTree(item.children);
+        if ((item as any).tempChildren) {
+          (item as any).children = (item as any).tempChildren;
+          delete (item as any).tempChildren;
+          finalize((item as any).children);
+        }
       });
     };
 
-    sortTree(root);
-    return root;
-  }, [notes]);
+    finalize(roots);
+    return roots;
+  }, [notes, noteMap]);
 
-  const renderTreeItem = (item: TreeItem, level: number = 0) => {
-    const isExpanded = expanded[item.id];
-    const isSelected = selectedNoteId === item.id;
-    const hasChildren = item.children.length > 0;
+  const renderTreeItem = (item: TreeItem, level: number = 0, parentPath: string = '') => {
+    const itemPath = item.path;
+    const isExpanded = expanded[itemPath];
+    const isSelected = selectedNoteId === item.noteId;
     
     const note = item.note;
     const hasConsistencyConflict = !!note?.consistencyConflict;
     const isConflict = note?.status === 'Conflict' || hasConsistencyConflict;
 
-    const getFolderStatus = (treeItem: TreeItem): 'Conflict' | 'Planned' | 'Done' | 'Other' => {
+    // For folders, we use the pre-calculated children
+    // For notes, we calculate children dynamically from noteMap
+    const children = item.type === 'folder' 
+      ? (item as any).children || [] 
+      : (note?.childNoteIds || [])
+          .map(cid => noteMap.get(cid))
+          .filter(Boolean)
+          .map(childNote => ({
+            id: `note-${itemPath}-${childNote!.id}`,
+            noteId: childNote!.id,
+            type: 'note' as const,
+            name: childNote!.title,
+            path: `${itemPath}/${childNote!.id}`,
+            note: childNote!
+          }));
+
+    const hasChildren = children.length > 0;
+
+    const getFolderStatus = (ti: TreeItem): 'Conflict' | 'Planned' | 'Done' | 'Other' => {
       const allNotes: Note[] = [];
-      const collectNotes = (ti: TreeItem) => {
-        if (ti.note) allNotes.push(ti.note);
-        ti.children.forEach(collectNotes);
+      const collectNotes = (target: any) => {
+        if (target.note) allNotes.push(target.note);
+        if (target.children) target.children.forEach(collectNotes);
+        // For notes, we don't recursively collect here to avoid infinite loops in status calculation
       };
-      collectNotes(treeItem);
+      collectNotes(ti);
       
       if (allNotes.length === 0) return 'Other';
-      
       if (allNotes.some(n => n.status === 'Conflict' || !!n.consistencyConflict)) return 'Conflict';
       if (allNotes.some(n => n.status === 'Planned')) return 'Planned';
       if (allNotes.every(n => n.status === 'Done')) return 'Done';
@@ -220,9 +200,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     const isTemporaryMerge = note?.status === 'Temporary Merge';
 
-    const itemNoteIds = getAllNoteIds(item);
-    const isAllSelected = itemNoteIds.length > 0 && itemNoteIds.every(id => selectedNotes.has(id));
-    const isSomeSelected = itemNoteIds.length > 0 && !isAllSelected && itemNoteIds.some(id => selectedNotes.has(id));
+    // Selection logic for path-based items
+    const toggleSelection = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!item.noteId) return;
+      const newSet = new Set(selectedNotes);
+      if (newSet.has(item.noteId)) {
+        newSet.delete(item.noteId);
+      } else {
+        newSet.add(item.noteId);
+      }
+      setSelectedNotes(newSet);
+    };
+
+    const isNoteSelected = item.noteId ? selectedNotes.has(item.noteId) : false;
+
+    // Cycle detection: check if noteId already exists in parentPath
+    const pathParts = itemPath.split('/');
+    const isCycle = item.noteId && pathParts.slice(0, -1).includes(item.noteId);
+
+    if (isCycle) {
+      return (
+        <div key={item.id} className="pl-4 py-1 text-[10px] text-red-500 italic flex items-center gap-1">
+          <AlertTriangle className="w-3 h-3" /> 순환 참조 감지됨
+        </div>
+      );
+    }
 
     return (
       <div key={item.id} className="select-none">
@@ -235,16 +238,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           style={{ paddingLeft: `${level * 12 + 8}px` }}
           onClick={() => {
             if (isSelectMode) {
-              toggleSelection(item, { stopPropagation: () => {} } as any);
+              toggleSelection({ stopPropagation: () => {} } as any);
             } else {
-              item.type === 'note' ? onSelectNote(item.id) : toggleExpand(item.id, { stopPropagation: () => {} } as any);
+              item.type === 'note' ? onSelectNote(item.noteId!) : toggleExpand(itemPath, { stopPropagation: () => {} } as any);
             }
           }}
         >
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             {hasChildren ? (
               <button 
-                onClick={(e) => toggleExpand(item.id, e)}
+                onClick={(e) => toggleExpand(itemPath, e)}
                 className="p-0.5 hover:bg-slate-700 rounded transition-colors"
               >
                 {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -253,17 +256,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="w-4.5" /> // Spacer
             )}
             
-            {isSelectMode && (
+            {isSelectMode && item.type === 'note' && (
               <div 
                 className="cursor-pointer shrink-0 mr-1" 
-                onClick={(e) => toggleSelection(item, e)}
+                onClick={toggleSelection}
               >
-                {isAllSelected ? (
+                {isNoteSelected ? (
                   <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
-                ) : isSomeSelected ? (
-                  <div className="w-3.5 h-3.5 border border-indigo-500 rounded flex items-center justify-center">
-                    <div className="w-1.5 h-0.5 bg-indigo-500" />
-                  </div>
                 ) : (
                   <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
                 )}
@@ -303,7 +302,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onAddChildNote(item.id);
+                    onAddChildNote(item.noteId!);
                   }}
                   className="p-1 text-slate-500 hover:text-indigo-400 transition-colors"
                   title="하위 노트 추가"
@@ -313,7 +312,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onDeleteNote(item.id);
+                    onDeleteNote(item.noteId!);
                   }}
                   className="p-1 text-slate-500 hover:text-red-500 transition-colors"
                   title="노트 삭제"
@@ -341,7 +340,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         
         {hasChildren && isExpanded && (
           <div className="mt-0.5">
-            {item.children.map(child => renderTreeItem(child, level + 1))}
+            {children.map(child => renderTreeItem(child, level + 1, itemPath))}
           </div>
         )}
       </div>
@@ -499,8 +498,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         
         <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
-        {tree.length > 0 ? (
-          tree.map(item => renderTreeItem(item))
+        {rootItems.length > 0 ? (
+          rootItems.map(item => renderTreeItem(item))
         ) : (
           <div className="px-6 text-sm text-slate-500 italic">
             생성된 노트가 없습니다.

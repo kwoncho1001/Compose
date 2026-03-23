@@ -24,7 +24,10 @@ const systemInstruction = `
 1. 태그(tags)는 반드시 해당 기능의 '역할'이나 '기술 스택'을 나타내야 합니다. 
    - ❌ 잘못된 예: 'auto-generated', 'design-leading-code', 'discovered-from-github'
    - ✅ 올바른 예: 'UI', 'Login', 'Auth', 'Database', 'Logic', 'API'
-2. 모든 텍스트는 한국어로 작성합니다.
+2. 우선순위(priority) 배정 규칙:
+   - 구현 순서에 따라 A(필수/선행), B(보통), C(지연/후행), Done(완료)으로 배정합니다.
+   - 예: 의존성이 있는 선행 작업은 'A', 결과물은 'C'.
+3. 모든 텍스트는 한국어로 작성합니다.
 3. parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
 4. 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
@@ -40,9 +43,10 @@ const noteSchema: Schema = {
     relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING }, description: "논리적으로 연관된 다른 노트들의 고유 ID(id) 목록. 제목을 넣지 마십시오. AI가 분석하여 자동으로 최대한 많이 연결하십시오." },
     tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "본문에서 추출한 핵심 키워드 태그 목록" },
     importance: { type: Type.NUMBER, description: "중요도 (1~5점)" },
+    priority: { type: Type.STRING, description: "우선순위 (A, B, C, Done 중 하나)" },
     noteType: { type: Type.STRING, description: "노트의 유형 (Epic, Feature, Task, Reference 중 하나)" },
   },
-  required: ["title", "folder", "content", "summary", "noteType"],
+  required: ["title", "folder", "content", "summary", "noteType", "priority"],
 };
 
 export const parseMetadata = (yaml: string): Record<string, string> => {
@@ -133,7 +137,8 @@ export const decomposeFeature = async (
     relatedNoteIds: mainFeature.relatedNoteIds || [],
     childNoteIds: [],
     noteType: parentType as NoteType,
-    status: 'Planned'
+    status: 'Planned',
+    priority: mainFeature.priority || 'C'
   };
 
   // 2. 두 번째 AI 호출로 하위 노트(자식) 설계
@@ -437,9 +442,10 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 2. **부모 노트 (파일 단위)**:
    - 역할: 해당 파일이 담당하는 큰 임무와 책임을 설명하십시오.
    - 폴더: [매우 중요] 이 코드가 구현하고 있는 [기존 설계도 목록]의 Task/Feature가 속한 **동일한 도메인 폴더**를 사용하십시오. 만약 적절한 설계도를 찾지 못했다면, 코드의 성격에 맞는 "상위도메인/하위도메인" 폴더를 새로 정의하십시오.
-   - 메타데이터: tags: [discovered-from-github, reference], importance: 3
+   - 메타데이터: tags: ['UI', 'Logic' 등 기능적 역할], importance: 3, priority: 'A' (선행 작업인 경우) 또는 'C'
 3. **자식 노트 (함수/로직 단위)**:
    - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
+   - 메타데이터: priority: 'C' (일반적으로 후행 분석 결과물)
 4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
 5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 계층 구조(parentNoteId)**: 
    - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
@@ -464,6 +470,7 @@ Return JSON:
       "summary": "...",
       "tags": ["tag1"],
       "importance": 4,
+      "priority": "A",
       "matchedNoteId": "기존_노트_ID",
       "isNew": boolean,
       "noteType": "Reference",
@@ -478,6 +485,7 @@ Return JSON:
         "summary": "...",
         "tags": ["tag1"],
         "importance": 3,
+        "priority": "C",
         "matchedNoteId": "기존_노트_ID",
         "isNew": boolean,
         "noteType": "Reference",
@@ -491,7 +499,8 @@ Return JSON:
       "folder": "도메인",
       "content": "...",
       "summary": "...",
-      "noteType": "Epic"
+      "noteType": "Epic",
+      "priority": "A"
     },
     {
       "tempId": "temp_feature_1",
@@ -936,6 +945,7 @@ Return JSON matching the Note schema (title, folder, content, summary, importanc
       version: '1.0.0',
       lastUpdated: new Date().toISOString(),
       importance: 1,
+      priority: 'C',
       tags: ['error'],
       noteType: 'Reference',
       relatedNoteIds: [],

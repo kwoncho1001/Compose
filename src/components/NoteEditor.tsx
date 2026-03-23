@@ -3,7 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Note, NoteType, GCM, NoteStatus } from '../types';
+import { Note, NoteType, GCM, NoteStatus, NotePriority } from '../types';
 import { FileText, Code, Activity, AlertTriangle, Loader2, MessageSquare, Send, Edit3, Trash2, FolderTree, Lightbulb, Eye, EyeOff, Merge, ExternalLink, Hash, Clock, Star, Tag, Link2, ChevronRight, Info, Layers, X } from 'lucide-react';
 import { updateSpecFromCode, generateFixGuide, validateYamlMetadata, partialMerge, generateImpactAnalysis } from '../services/gemini';
 import { incrementVersion } from '../utils/noteMirroring';
@@ -87,6 +87,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     content: string;
     summary: string;
     status: NoteStatus;
+    priority: NotePriority;
     version: string;
     importance: number;
     tags: string[];
@@ -99,6 +100,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
     content: '',
     summary: '',
     status: 'Planned',
+    priority: 'C',
     version: '1.0.0',
     importance: 3,
     tags: [],
@@ -114,6 +116,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
         content: note.content,
         summary: note.summary,
         status: note.status,
+        priority: note.priority || 'C',
         version: note.version,
         importance: note.importance,
         tags: note.tags || [],
@@ -488,6 +491,23 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
                   <option value="Conflict">Conflict</option>
                   <option value="Review-Required">Review-Required</option>
                   <option value="Deprecated">Deprecated</option>
+                </select>
+              </MetadataRow>
+
+              <MetadataRow label="우선순위" icon={<Star className="w-3 h-3" />}>
+                <select
+                  value={editData.priority}
+                  onChange={(e) => {
+                    const val = e.target.value as NotePriority;
+                    setEditData(prev => ({ ...prev, priority: val }));
+                    syncChanges({ priority: val });
+                  }}
+                  className="w-full bg-transparent text-xs font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none"
+                >
+                  <option value="A">A - 즉시 구현 (라면 끓이기)</option>
+                  <option value="B">B - 순차 구현</option>
+                  <option value="C">C - 추후 구현 (라면 먹기)</option>
+                  <option value="Done">Done - 완료</option>
                 </select>
               </MetadataRow>
 

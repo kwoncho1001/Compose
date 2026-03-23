@@ -1,5 +1,6 @@
 export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required' | 'Temporary Merge';
 export type NoteType = 'Epic' | 'Feature' | 'Task' | 'Reference';
+export type NotePriority = 'A' | 'B' | 'C' | 'Done'; // A(최고), B, C, Done
 
 export interface Note {
   // --- 구획 1: 요약 ---
@@ -12,6 +13,7 @@ export interface Note {
   lastUpdated: string;  // 저장 시 시스템 자동 기록
   folder: string;
   status: NoteStatus;
+  priority: NotePriority; // 우선순위 필드 추가
   importance: number;   // 1~5점 척도
   noteType: NoteType;
   

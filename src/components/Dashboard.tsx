@@ -159,15 +159,26 @@ export const Dashboard: React.FC = () => {
     };
   }, [userId, currentProjectId]);
 
+  // Helper to strip undefined values for Firestore
+  const cleanObject = (obj: any) => {
+    const newObj = { ...obj };
+    Object.keys(newObj).forEach(key => {
+      if (newObj[key] === undefined) {
+        delete newObj[key];
+      }
+    });
+    return newObj;
+  };
+
   // Helper to sync changes to Firestore
   const syncProject = async (updates: Partial<AppState>) => {
     if (!userId || !currentProjectId) return;
     const projectRef = doc(db, 'users', userId, 'projects', currentProjectId);
     try {
-      await setDoc(projectRef, {
+      await setDoc(projectRef, cleanObject({
         ...updates,
         lastUpdated: new Date().toISOString()
-      }, { merge: true });
+      }), { merge: true });
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, projectRef.path);
     }
@@ -177,7 +188,7 @@ export const Dashboard: React.FC = () => {
     if (!userId || !currentProjectId) return;
     const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
     try {
-      await setDoc(noteRef, note);
+      await setDoc(noteRef, cleanObject(note));
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, noteRef.path);
     }
@@ -198,7 +209,7 @@ export const Dashboard: React.FC = () => {
     const batch = writeBatch(db);
     notes.forEach(note => {
       const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-      batch.set(noteRef, note);
+      batch.set(noteRef, cleanObject(note));
     });
     try {
       await batch.commit();
@@ -1048,7 +1059,7 @@ export const Dashboard: React.FC = () => {
                 noteType: dNote.noteType,
                 status: 'Planned',
                 yamlMetadata: `tags: [auto-generated, design-leading-code]\nrelatedNoteIds: []`,
-                parentNoteId
+                ...(parentNoteId ? { parentNoteId } : {})
               };
               
               currentNotes.push(newDesignNote);
@@ -1135,6 +1146,7 @@ export const Dashboard: React.FC = () => {
               finalNote = await mergeLogicIntoNote(unit, targetNote, signal);
               if (signal.aborted) return;
               finalNote.parentNoteId = parentNoteId; // Force link
+              if (!parentNoteId) delete finalNote.parentNoteId;
               
               // --- [여기서부터 새로 추가/변경되는 부분] ---
               finalNote.noteType = 'Reference';
@@ -1153,7 +1165,7 @@ export const Dashboard: React.FC = () => {
                 summary: unit.summary,
                 yamlMetadata: appendRelatedNoteIdsToYaml(unit.yamlMetadata, unit.relatedNoteIds || []),
                 status: 'Done',
-                parentNoteId: parentNoteId, // Link to parent
+                ...(parentNoteId ? { parentNoteId } : {}),
                 
                 // --- [여기서부터 새로 추가/변경되는 부분] ---
                 noteType: 'Reference',
@@ -1716,6 +1728,33 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleDeleteProject = async (id: string) => {
+    if (!userId) return;
+    if (id === 'default-project') {
+      alert('기본 프로젝트는 삭제할 수 없습니다.');
+      return;
+    }
+
+    const projectName = projects.find(p => p.id === id)?.name || id;
+    if (!window.confirm(`'${projectName}' 프로젝트를 영구적으로 삭제하시겠습니까? 모든 노트와 데이터가 삭제됩니다.`)) {
+      return;
+    }
+
+    try {
+      // Delete the project document
+      const projectRef = doc(db, 'users', userId, 'projects', id);
+      await deleteDoc(projectRef);
+      
+      // If we deleted the current project, switch to another one
+      if (id === currentProjectId) {
+        const otherProject = projects.find(p => p.id !== id);
+        setCurrentProjectId(otherProject ? otherProject.id : 'default-project');
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `project-${id}`);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden transition-colors duration-200">
       {/* Sidebar Rail - Desktop */}
@@ -1761,6 +1800,7 @@ export const Dashboard: React.FC = () => {
             onSelectProject={setCurrentProjectId}
             onCreateProject={handleCreateProject}
             onRenameProject={handleRenameProject}
+            onDeleteProject={handleDeleteProject}
             selectedNoteId={selectedNoteId}
             onSelectNote={setSelectedNoteId}
             onAddNote={handleAddNote}
@@ -1788,6 +1828,7 @@ export const Dashboard: React.FC = () => {
               }}
               onCreateProject={handleCreateProject}
               onRenameProject={handleRenameProject}
+              onDeleteProject={handleDeleteProject}
               selectedNoteId={selectedNoteId}
               onSelectNote={(id) => {
                 setSelectedNoteId(id);

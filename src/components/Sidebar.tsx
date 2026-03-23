@@ -10,6 +10,7 @@ interface SidebarProps {
   onSelectProject: (id: string) => void;
   onCreateProject: (name: string) => void;
   onRenameProject?: (id: string, newName: string) => void;
+  onDeleteProject?: (id: string) => void;
   selectedNoteId: string | null;
   onSelectNote: (id: string) => void;
   onAddNote: () => void;
@@ -56,6 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectProject,
   onCreateProject,
   onRenameProject,
+  onDeleteProject,
   selectedNoteId, 
   onSelectNote, 
   onAddNote, 
@@ -274,6 +276,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   note.noteType === 'Epic' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' :
                   note.noteType === 'Feature' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' :
                   note.noteType === 'Task' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' :
+                  note.noteType === 'Reference' ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-dashed border-slate-400 dark:border-slate-600' :
                   'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
                 }`}>
                   {note.noteType.charAt(0)}
@@ -421,6 +424,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className="text-xs text-slate-400 hover:text-slate-300 transition-colors"
                 >
                   Rename
+                </button>
+              )}
+              {onDeleteProject && !isCreatingProject && !isRenamingProject && (
+                <button 
+                  onClick={() => onDeleteProject(currentProjectId)}
+                  className="text-xs text-red-500 hover:text-red-400 transition-colors"
+                >
+                  Discard
                 </button>
               )}
               <button 

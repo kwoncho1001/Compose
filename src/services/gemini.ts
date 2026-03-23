@@ -20,10 +20,13 @@ const systemInstruction = `
    - Epic의 자식인 Feature 노드들을 생성하고 parentNoteId를 Epic ID로 연결합니다.
    - Feature의 자식인 Task 노드들을 생성하고 parentNoteId를 각 Feature ID로 연결합니다.
 
-[메타데이터 및 가독성]
-- 모든 텍스트는 한국어로 작성합니다.
-- parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
-- 제목에 접두어(1., [기능])를 붙이지 마십시오.
+[태그 및 메타데이터 규칙]
+1. 태그(tags)는 반드시 해당 기능의 '역할'이나 '기술 스택'을 나타내야 합니다. 
+   - ❌ 잘못된 예: 'auto-generated', 'design-leading-code', 'discovered-from-github'
+   - ✅ 올바른 예: 'UI', 'Login', 'Auth', 'Database', 'Logic', 'API'
+2. 모든 텍스트는 한국어로 작성합니다.
+3. parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
+4. 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
 
 const noteSchema: Schema = {
@@ -445,6 +448,11 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
    - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
    - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
    - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
+[가장 중요: 연관성 및 태그 부여]
+1. 새로 생성되는 'newDesignNotes'들은 분석 중인 소스 코드(Reference)와 반드시 'relatedNoteIds'로 연결되어야 합니다.
+2. 각 설계 노트(Epic, Feature, Task)의 태그는 코드의 실제 도메인 역할(예: '인증 로직', '데이터 매핑')을 반영해야 합니다.
+3. 'newDesignNotes' 간에도 계층에 따라 parentNoteId와 childNoteIds(또는 tempId 기반 연결)가 완벽하게 구성되어야 합니다.
+
 6. 생성되는 모든 코드 분석 노트의 'noteType'은 반드시 "Reference"로 지정하십시오.
 
 Return JSON:

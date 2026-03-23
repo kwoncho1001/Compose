@@ -462,7 +462,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2">
-            {/* Left Column: 폴더, 상태, 버전, 최종수정 */}
+            {/* Left Column: 폴더 -> 상태 -> 버전 -> 최종수정 */}
             <div className="border-r border-slate-200 dark:border-slate-800">
               <MetadataRow label="폴더" icon={<FolderTree className="w-3 h-3" />}>
                 <input
@@ -491,24 +491,6 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
                 </select>
               </MetadataRow>
 
-              <MetadataRow label="중요도" icon={<Star className="w-3 h-3" />}>
-                <select
-                  value={editData.importance}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    setEditData(prev => ({ ...prev, importance: val }));
-                    syncChanges({ importance: val });
-                  }}
-                  className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
-                >
-                  <option value={1}>1 - Low</option>
-                  <option value={2}>2 - Normal</option>
-                  <option value={3}>3 - High</option>
-                  <option value={4}>4 - Critical</option>
-                  <option value={5}>5 - Blocker</option>
-                </select>
-              </MetadataRow>
-
               <MetadataRow label="버전" icon={<Hash className="w-3 h-3" />}>
                 <input
                   type="text"
@@ -525,7 +507,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
               </MetadataRow>
             </div>
 
-            {/* Right Column: 유형, 태그, 연관 노트, 상위 노트, 하위 노트 */}
+            {/* Right Column: 유형 -> 태그 -> 연관 노트 -> 상위 노트 -> 하위 노트 */}
             <div>
               <MetadataRow label="유형" icon={<Layers className="w-3 h-3" />}>
                 <select
@@ -552,7 +534,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ note, allNotes, gcm, onU
                   onBlur={() => syncChanges({ tags: editData.tags })}
                   readOnly={isSnapshotNote}
                   className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
-                  placeholder="태그1, 태그2"
+                  placeholder="UI, Login, Firebase..."
                 />
               </MetadataRow>
 

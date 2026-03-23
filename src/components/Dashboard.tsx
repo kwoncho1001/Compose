@@ -1338,21 +1338,24 @@ export const Dashboard: React.FC = () => {
 
 
   const handleUpdateNote = (updatedNote: Note) => {
-    // 양방향 역참조 동기화 수행
+    // Mirroring 로직을 사용하여 영향을 받는 모든 노트 리스트를 가져옴
     const affectedNotes = syncNoteRelationships(updatedNote, state.notes);
     
-    // 모든 영향을 받는 노트를 Firestore에 저장
+    // 모든 영향을 받은 노트를 Firestore에 저장
     saveNotesToFirestore(affectedNotes);
     
-    // 로컬 상태 업데이트
-    setState((prev) => {
-      const notesMap = new Map(prev.notes.map(n => [n.id, n]));
-      affectedNotes.forEach(an => notesMap.set(an.id, an));
-      
-      return {
-        ...prev,
-        notes: Array.from(notesMap.values()),
-      };
+    // 모든 영향을 받은 노트를 상태에 반영 (Firebase 또는 Local State)
+    setState(prev => {
+      const newNotes = [...prev.notes];
+      affectedNotes.forEach(an => {
+        const idx = newNotes.findIndex(n => n.id === an.id);
+        if (idx !== -1) {
+          newNotes[idx] = an;
+        } else {
+          newNotes.push(an);
+        }
+      });
+      return { ...prev, notes: newNotes };
     });
   };
 

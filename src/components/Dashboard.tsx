@@ -1940,10 +1940,6 @@ export const Dashboard: React.FC = () => {
 
   const handleDeleteProject = async (id: string) => {
     if (!userId) return;
-    if (id === 'default-project') {
-      showAlert('오류', '기본 프로젝트는 삭제할 수 없습니다.', 'error');
-      return;
-    }
 
     const projectName = projects.find(p => p.id === id)?.name || id;
     

@@ -28,8 +28,11 @@ const systemInstruction = `
    - 구현 순서에 따라 A(필수/선행), B(보통), C(지연/후행), Done(완료)으로 배정합니다.
    - 예: 의존성이 있는 선행 작업은 'A', 결과물은 'C'.
 3. 모든 텍스트는 한국어로 작성합니다.
-3. parentNoteIds, relatedNoteIds, tags를 적절히 설정하십시오. 하나의 작업(Task)이 여러 기능(Feature)에 기여한다면 parentNoteIds에 복수의 ID를 포함시켜 계층적 다중 소속을 명시하십시오.
-4. 제목에 접두어(1., [기능])를 붙이지 마십시오.
+4. **계층 및 연관 관계 설정 규칙**:
+   - **parentNoteIds (직계 계층)**: 반드시 'A가 B를 논리적으로 포함하거나, B가 A의 직접적인 하위 기능인 경우'에만 설정하십시오. (예: Epic -> Feature, Feature -> Task). 무분별한 다중 부모 설정은 지양하되, 하나의 작업이 여러 기능에 필수적인 경우에만 제한적으로 사용하십시오.
+   - **relatedNoteIds (단순 참고)**: 직접적인 포함 관계는 아니지만, 기능적으로 협력하거나 참고가 필요한 경우(예: 다른 도메인의 API 호출, 공통 유틸리티 사용)에는 반드시 relatedNoteIds를 사용하십시오.
+   - **과잉 연결 금지**: 계층 구조는 명확하고 간결해야 합니다. 단순한 '참고'를 '부모'로 설정하지 마십시오.
+5. 제목에 접두어(1., [기능])를 붙이지 마십시오.
 `;
 
 const noteSchema: Schema = {
@@ -262,7 +265,7 @@ export const optimizeBlueprint = async (
     summary: n.summary,
     content: n.content.slice(0, 2000),
     relatedNoteIds: n.relatedNoteIds,
-    parentNoteId: n.parentNoteId,
+    parentNoteIds: n.parentNoteIds,
     noteType: n.noteType,
     tags: n.tags,
     importance: n.importance
@@ -274,7 +277,7 @@ export const optimizeBlueprint = async (
 작업 목표:
 1. **폴더 및 도메인 통합**: 모든 노트의 'folder' 속성을 "상위범주/하위범주" 형태(예: "1. 시스템 인프라/데이터 보안")로 재작성하여 계층화하십시오. 유사한 명칭의 폴더들은 하나의 대표 도메인 폴더로 통합하십시오.
 2. **'Code Snapshot/' 폴더 폐지**: 기존에 'Code Snapshot/' 폴더에 격리되어 있던 Reference 타입의 노트들을 실제 업무 도메인 폴더(예: "인증/구글로그인")로 이동시키십시오. Task와 Reference가 같은 폴더 내에 공존하도록 재배치하십시오.
-3. **수직적 계층 구조(Hierarchy) 재구축**: 상위 개념의 노트를 찾아 그 아래로 하위 기능들을 'parentNoteId'를 사용하여 엮어 "통합"하십시오.
+3. **수직적 계층 구조(Hierarchy) 재구축**: 상위 개념의 노트를 찾아 그 아래로 하위 기능들을 'parentNoteIds'를 사용하여 엮어 "통합"하십시오.
 3. **노트 통합 원칙**: 중복되거나 유사한 내용을 담은 노트들은 하나로 통합하십시오. 통합된 노트의 'status'는 반드시 'Temporary Merge'로 설정하십시오.
 4. **불필요한 기술 중심 폴더 제거**: 'Imported', 'Core', 'UI', 'Logic' 등 기술 중심 폴더를 제거하고 실제 사용자 기능 단위로 재분류하십시오.
 5. **명칭 표준화**: 제목에서 'Main_', 'ㄴ.', 'ㄱ.', '1.' 등 불필요한 접두어와 숫자를 제목에서 완전히 제거하십시오.
@@ -283,7 +286,7 @@ export const optimizeBlueprint = async (
 
 Return JSON:
 {
-  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "parentNoteId": "string", "relatedNoteIds": ["string"], "tags": ["string"], "importance": number, "status": "string", "noteType": "string" } ],
+  "updatedNotes": [ { "id": "string", "title": "string", "folder": "string", "content": "string", "summary": "string", "parentNoteIds": ["string"], "relatedNoteIds": ["string"], "tags": ["string"], "importance": number, "status": "string", "noteType": "string" } ],
   "deletedNoteIds": ["string"],
   "updatedGcm": { "entities": {}, "variables": {} },
   "report": "최적화 작업 내용 요약 (Markdown)"
@@ -313,7 +316,7 @@ Return JSON:
                 folder: { type: Type.STRING },
                 content: { type: Type.STRING },
                 summary: { type: Type.STRING },
-                parentNoteId: { type: Type.STRING },
+                parentNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                 relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                 tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                 importance: { type: Type.NUMBER },
@@ -367,7 +370,7 @@ Also determine if this change affects the Global Context Map (GCM) and identify 
 [중요] 지시사항:
 1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
 2. 'summary'는 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
-3. parentNoteId, relatedNoteIds, tags를 적절히 설정하십시오.
+3. parentNoteIds, relatedNoteIds, tags를 적절히 설정하십시오.
 
 Target Note:
 ${JSON.stringify(note, null, 2)}
@@ -382,7 +385,7 @@ ${JSON.stringify(relevantNotes.map(n => ({ id: n.id, title: n.title, folder: n.f
 
 Return JSON:
 {
-  "updatedNote": { ...note with updated content, summary, parentNoteId, relatedNoteIds, tags, importance },
+  "updatedNote": { ...note with updated content, summary, parentNoteIds, relatedNoteIds, tags, importance },
   "updatedGcm": { ...updated GCM if affected, else current GCM },
   "affectedNoteIds": ["id1", "id2"]
 }
@@ -447,7 +450,7 @@ export const updateCodeSnapshot = async (
     matchedNoteId?: string;
     isNew: boolean;
     noteType: string;
-    parentNoteId?: string;
+    parentNoteIds?: string[];
     relatedNoteIds: string[];
   };
   children: {
@@ -502,15 +505,15 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
    - 폴더: [매우 중요] 부모 노트와 **완벽하게 동일한 폴더 경로**를 사용하십시오.
    - 메타데이터: priority: 'C' (일반적으로 후행 분석 결과물)
 4. **유사도 매칭**: 기존 Reference 중 같은 목적의 노트가 있다면 매칭시키십시오 ('isNew': false, 'matchedNoteId' 지정).
-5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 계층 구조(parentNoteId)**: 
+5. **[가장 중요] 증빙 자료 연결(relatedNoteIds) 및 계층 구조(parentNoteIds)**: 
    - 이 코드가 [기존 설계도 목록]의 어떤 'Task'나 'Feature'를 실제 구현한 결과물인지 찾아내십시오.
-   - **구조적 자식 설정**: 매칭되는 'Task'나 'Feature'가 있다면, 해당 ID를 Reference 노드의 'parentNoteId'로 설정하여 설계도 아래에 구조적 자식으로 배치하십시오.
+   - **구조적 자식 설정**: 매칭되는 'Task'나 'Feature'가 있다면, 해당 ID를 Reference 노드의 'parentNoteIds'에 포함시켜 설계도 아래에 구조적 자식으로 배치하십시오.
    - **관련성 연결**: 관련된 설계도의 ID를 'relatedNoteIds' 배열에도 포함시키십시오.
    - **코드 우선(Code-First) 설계도 자동 생성**: 만약 이 코드가 구현하는 로직이 [기존 설계도 목록]에 **없다면**, 이를 '오류'가 아닌 **'새로운 설계의 발견(Design-Leading Code)'**으로 간주하십시오.
    - 이 경우, 코드를 역공학하여 누락된 설계 계층(Epic -> Feature -> Task)을 \`newDesignNotes\` 배열에 생성하십시오.
    - 생성된 \`newDesignNotes\`의 \`tempId\`를 Reference 노트의 \`relatedNoteIds\`에 포함시켜, 코드가 설계도의 증빙 자료로 연결되도록 하십시오.
 [엄격한 계층 구조 규칙]
-- 모든 'Feature' 타입의 노트는 반드시 'Epic' 타입의 노트를 부모(parentNoteId)로 가져야 합니다.
+- 모든 'Feature' 타입의 노트는 반드시 'Epic' 타입의 노트를 부모(parentNoteIds)로 가져야 합니다.
 - 기존 설계도 목록에 적절한 Epic이 없다면, 반드시 새로운 Epic을 생성하여 'newDesignNotes'에 포함시키고 해당 Feature를 그 아래에 배치하십시오.
 - 모든 'Task' 타입의 노트는 반드시 'Feature' 타입의 노트를 부모로 가져야 합니다.
 - 계층은 무조건 Epic -> Feature -> Task 순서를 유지해야 하며, 고립된 Feature나 Task가 생기지 않도록 하십시오.
@@ -518,7 +521,7 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 [가장 중요: 연관성 및 태그 부여]
 1. 새로 생성되는 'newDesignNotes'들은 분석 중인 소스 코드(Reference)와 반드시 'relatedNoteIds'로 연결되어야 합니다.
 2. 각 설계 노트(Epic, Feature, Task)의 태그는 코드의 실제 도메인 역할(예: '인증 로직', '데이터 매핑')을 반영해야 합니다.
-3. 'newDesignNotes' 간에도 계층에 따라 parentNoteId와 childNoteIds(또는 tempId 기반 연결)가 완벽하게 구성되어야 합니다.
+3. 'newDesignNotes' 간에도 계층에 따라 parentNoteIds와 childNoteIds(또는 tempId 기반 연결)가 완벽하게 구성되어야 합니다.
 
 6. 생성되는 모든 코드 분석 노트의 'noteType'은 반드시 "Reference"로 지정하십시오.
 
@@ -535,7 +538,7 @@ Return JSON:
       "matchedNoteId": "기존_노트_ID",
       "isNew": boolean,
       "noteType": "Reference",
-      "parentNoteId": "연결할_Task_ID_또는_tempId",
+      "parentNoteIds": ["연결할_Task_ID_또는_tempId"],
       "relatedNoteIds": ["연결할_Task_ID_또는_tempId"]
     },
     "children": [
@@ -607,7 +610,7 @@ Return JSON:
               matchedNoteId: { type: Type.STRING },
               isNew: { type: Type.BOOLEAN },
               noteType: { type: Type.STRING },
-              parentNoteId: { type: Type.STRING },
+              parentNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
               relatedNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
             required: ["title", "folder", "content", "summary", "isNew", "noteType"],
@@ -1009,6 +1012,7 @@ Return JSON matching the Note schema (title, folder, content, summary, importanc
       priority: 'C',
       tags: ['error'],
       noteType: 'Reference',
+      parentNoteIds: [],
       relatedNoteIds: [],
       childNoteIds: []
     };
@@ -1148,7 +1152,7 @@ export const generateSubModules = async (
 ): Promise<{ 
   newNotes: Omit<Note, 'id' | 'status'>[]; 
   updatedGcm: GCM;
-  mainNoteUpdates?: { noteType?: string; parentNoteId?: string };
+  mainNoteUpdates?: { noteType?: string; parentNoteIds?: string[] };
 }> => {
   const noteType = mainNote.noteType || 'Feature';
   let typeSpecificPrompt = '';
@@ -1209,7 +1213,7 @@ Return JSON:
       "importance": 3,
       "tags": ["setup"],
       "noteType": "Task", 
-      "parentNoteId": "${mainNote.id}",
+      "parentNoteIds": ["${mainNote.id}"],
       "relatedNoteIds": []
     }
   ],
@@ -1271,7 +1275,7 @@ Return JSON:
     updatedGcm: result.updatedGcm || currentGcm,
     mainNoteUpdates: {
       noteType: detectedType,
-      parentNoteId: result.suggestedParentId
+      parentNoteIds: result.suggestedParentIds
     }
   };
 };

@@ -29,7 +29,7 @@ import {
 } from '../services/gemini';
 import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
-import { findOrphanNotes } from '../utils/hierarchyValidator';
+import { findOrphanNotes, wouldCreateCycle } from '../utils/hierarchyValidator';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -798,35 +798,72 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleDeleteNote = (noteId: string) => {
+    const targetNote = state.notes.find(n => n.id === noteId);
+    if (!targetNote) return;
+
     setDialogConfig({
       isOpen: true,
       title: '노트 삭제',
-      message: '이 노트를 삭제하시겠습니까?\n삭제된 노트는 복구할 수 없습니다.',
+      message: `"${targetNote.title}" 노트를 삭제하시겠습니까?\n이 노트를 부모로 가진 하위 노트들은 부모 연결이 해제됩니다.`,
       type: 'warning',
       confirmText: '삭제',
       cancelText: '취소',
       onConfirm: () => {
-        // 관계 정리
+        // 1. 관계 정리
         const affectedNotes = cleanupNoteRelationships(noteId, state.notes);
-        if (affectedNotes.length > 0) {
-          saveNotesToFirestore(affectedNotes);
-        }
         
-        deleteNoteFromFirestore(noteId);
-        setState(prev => {
-          const notesMap = new Map(prev.notes.map(n => [n.id, n]));
-          affectedNotes.forEach(an => notesMap.set(an.id, an));
-          const filteredNotes = Array.from(notesMap.values()).filter(n => n.id !== noteId);
+        // 2. 고아 노드(부모가 0개가 된 자식) 확인
+        const orphans = affectedNotes.filter(n => 
+          state.notes.find(old => old.id === n.id)?.parentNoteIds.includes(noteId) && 
+          n.parentNoteIds.length === 0
+        );
+
+        const executeDelete = (deleteOrphans: boolean = false) => {
+          const finalAffectedNotes = [...affectedNotes];
+          const notesToDelete = [noteId];
           
-          return {
-            ...prev,
-            notes: filteredNotes
-          };
-        });
-        if (selectedNoteId === noteId) {
-          setSelectedNoteId(null);
+          if (deleteOrphans) {
+            orphans.forEach(o => notesToDelete.push(o.id));
+          }
+
+          // Firestore 업데이트
+          if (finalAffectedNotes.length > 0) {
+            saveNotesToFirestore(finalAffectedNotes.filter(n => !notesToDelete.includes(n.id)));
+          }
+          
+          notesToDelete.forEach(id => deleteNoteFromFirestore(id));
+
+          setState(prev => {
+            const notesMap = new Map(prev.notes.map(n => [n.id, n]));
+            finalAffectedNotes.forEach(an => notesMap.set(an.id, an));
+            const filteredNotes = Array.from(notesMap.values()).filter(n => !notesToDelete.includes(n.id));
+            
+            return {
+              ...prev,
+              notes: filteredNotes
+            };
+          });
+
+          if (notesToDelete.includes(selectedNoteId || '')) {
+            setSelectedNoteId(null);
+          }
+          setDialogConfig(null);
+        };
+
+        if (orphans.length > 0) {
+          setDialogConfig({
+            isOpen: true,
+            title: '고아 노드 처리',
+            message: `"${targetNote.title}"를 삭제하면 다음 노드들의 부모가 없어집니다:\n${orphans.map(o => `• ${o.title}`).join('\n')}\n\n이 하위 노드들도 함께 삭제하시겠습니까?`,
+            type: 'warning',
+            confirmText: '모두 삭제',
+            cancelText: '부모 연결만 해제',
+            onConfirm: () => executeDelete(true),
+            onCancel: () => executeDelete(false)
+          });
+        } else {
+          executeDelete(false);
         }
-        setDialogConfig(null);
       },
       onCancel: () => setDialogConfig(null)
     });
@@ -1229,8 +1266,8 @@ export const Dashboard: React.FC = () => {
             targetParent = currentNotes.find(n => n.title === parent.title && n.folder === parent.folder);
           }
 
-          // AI가 제안한 parentNoteId (설계도 ID) 처리
-          const suggestedParentId = parent.parentNoteIds?.[0] ? (tempIdMap.get(parent.parentNoteIds[0]) || parent.parentNoteIds[0]) : undefined;
+          // AI가 제안한 parentNoteIds (설계도 ID) 처리
+          const suggestedParentIds = parent.parentNoteIds ? parent.parentNoteIds.map(pid => tempIdMap.get(pid) || pid) : [];
 
           let finalParent: Note;
           if (targetParent) {
@@ -1239,8 +1276,8 @@ export const Dashboard: React.FC = () => {
             if (signal.aborted) return;
             
             finalParent.noteType = 'Reference';
-            if (suggestedParentId) {
-              finalParent.parentNoteIds = Array.from(new Set([...(finalParent.parentNoteIds || []), suggestedParentId]));
+            if (suggestedParentIds.length > 0) {
+              finalParent.parentNoteIds = Array.from(new Set([...(finalParent.parentNoteIds || []), ...suggestedParentIds]));
             }
             finalParent.relatedNoteIds = Array.from(new Set([...(finalParent.relatedNoteIds || []), ...(parent.relatedNoteIds || [])]));
             finalParent.tags = Array.from(new Set([...(finalParent.tags || []), ...((parent as any).tags || [])]));
@@ -1262,7 +1299,7 @@ export const Dashboard: React.FC = () => {
               status: 'Done',
               priority: (parent as any).priority || 'C',
               noteType: 'Reference',
-              parentNoteIds: suggestedParentId ? [suggestedParentId] : [],
+              parentNoteIds: suggestedParentIds,
               relatedNoteIds: parent.relatedNoteIds || [],
               childNoteIds: [],
               githubLink: file.path
@@ -1449,6 +1486,25 @@ export const Dashboard: React.FC = () => {
 
 
   const handleUpdateNote = (updatedNote: Note) => {
+    // 0. 순환 참조 검사
+    const oldNote = state.notes.find(n => n.id === updatedNote.id);
+    if (oldNote) {
+      const newParents = updatedNote.parentNoteIds.filter(id => !oldNote.parentNoteIds.includes(id));
+      for (const pId of newParents) {
+        if (wouldCreateCycle(updatedNote.id, pId, state.notes)) {
+          setDialogConfig({
+            isOpen: true,
+            title: '순환 참조 발견',
+            message: `"${updatedNote.title}"를 부모로 설정하면 순환 참조가 발생합니다. 계층 구조를 다시 확인하십시오.`,
+            type: 'error',
+            confirmText: '확인',
+            onConfirm: () => setDialogConfig(null)
+          });
+          return;
+        }
+      }
+    }
+
     // Mirroring 로직을 사용하여 영향을 받는 모든 노트 리스트를 가져옴
     const affectedNotes = syncNoteRelationships(updatedNote, state.notes);
     

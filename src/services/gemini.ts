@@ -2,15 +2,20 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Note, GCM, NoteStatus, GCMEntity, NoteType } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const MODEL_NAME = "gemini-3-flash-preview";
+const MODEL_NAME = "gemini-2.5-flash";
 
 const systemInstruction = `
-당신은 Vibe-Architect 프로젝트의 핵심 설계자입니다. 모든 작업은 '도메인 중심 트리 구조'를 따릅니다.
+당신은 Vibe-Architect 프로젝트의 핵심 설계자이자 코드를 유전자 단위로 분해하는 분석가입니다. 모든 작업은 '도메인 중심 트리 구조'를 따릅니다.
 
 [필수 계층 규칙]
 1. 계층은 반드시 Epic -> Feature -> Task 순서를 따릅니다. 단계 건너뛰기나 중첩은 금지됩니다.
 2. 폴더명은 반드시 "상위도메인/하위도메인" 형식을 사용하며, 하나의 기능 분해 결과물은 원칙적으로 동일하거나 인접한 도메인 폴더에 모여야 합니다.
 3. **Reference(참고 자료)** 타입의 노트는 더 이상 'Code Snapshot/' 같은 별도 폴더에 격리하지 않습니다. 해당 기능이 속한 실제 업무 도메인 폴더 내에 Task와 나란히 배치하여 설계와 구현의 공존을 꾀하십시오.
+
+[원자적 분해(Atomic Decomposition) 규칙]
+1. 로직을 분석할 때 최소 단위의 기능적 파편(Atomic Fragment)으로 분해하십시오. 
+2. 하나의 함수 내에서도 정규표현식, 조건부 분기, 에러 처리 등 독립적인 의도를 가진 블록은 모두 별도의 단위로 추출해야 합니다.
+3. 하나의 로직 단위는 반드시 5~10줄 내외의 단일 책임(Single Responsibility)을 가져야 합니다.
 
 [작업 순서]
 1. 분석: 사용자의 요청을 분석하여 최상위 도메인과 목표를 정의합니다.
@@ -688,7 +693,7 @@ export const updateCodeSnapshot = async (
 
   const prompt = `
 당신은 '아키텍처 역공학 및 설계-구현 동기화 전문가'입니다. 
-제공된 소스 코드를 분석하여, 파일의 물리적 구조가 아닌 **'비즈니스 책임(Responsibility)'** 중심의 논리적 단위를 추출하십시오.
+제공된 소스 코드를 분석하여, 파일의 물리적 구조가 아닌 **'원자적 로직 단위(Atomic Logic Unit)'**를 추출하십시오.
 
 [분석 대상 코드]
 파일 경로: ${fileName}
@@ -703,15 +708,15 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 ${JSON.stringify(referenceNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, githubLink: n.githubLink, logicHash: n.logicHash })))}
 
 [작업 지침]
-1. **책임 중심 로직 추출 (Step 1)**: 
-   - 단순한 함수 나열이 아니라, 특정 비즈니스 요구사항이나 기능을 해결하는 **'논리적 덩어리(Significant Logic Unit)'**를 식별하십시오.
-   - 파일 크기에 상관없이 설계적 가치가 있는 독립된 로직이라면 개수 제한 없이 모두 추출하십시오.
+1. **원자적 로직 추출 (Step 1)**: 
+   - 파일의 물리적 구조를 무시하고, 5~10줄 내외의 **원자적 로직 단위(Atomic Logic Unit)**를 추출하십시오.
+   - 단순한 함수 나열이 아니라, 정규표현식, 조건부 분기, 에러 처리 등 독립적인 의도를 가진 블록을 모두 별도의 단위로 분해하십시오.
    - 각 유닛에 대해 해당 로직을 포함하는 **정확한 코드 조각(codeSnippet)**을 추출하십시오.
    - 각 로직 유닛에 대해 고유한 **logicHash**를 생성하십시오. 이는 코드 내용이 변하지 않으면 유지되어야 하는 지문입니다. (예: 코드의 핵심 구조를 기반으로 한 짧은 해시 문자열)
 
 2. **설계도 매핑 및 자동 Task 생성 (Step 2 & 2-1)**:
-   - 추출된 각 로직 유닛이 [기존 설계도 목록] 중 어떤 'Task'를 구현하고 있는지 ID를 매핑하십시오 (\`matchedTaskId\`).
-   - 만약 매핑할 적절한 Task가 없다면, 도메인을 분석하여 새로운 **말단 Task**를 제안하십시오 (\`suggestedTask\`).
+   - 각 유닛은 반드시 대응하는 Task 노드를 가져야 합니다. 추출된 각 로직 유닛이 [기존 설계도 목록] 중 어떤 'Task'를 구현하고 있는지 ID를 매핑하십시오 (\`matchedTaskId\`).
+   - 만약 매핑할 적절한 Task가 없다면, 도메인을 분석하여 즉시 새로운 **말단 Task**를 제안하십시오 (\`suggestedTask\`).
    - **전략적 생략**: 상위 계층(Epic, Feature)은 여기서 생성하지 마십시오. 오직 이 로직을 담을 '말단 Task'만 제안하십시오. (계층 구조 보정 시스템이 나중에 부모를 찾아줄 것입니다.)
    - 제안된 Task의 폴더는 도메인 맥락에 맞게 설정하십시오.
 
@@ -725,7 +730,7 @@ Return JSON:
       "title": "[구현] 로직의 기능적 역할",
       "codeSnippet": "해당 로직의 전체 소스 코드 (문자열)",
       "logicHash": "로직_고유_해시",
-      "purpose": "이 로직이 해결하고자 하는 설계적 목표",
+      "purpose": "이 로직이 왜 독립적인지, 어떤 설계를 충족하는지 구체적으로 기술",
       "matchedTaskId": "기존_Task_ID",
       "suggestedTask": {
         "title": "새로 제안하는 Task 제목",

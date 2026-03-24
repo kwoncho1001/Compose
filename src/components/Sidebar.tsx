@@ -203,17 +203,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // Selection logic for path-based items
     const toggleSelection = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!item.noteId) return;
       const newSet = new Set(selectedNotes);
-      if (newSet.has(item.noteId)) {
-        newSet.delete(item.noteId);
-      } else {
-        newSet.add(item.noteId);
+      
+      if (item.type === 'note' && item.noteId) {
+        if (newSet.has(item.noteId)) {
+          newSet.delete(item.noteId);
+        } else {
+          newSet.add(item.noteId);
+        }
+      } else if (item.type === 'folder') {
+        const allNoteIds: string[] = [];
+        const collectIds = (target: any) => {
+          if (target.noteId) allNoteIds.push(target.noteId);
+          if (target.children) target.children.forEach(collectIds);
+        };
+        collectIds(item);
+        
+        const allSelected = allNoteIds.length > 0 && allNoteIds.every(id => newSet.has(id));
+        if (allSelected) {
+          allNoteIds.forEach(id => newSet.delete(id));
+        } else {
+          allNoteIds.forEach(id => newSet.add(id));
+        }
       }
       setSelectedNotes(newSet);
     };
 
     const isNoteSelected = item.noteId ? selectedNotes.has(item.noteId) : false;
+    
+    const folderSelectionState = item.type === 'folder' ? (() => {
+      const allNoteIds: string[] = [];
+      const collectIds = (target: any) => {
+        if (target.noteId) allNoteIds.push(target.noteId);
+        if (target.children) target.children.forEach(collectIds);
+      };
+      collectIds(item);
+      
+      if (allNoteIds.length === 0) return 'none';
+      const selectedCount = allNoteIds.filter(id => selectedNotes.has(id)).length;
+      if (selectedCount === 0) return 'none';
+      if (selectedCount === allNoteIds.length) return 'all';
+      return 'partial';
+    })() : 'none';
 
     // Cycle detection: check if noteId already exists in parentPath
     const pathParts = itemPath.split('/');
@@ -256,15 +287,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="w-4.5" /> // Spacer
             )}
             
-            {isSelectMode && item.type === 'note' && (
+            {isSelectMode && (
               <div 
                 className="cursor-pointer shrink-0 mr-1" 
                 onClick={toggleSelection}
               >
-                {isNoteSelected ? (
-                  <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
+                {item.type === 'note' ? (
+                  isNoteSelected ? (
+                    <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
+                  ) : (
+                    <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
+                  )
                 ) : (
-                  <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
+                  folderSelectionState === 'all' ? (
+                    <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><Check className="w-2.5 h-2.5 text-white" /></div>
+                  ) : folderSelectionState === 'partial' ? (
+                    <div className="w-3.5 h-3.5 bg-indigo-500 rounded flex items-center justify-center"><div className="w-2 h-0.5 bg-white rounded-full" /></div>
+                  ) : (
+                    <div className="w-3.5 h-3.5 border border-slate-500 hover:border-indigo-400 rounded transition-colors" />
+                  )
                 )}
               </div>
             )}

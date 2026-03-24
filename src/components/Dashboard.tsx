@@ -898,10 +898,10 @@ export const Dashboard: React.FC = () => {
         const affectedNotes = cleanupNoteRelationships(noteId, state.notes);
         
         // 2. 고아 노드(부모가 0개가 된 자식) 확인
-        const orphans = affectedNotes.filter(n => 
-          state.notes.find(old => old.id === n.id)?.parentNoteIds.includes(noteId) && 
-          n.parentNoteIds.length === 0
-        );
+        const orphans = affectedNotes.filter(n => {
+          const oldNote = state.notes.find(old => old.id === n.id);
+          return (oldNote?.parentNoteIds || []).includes(noteId) && n.parentNoteIds.length === 0;
+        });
 
         const executeDelete = (deleteOrphans: boolean = false) => {
           const finalAffectedNotes = [...affectedNotes];
@@ -967,12 +967,46 @@ export const Dashboard: React.FC = () => {
       cancelText: '취소',
       onConfirm: async () => {
         const ids = notesToDelete.map(n => n.id);
+        const idsSet = new Set(ids);
+        
+        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
+        const affectedNotesMap = new Map<string, Note>();
+        
+        remainingNotes.forEach(note => {
+          let changed = false;
+          let updatedNote = { ...note };
+          
+          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          
+          if (changed) {
+            affectedNotesMap.set(updatedNote.id, updatedNote);
+          }
+        });
+        
+        const finalAffectedNotes = Array.from(affectedNotesMap.values());
+        if (finalAffectedNotes.length > 0) {
+          saveNotesToFirestore(finalAffectedNotes);
+        }
+        
         await deleteNotesFromFirestore(ids);
+        
         setState(prev => ({
           ...prev,
-          notes: prev.notes.filter(n => !ids.includes(n.id))
+          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
         }));
-        if (selectedNoteId && ids.includes(selectedNoteId)) setSelectedNoteId(null);
+        
+        if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
         setDialogConfig(null);
       },
       onCancel: () => setDialogConfig(null)
@@ -988,12 +1022,45 @@ export const Dashboard: React.FC = () => {
       confirmText: '일괄 삭제',
       cancelText: '취소',
       onConfirm: async () => {
+        const idsSet = new Set(noteIds);
+        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
+        const affectedNotesMap = new Map<string, Note>();
+        
+        remainingNotes.forEach(note => {
+          let changed = false;
+          let updatedNote = { ...note };
+          
+          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
+            changed = true;
+          }
+          
+          if (changed) {
+            affectedNotesMap.set(updatedNote.id, updatedNote);
+          }
+        });
+        
+        const finalAffectedNotes = Array.from(affectedNotesMap.values());
+        if (finalAffectedNotes.length > 0) {
+          saveNotesToFirestore(finalAffectedNotes);
+        }
+        
         await deleteNotesFromFirestore(noteIds);
+        
         setState(prev => ({
           ...prev,
-          notes: prev.notes.filter(n => !noteIds.includes(n.id))
+          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
         }));
-        if (selectedNoteId && noteIds.includes(selectedNoteId)) setSelectedNoteId(null);
+        
+        if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
         setDialogConfig(null);
       },
       onCancel: () => setDialogConfig(null)
@@ -1084,7 +1151,7 @@ export const Dashboard: React.FC = () => {
       // 부모 -> 자식 방향 확인
       for (const parentId of (note.parentNoteIds || [])) {
         const parent = notesMap.get(parentId);
-        if (parent && !parent.childNoteIds.includes(note.id)) {
+        if (parent && !(parent.childNoteIds || []).includes(note.id)) {
           parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
           changed = true;
         }
@@ -1102,7 +1169,7 @@ export const Dashboard: React.FC = () => {
       // 연관 관계 양방향 확인
       for (const relId of note.relatedNoteIds) {
         const relNote = notesMap.get(relId);
-        if (relNote && !relNote.relatedNoteIds.includes(note.id)) {
+        if (relNote && !(relNote.relatedNoteIds || []).includes(note.id)) {
           relNote.relatedNoteIds = Array.from(new Set([...relNote.relatedNoteIds, note.id]));
           changed = true;
         }
@@ -1325,14 +1392,25 @@ export const Dashboard: React.FC = () => {
             const taskNote = currentNotes.find(n => n.id === taskId);
             if (!taskNote) continue;
 
-            // Smart Sync: Check if logicHash matches existing note
+            // Smart Sync: Check if logicHash matches existing note globally
+            const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
+            
             const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
                                 currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
 
             let analysis;
-            if (existingRef && existingRef.logicHash === unit.logicHash) {
-              // logicHash matches, skip deep-dive
-              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches.`);
+            if (globallyExistingRef) {
+              // logicHash matches globally, skip deep-dive and reuse
+              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches globally.`);
+              analysis = {
+                content: globallyExistingRef.content,
+                summary: globallyExistingRef.summary,
+                importance: globallyExistingRef.importance,
+                tags: globallyExistingRef.tags
+              };
+            } else if (existingRef && existingRef.logicHash === unit.logicHash) {
+              // logicHash matches local file, skip deep-dive
+              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches locally.`);
               analysis = {
                 content: existingRef.content,
                 summary: existingRef.summary,
@@ -1351,7 +1429,17 @@ export const Dashboard: React.FC = () => {
 
             // Create or Update Reference note
             let finalNote: Note;
-            if (existingRef) {
+            if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
+              // Reuse existing global reference by linking it to the new task
+              finalNote = {
+                ...globallyExistingRef,
+                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId])),
+                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
+                lastUpdated: new Date().toISOString()
+              };
+              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+              updateCount++;
+            } else if (existingRef) {
               finalNote = {
                 ...existingRef,
                 content: analysis.content,
@@ -1403,7 +1491,7 @@ export const Dashboard: React.FC = () => {
               discardedNote.folder = '시스템/폐기된 소스';
               discardedNote.parentNoteIds = []; // 부모 연결 해제
               discardedNote.status = 'Deprecated';
-              if (!discardedNote.tags.includes('discarded')) {
+              if (!(discardedNote.tags || []).includes('discarded')) {
                 discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
               }
               currentNotes[noteIndex] = discardedNote;
@@ -1518,7 +1606,7 @@ export const Dashboard: React.FC = () => {
     // 0. 순환 참조 검사
     const oldNote = state.notes.find(n => n.id === updatedNote.id);
     if (oldNote) {
-      const newParents = updatedNote.parentNoteIds.filter(id => !oldNote.parentNoteIds.includes(id));
+      const newParents = (updatedNote.parentNoteIds || []).filter(id => !(oldNote.parentNoteIds || []).includes(id));
       for (const pId of newParents) {
         if (wouldCreateCycle(updatedNote.id, pId, state.notes)) {
           setDialogConfig({

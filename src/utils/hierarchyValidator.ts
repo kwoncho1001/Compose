@@ -102,7 +102,7 @@ export const getAllDescendants = (noteId: string, allNotes: Note[]): string[] =>
     if (visited.has(currentId)) continue;
     visited.add(currentId);
 
-    const children = allNotes.filter(n => n.parentNoteIds?.includes(currentId));
+    const children = allNotes.filter(n => (n.parentNoteIds || []).includes(currentId));
     children.forEach(child => {
       if (!visited.has(child.id)) {
         descendants.push(child.id);

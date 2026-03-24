@@ -41,12 +41,12 @@ export const syncHierarchy = (
   affectedNotes: Map<string, Note>
 ) => {
   // Case A: parentNoteIds 변경
-  const addedParents = newNote.parentNoteIds.filter(id => !oldNote.parentNoteIds.includes(id));
-  const removedParents = oldNote.parentNoteIds.filter(id => !newNote.parentNoteIds.includes(id));
+  const addedParents = (newNote.parentNoteIds || []).filter(id => !(oldNote.parentNoteIds || []).includes(id));
+  const removedParents = (oldNote.parentNoteIds || []).filter(id => !(newNote.parentNoteIds || []).includes(id));
 
   addedParents.forEach(pId => {
     const parent = affectedNotes.get(pId) || allNotes.find(n => n.id === pId);
-    if (parent && !parent.childNoteIds.includes(newNote.id)) {
+    if (parent && !(parent.childNoteIds || []).includes(newNote.id)) {
       const updatedParent = {
         ...parent,
         childNoteIds: Array.from(new Set([...parent.childNoteIds, newNote.id]))
@@ -57,7 +57,7 @@ export const syncHierarchy = (
 
   removedParents.forEach(pId => {
     const parent = affectedNotes.get(pId) || allNotes.find(n => n.id === pId);
-    if (parent && parent.childNoteIds.includes(newNote.id)) {
+    if (parent && (parent.childNoteIds || []).includes(newNote.id)) {
       const updatedParent = {
         ...parent,
         childNoteIds: parent.childNoteIds.filter(id => id !== newNote.id)
@@ -67,12 +67,12 @@ export const syncHierarchy = (
   });
 
   // Case B: childNoteIds 변경
-  const addedChildren = newNote.childNoteIds.filter(id => !oldNote.childNoteIds.includes(id));
-  const removedChildren = oldNote.childNoteIds.filter(id => !newNote.childNoteIds.includes(id));
+  const addedChildren = (newNote.childNoteIds || []).filter(id => !(oldNote.childNoteIds || []).includes(id));
+  const removedChildren = (oldNote.childNoteIds || []).filter(id => !(newNote.childNoteIds || []).includes(id));
 
   addedChildren.forEach(childId => {
     const child = affectedNotes.get(childId) || allNotes.find(n => n.id === childId);
-    if (child && !child.parentNoteIds.includes(newNote.id)) {
+    if (child && !(child.parentNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(childId, { 
         ...child, 
         parentNoteIds: Array.from(new Set([...child.parentNoteIds, newNote.id])) 
@@ -82,7 +82,7 @@ export const syncHierarchy = (
 
   removedChildren.forEach(childId => {
     const child = affectedNotes.get(childId) || allNotes.find(n => n.id === childId);
-    if (child && child.parentNoteIds.includes(newNote.id)) {
+    if (child && (child.parentNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(childId, { 
         ...child, 
         parentNoteIds: child.parentNoteIds.filter(id => id !== newNote.id) 
@@ -97,12 +97,12 @@ const syncRelated = (
   allNotes: Note[],
   affectedNotes: Map<string, Note>
 ) => {
-  const addedRelated = newNote.relatedNoteIds.filter(id => !oldNote.relatedNoteIds.includes(id));
-  const removedRelated = oldNote.relatedNoteIds.filter(id => !newNote.relatedNoteIds.includes(id));
+  const addedRelated = (newNote.relatedNoteIds || []).filter(id => !(oldNote.relatedNoteIds || []).includes(id));
+  const removedRelated = (oldNote.relatedNoteIds || []).filter(id => !(newNote.relatedNoteIds || []).includes(id));
 
   addedRelated.forEach(relId => {
     const relNote = affectedNotes.get(relId) || allNotes.find(n => n.id === relId);
-    if (relNote && !relNote.relatedNoteIds.includes(newNote.id)) {
+    if (relNote && !(relNote.relatedNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(relId, {
         ...relNote,
         relatedNoteIds: Array.from(new Set([...relNote.relatedNoteIds, newNote.id]))
@@ -112,7 +112,7 @@ const syncRelated = (
 
   removedRelated.forEach(relId => {
     const relNote = affectedNotes.get(relId) || allNotes.find(n => n.id === relId);
-    if (relNote && relNote.relatedNoteIds.includes(newNote.id)) {
+    if (relNote && (relNote.relatedNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(relId, {
         ...relNote,
         relatedNoteIds: relNote.relatedNoteIds.filter(id => id !== newNote.id)
@@ -132,19 +132,19 @@ export const cleanupNoteRelationships = (
     let updatedNote = { ...note };
 
     // 1. 부모 관계 정리
-    if (updatedNote.parentNoteIds.includes(deletedNoteId)) {
+    if ((updatedNote.parentNoteIds || []).includes(deletedNoteId)) {
       updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => id !== deletedNoteId);
       changed = true;
     }
 
     // 2. 자식 관계 정리
-    if (updatedNote.childNoteIds.includes(deletedNoteId)) {
+    if ((updatedNote.childNoteIds || []).includes(deletedNoteId)) {
       updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => id !== deletedNoteId);
       changed = true;
     }
 
     // 3. 연관 관계 정리
-    if (updatedNote.relatedNoteIds.includes(deletedNoteId)) {
+    if ((updatedNote.relatedNoteIds || []).includes(deletedNoteId)) {
       updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => id !== deletedNoteId);
       changed = true;
     }

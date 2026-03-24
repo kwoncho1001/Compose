@@ -1,0 +1,141 @@
+import { useState, useMemo } from 'react';
+import { Note } from '../types';
+
+export interface TreeItem {
+  id: string;
+  noteId?: string;
+  type: 'folder' | 'note';
+  name: string;
+  path: string;
+  note?: Note;
+  children?: TreeItem[];
+}
+
+export const useSidebarLogic = (notes: Note[]) => {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const toggleExpand = (path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded(prev => ({ ...prev, [path]: !prev[path] }));
+  };
+
+  const toggleSelection = (item: TreeItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newSet = new Set(selectedNotes);
+    
+    const allNoteIds: string[] = [];
+    const collectIds = (target: any) => {
+      if (target.noteId) {
+        const collectNoteChildren = (id: string) => {
+          if (allNoteIds.includes(id)) return;
+          allNoteIds.push(id);
+          const n = noteMap.get(id);
+          if (n && n.childNoteIds) {
+            n.childNoteIds.forEach(collectNoteChildren);
+          }
+        };
+        collectNoteChildren(target.noteId);
+      }
+      if (target.children) target.children.forEach(collectIds);
+    };
+    collectIds(item);
+
+    if (allNoteIds.length === 0) return;
+
+    const allSelected = allNoteIds.every(id => newSet.has(id));
+    if (allSelected) {
+      allNoteIds.forEach(id => newSet.delete(id));
+    } else {
+      allNoteIds.forEach(id => newSet.add(id));
+    }
+    
+    setSelectedNotes(newSet);
+  };
+
+  const noteMap = useMemo(() => new Map(notes.map(n => [n.id, n])), [notes]);
+
+  const filteredNotes = useMemo(() => {
+    if (!searchTerm.trim()) return notes;
+    const lowerTerm = searchTerm.toLowerCase();
+    return notes.filter(n => 
+      n.title.toLowerCase().includes(lowerTerm) || 
+      (n.tags || []).some(t => t.toLowerCase().includes(lowerTerm))
+    );
+  }, [notes, searchTerm]);
+
+  const rootItems = useMemo(() => {
+    const roots: TreeItem[] = [];
+    const folderMap = new Map<string, TreeItem>();
+
+    filteredNotes.forEach(note => {
+      const hasValidParent = (note.parentNoteIds || []).some(pid => noteMap.has(pid));
+      if (hasValidParent && !searchTerm) return;
+
+      const folderPath = note.folder || '미분류';
+      const folderParts = folderPath.split('/').filter(Boolean);
+      
+      let currentLevel = roots;
+      let currentPath = 'root';
+
+      folderParts.forEach((part) => {
+        currentPath = `${currentPath}/${part}`;
+        let folderItem = folderMap.get(currentPath);
+        if (!folderItem) {
+          folderItem = {
+            id: `folder-${currentPath}`,
+            type: 'folder',
+            name: part,
+            path: currentPath
+          };
+          folderMap.set(currentPath, folderItem);
+          currentLevel.push(folderItem);
+        }
+        if (!(folderItem as any).tempChildren) (folderItem as any).tempChildren = [];
+        currentLevel = (folderItem as any).tempChildren;
+      });
+
+      currentLevel.push({
+        id: `note-root-${note.id}`,
+        noteId: note.id,
+        type: 'note',
+        name: note.title,
+        path: `root/${note.id}`,
+        note
+      });
+    });
+
+    const finalize = (items: TreeItem[]) => {
+      items.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      items.forEach(item => {
+        if ((item as any).tempChildren) {
+          item.children = (item as any).tempChildren;
+          delete (item as any).tempChildren;
+          finalize(item.children);
+        }
+      });
+    };
+
+    finalize(roots);
+    return roots;
+  }, [filteredNotes, noteMap, searchTerm]);
+
+  return {
+    expanded,
+    toggleExpand,
+    isSelectMode,
+    setIsSelectMode,
+    selectedNotes,
+    setSelectedNotes,
+    toggleSelection,
+    searchTerm,
+    setSearchTerm,
+    rootItems,
+    noteMap
+  };
+};

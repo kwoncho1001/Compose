@@ -4,248 +4,29 @@ import { NoteEditor } from './NoteEditor';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
 import { Note, GCM, AppState, ChatMessage, NoteType, NoteStatus } from '../types';
-import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { 
-  decomposeFeature, 
-  suggestNextSteps, 
-  checkConflict, 
-  updateSingleNote,
-  optimizeBlueprint,
-  checkConsistency,
-  generateSubModules,
-  updateCodeSnapshot,
-  analyzeLogicUnitDeeply,
-  parseMetadata,
-  chatWithNotes,
-  generateParentNode,
-  suggestOrCreateParent,
-  suggestOrCreateParentsBatch
-} from '../services/gemini';
-import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
-import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
-import { findOrphanNotes, wouldCreateCycle, findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
-import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
 import { Send, Github, RefreshCw, Lightbulb, Loader2, Download, Upload, FolderTree, ShieldAlert, FileUp, Merge, Layers, Moon, Sun, Database, X, PanelLeft, PanelRight, Sparkles, Search, ChevronRight, FileText, Trash2, MessageSquare, CheckCircle2 } from 'lucide-react';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 
-import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch, getDocFromServer, getDocs, updateDoc, query, orderBy } from 'firebase/firestore';
+import { useProjectState } from '../hooks/useProjectState';
+import { useNoteSync } from '../hooks/useNoteSync';
+import { useGithubIntegration } from '../hooks/useGithubIntegration';
+import { useAIAnalysis } from '../hooks/useAIAnalysis';
+import { useChatSession } from '../hooks/useChatSession';
+
 import { Auth } from './Auth';
 
 export const Dashboard: React.FC = () => {
-  const [state, setState] = useState<AppState>({
-    notes: [],
-    gcm: { entities: {}, variables: {} },
-    githubRepo: '',
-    githubToken: process.env.Github_Token || '',
-    lastSyncedAt: '',
-    lastSyncedSha: '',
-    fileSyncLogs: {},
-    chatMessages: [],
-  });
-  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
-  const [currentProjectId, setCurrentProjectId] = useState<string>('default-project');
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [githubFiles, setGithubFiles] = useState<{ path: string; sha: string }[]>([]);
   const [githubReadme, setGithubReadme] = useState<string>('');
   
-  // Chat state
-  const [chatInput, setChatInput] = useState('');
-  const [isChatting, setIsChatting] = useState(false);
   const [activeSidebarTab, setActiveSidebarTab] = useState<'tools' | 'chat'>('tools');
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Scroll chat to bottom
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [state.chatMessages]);
-
-  const userId = auth.currentUser?.uid;
-
-  // Fetch projects list
-  useEffect(() => {
-    if (!userId) return;
-    const projectsRef = collection(db, 'users', userId, 'projects');
-    const unsubscribe = onSnapshot(projectsRef, (querySnap) => {
-      const projectsList: { id: string; name: string }[] = [];
-      querySnap.forEach((doc) => {
-        projectsList.push({ id: doc.id, name: doc.data().name || doc.id });
-      });
-      setProjects(projectsList);
-      
-      // If current project doesn't exist in list, and list is not empty, pick first
-      if (projectsList.length > 0 && !projectsList.find(p => p.id === currentProjectId)) {
-        // But only if we're not just starting up
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, projectsRef.path));
-
-    return () => unsubscribe();
-  }, [userId]);
-
-  // Firebase Sync
-  useEffect(() => {
-    if (!userId || !currentProjectId) return;
-
-    const projectRef = doc(db, 'users', userId, 'projects', currentProjectId);
-    const notesRef = collection(db, 'users', userId, 'projects', currentProjectId, 'notes');
-
-    const unsubscribeProject = onSnapshot(projectRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setState(prev => ({
-          ...prev,
-          gcm: data.gcm || { entities: {}, variables: {} },
-          githubRepo: data.githubRepo || '',
-          githubToken: data.githubToken || process.env.Github_Token || '',
-          lastSyncedAt: data.lastSyncedAt || '',
-          lastSyncedSha: data.lastSyncedSha || '',
-        }));
-      } else {
-        // 삭제 시 자동 재생성을 방지하기 위해, 오직 default-project가 없을 때만 생성하도록 수정
-        if (currentProjectId === 'default-project') {
-          setState(prev => ({
-            ...prev,
-            gcm: { entities: {}, variables: {} },
-            githubRepo: '',
-            githubToken: process.env.Github_Token || '',
-            lastSyncedAt: '',
-            lastSyncedSha: '',
-          }));
-          setDoc(projectRef, {
-            id: currentProjectId,
-            name: 'Default Project',
-            gcm: { entities: {}, variables: {} },
-            lastUpdated: new Date().toISOString()
-          }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
-        }
-        // 일반 프로젝트가 삭제된 경우에는 아무것도 하지 않고 리스너가 종료되기를 기다립니다.
-      }
-    }, (e) => handleFirestoreError(e, OperationType.GET, projectRef.path));
-
-    const unsubscribeNotes = onSnapshot(notesRef, (querySnap) => {
-      const notesList: Note[] = [];
-      querySnap.forEach((doc) => {
-        notesList.push(doc.data() as Note);
-      });
-      
-      // Sort notes to maintain consistency
-      notesList.sort((a, b) => a.title.localeCompare(b.title));
-
-      setState(prev => ({ ...prev, notes: notesList }));
-      setIsInitialLoading(false);
-    }, (e) => handleFirestoreError(e, OperationType.GET, notesRef.path));
-
-    const unsubscribeSyncLogs = subscribeSyncLog(userId, currentProjectId, (logs) => {
-      setState(prev => ({ ...prev, fileSyncLogs: logs }));
-    });
-
-    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
-    const chatsQuery = query(chatsRef, orderBy('createdAt', 'asc'));
-
-    const unsubscribeChats = onSnapshot(chatsQuery, (querySnap) => {
-      const chatsList: ChatMessage[] = [];
-      querySnap.forEach((doc) => {
-        chatsList.push(doc.data() as ChatMessage);
-      });
-      setState(prev => ({ ...prev, chatMessages: chatsList }));
-    }, (e) => handleFirestoreError(e, OperationType.GET, chatsRef.path));
-
-    return () => {
-      unsubscribeProject();
-      unsubscribeNotes();
-      unsubscribeSyncLogs();
-      unsubscribeChats();
-    };
-  }, [userId, currentProjectId]);
-
-  // Helper to strip undefined values for Firestore
-  const cleanObject = (obj: any) => {
-    const newObj = { ...obj };
-    Object.keys(newObj).forEach(key => {
-      if (newObj[key] === undefined) {
-        delete newObj[key];
-      }
-    });
-    return newObj;
-  };
-
-  // Helper to sync changes to Firestore
-  const syncProject = async (updates: Partial<AppState>) => {
-    if (!userId || !currentProjectId) return;
-    const projectRef = doc(db, 'users', userId, 'projects', currentProjectId);
-    try {
-      await setDoc(projectRef, cleanObject({
-        ...updates,
-        lastUpdated: new Date().toISOString()
-      }), { merge: true });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, projectRef.path);
-    }
-  };
-
-  const syncNote = async (note: Note) => {
-    if (!userId || !currentProjectId) return;
-    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-    try {
-      await setDoc(noteRef, cleanObject(note));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
-    }
-  };
-
-  const deleteNoteFromFirestore = async (noteId: string) => {
-    if (!userId || !currentProjectId) return;
-    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', noteId);
-    try {
-      await deleteDoc(noteRef);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
-    }
-  };
-
-  const saveNotesToFirestore = async (notes: Note[]) => {
-    if (!userId || !currentProjectId) return;
-    
-    const chunkSize = 500;
-    for (let i = 0; i < notes.length; i += chunkSize) {
-      const chunk = notes.slice(i, i + chunkSize);
-      const batch = writeBatch(db);
-      chunk.forEach(note => {
-        const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-        batch.set(noteRef, cleanObject(note));
-      });
-      try {
-        await batch.commit();
-      } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
-      }
-    }
-  };
-
-  const deleteNotesFromFirestore = async (noteIds: string[]) => {
-    if (!userId || !currentProjectId) return;
-    
-    // Firestore batch limit is 500
-    const chunkSize = 500;
-    for (let i = 0; i < noteIds.length; i += chunkSize) {
-      const chunk = noteIds.slice(i, i + chunkSize);
-      const batch = writeBatch(db);
-      chunk.forEach(id => {
-        const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', id);
-        batch.delete(noteRef);
-      });
-      try {
-        await batch.commit();
-      } catch (e) {
-        handleFirestoreError(e, OperationType.DELETE, 'batch-notes');
-      }
-    }
-  };
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textFileInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [featureInput, setFeatureInput] = useState('');
@@ -300,43 +81,120 @@ export const Dashboard: React.FC = () => {
       title,
       message,
       type,
+      confirmText: '확인',
       onConfirm: () => setDialogConfig(null)
     });
   };
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const textFileInputRef = useRef<HTMLInputElement>(null);
+  // Use hooks
+  const {
+    state,
+    setState,
+    projects,
+    currentProjectId,
+    setCurrentProjectId,
+    isInitialLoading,
+    setIsInitialLoading,
+    userId,
+    syncProject,
+    cleanObject,
+    handleCreateProject,
+    handleRenameProject,
+    handleDeleteProject
+  } = useProjectState(setDialogConfig, setProcessStatus, showAlert);
 
-  // Theme effect
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('vibe-architect-theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('vibe-architect-theme', 'light');
-    }
-  }, [darkMode]);
+  const {
+    syncNote,
+    deleteNoteFromFirestore,
+    saveNotesToFirestore,
+    deleteNotesFromFirestore,
+    handleUpdateNote,
+    handleDeleteNote,
+    handleDeleteFolder,
+    handleDeleteMultiple,
+    handleSanitizeIntegrity,
+    handleTargetedUpdate,
+    handleAddNote,
+    handleAddChildNote,
+    handleTextFileUpload
+  } = useNoteSync(
+    userId,
+    currentProjectId,
+    state,
+    setState,
+    setIsInitialLoading,
+    cleanObject,
+    setDialogConfig,
+    setProcessStatus,
+    showAlert,
+    selectedNoteId,
+    setSelectedNoteId,
+    syncProject,
+    abortControllerRef
+  );
 
-  useEffect(() => {
-    if (!isInitialLoading && state.notes.length > 0) {
-      const timer = setTimeout(() => {
-        handleSanitizeIntegrity(true);
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [isInitialLoading, currentProjectId]);
+  const {
+    handleDecompose,
+    handleOptimizeBlueprint,
+    handleCheckConsistency,
+    handleEnforceHierarchy,
+    handleGenerateSubModules,
+    handleAnalyzeNextSteps
+  } = useAIAnalysis(
+    userId,
+    currentProjectId,
+    state,
+    setState,
+    syncProject,
+    saveNotesToFirestore,
+    deleteNoteFromFirestore,
+    setProcessStatus,
+    showAlert,
+    abortControllerRef,
+    setIsDecomposing,
+    setIsSyncing,
+    setSelectedNoteId,
+    setNextStepSuggestion,
+    setRightSidebarOpen,
+    githubFiles,
+    githubReadme
+  );
 
-  if (isInitialLoading && userId) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-          <p className="text-slate-600 dark:text-slate-400 font-medium">데이터를 불러오는 중...</p>
-        </div>
-      </div>
-    );
-  }
+  const {
+    handleSyncGithub,
+    handleWipeSnapshots,
+    reconcileNoteRelationships
+  } = useGithubIntegration(
+    userId,
+    currentProjectId,
+    state,
+    setState,
+    syncProject,
+    saveNotesToFirestore,
+    deleteNotesFromFirestore,
+    setDialogConfig,
+    setProcessStatus,
+    showAlert,
+    abortControllerRef,
+    setIsSyncing,
+    handleEnforceHierarchy
+  );
+
+  const {
+    chatInput,
+    setChatInput,
+    isChatting,
+    handleChat,
+    handleClearChat,
+    chatEndRef
+  } = useChatSession(
+    userId,
+    currentProjectId,
+    state,
+    setState,
+    showAlert,
+    abortControllerRef
+  );
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -373,1562 +231,7 @@ export const Dashboard: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleDecompose = async () => {
-    if (!featureInput.trim()) return;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsDecomposing(true);
-    setProcessStatus({ message: 'Analyzing feature request...' });
-    try {
-      const githubContext = state.githubRepo ? {
-        repoName: state.githubRepo,
-        files: githubFiles.map(f => f.path),
-        readme: githubReadme
-      } : undefined;
-
-      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext, signal);
-      
-      if (signal.aborted) return;
-
-      setProcessStatus({ message: 'Updating project state...' });
-
-      const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
-      updatedNotes.forEach(un => {
-        existingNotesMap.set(un.id, un);
-      });
-
-      const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotes];
-      
-      saveNotesToFirestore(combinedNotes);
-      syncProject({ gcm: updatedGcm });
-
-      setState((prev) => ({
-        ...prev,
-        notes: combinedNotes,
-        gcm: updatedGcm,
-      }));
-      setFeatureInput('');
-      
-      if (newNotes.length > 0) {
-        setSelectedNoteId(newNotes[0].id);
-      } else if (updatedNotes.length > 0) {
-        setSelectedNoteId(updatedNotes[0].id);
-      }
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Decompose feature cancelled');
-      } else {
-        console.error('Failed to decompose feature:', error);
-        showAlert('오류', `기능 분해에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
-      }
-    } finally {
-      setIsDecomposing(false);
-      setProcessStatus(null);
-    }
-  };
-
-  const handleTextFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
-    const newNotes: Note[] = [];
-
-    for (const file of files) {
-      try {
-        const content = await file.text();
-        const title = file.name.replace(/\.[^/.]+$/, ""); // Remove extension
-        
-        const newNote: Note = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: title,
-          folder: '미분류',
-          content: content,
-          summary: `파일에서 가져옴: ${file.name}`,
-          status: 'Planned',
-          priority: 'C',
-          version: '1.0.0',
-          lastUpdated: new Date().toISOString(),
-          importance: 3,
-          tags: ['imported'],
-          noteType: 'Task',
-          relatedNoteIds: [],
-          childNoteIds: [],
-          parentNoteIds: []
-        };
-        newNotes.push(newNote);
-      } catch (err) {
-        console.error(`Failed to read file ${file.name}`, err);
-      }
-    }
-
-    if (newNotes.length > 0) {
-      saveNotesToFirestore(newNotes);
-      setState(prev => ({
-        ...prev,
-        notes: [...prev.notes, ...newNotes]
-      }));
-      setSelectedNoteId(newNotes[0].id);
-      showAlert('가져오기 성공', `${newNotes.length}개의 노트를 성공적으로 불러왔습니다.`, 'success');
-    }
-
-    if (textFileInputRef.current) textFileInputRef.current.value = '';
-  };
-
-  const handleOptimizeBlueprint = async () => {
-    if (state.notes.length === 0) return;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsSyncing(true);
-    setProcessStatus({ message: '설계도 최적화 진행 중 (일관성, 연결점, 구조 재배치)...' });
-    try {
-      const { updatedNotes, deletedNoteIds, updatedGcm, report } = await optimizeBlueprint(state.notes, state.gcm, signal);
-      
-      if (signal.aborted) return;
-
-      saveNotesToFirestore(updatedNotes);
-      deletedNoteIds.forEach(id => deleteNoteFromFirestore(id));
-      syncProject({ gcm: updatedGcm });
-
-      setState(prev => {
-        const existingNotesMap = new Map(prev.notes.map(n => [n.id, n]));
-        
-        // Apply updates
-        updatedNotes.forEach(un => {
-          existingNotesMap.set(un.id, un);
-        });
-        
-        // Remove deleted notes
-        const deletedIdsSet = new Set(deletedNoteIds);
-        const filteredNotes = Array.from(existingNotesMap.values()).filter(n => !deletedIdsSet.has(n.id));
-        
-        return {
-          ...prev,
-          notes: filteredNotes,
-          gcm: updatedGcm
-        };
-      });
-      
-      setNextStepSuggestion(report);
-      setRightSidebarOpen(true);
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Optimize blueprint cancelled');
-      } else {
-        console.error('Optimization failed', error);
-        showAlert('오류', '설계도 최적화 중 오류가 발생했습니다.', 'error');
-      }
-    } finally {
-      setIsSyncing(false);
-      setProcessStatus(null);
-    }
-  };
-
-  const handleSanitizeIntegrity = async (silent = false) => {
-    if (state.notes.length === 0 || !userId || !currentProjectId) return;
-
-    const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
-
-    if (fixCount > 0) {
-      if (!silent) {
-        setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
-      }
-      
-      try {
-        const batch = writeBatch(db);
-        fixedNotes.forEach(note => {
-          const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-          batch.set(noteRef, cleanObject(note));
-        });
-        await batch.commit();
-        
-        // 로그 기록 (콘솔 및 향후 확장 가능)
-        logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
-
-        if (!silent) {
-          showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
-        }
-      } catch (e) {
-        if (!silent) {
-          handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
-        }
-      } finally {
-        if (!silent) {
-          setProcessStatus(null);
-        }
-      }
-    } else {
-      if (!silent) {
-        showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
-      }
-    }
-  };
-
-  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false) => {
-    const targetNotes = notesList || state.notes;
-    if (targetNotes.length === 0 || !userId || !currentProjectId) return;
-
-    const invalidNotes = findInvalidHierarchyNotes(targetNotes);
-    
-    if (invalidNotes.length === 0) {
-      if (!silentSuccess) {
-        showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
-      }
-      return;
-    }
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsSyncing(true);
-    setProcessStatus({ message: `계층 구조 자동 보정 중 (${invalidNotes.length}개 노드)...` });
-
-    try {
-      const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
-      
-      if (signal.aborted) return;
-
-      const newNotes: Note[] = [];
-      const updatedNotes: Note[] = [];
-      let currentAllNotes = [...targetNotes];
-
-      // Group by newNote title to avoid creating duplicate parents for the same batch
-      const newParentMap = new Map<string, string>(); // title -> id
-
-      for (const res of results) {
-        const orphanNote = invalidNotes.find(n => n.id === res.orphanNoteId);
-        if (!orphanNote) continue;
-
-        let parentId = res.parentId;
-
-        if (res.action === 'clear') {
-          const updatedOrphan = {
-            ...orphanNote,
-            parentNoteIds: []
-          };
-          updatedNotes.push(updatedOrphan);
-          continue;
-        }
-
-        if (res.action === 'create' && res.newNote) {
-          const parentTitle = res.newNote.title || 'New Parent';
-          if (newParentMap.has(parentTitle)) {
-            parentId = newParentMap.get(parentTitle);
-          } else {
-            const newParent: Note = {
-              ...res.newNote,
-              id: Math.random().toString(36).substr(2, 9),
-              childNoteIds: [orphanNote.id],
-            } as Note;
-            newNotes.push(newParent);
-            currentAllNotes.push(newParent);
-            parentId = newParent.id;
-            newParentMap.set(parentTitle, parentId!);
-          }
-        }
-
-        if (parentId) {
-          const updatedOrphan = {
-            ...orphanNote,
-            parentNoteIds: Array.from(new Set([...orphanNote.parentNoteIds, parentId]))
-          };
-          updatedNotes.push(updatedOrphan);
-          
-          // Update parent's childNoteIds if it's an existing note
-          const existingParent = currentAllNotes.find(n => n.id === parentId);
-          if (existingParent) {
-            const updatedParent = {
-              ...existingParent,
-              childNoteIds: Array.from(new Set([...existingParent.childNoteIds, orphanNote.id]))
-            };
-            // Check if already in updatedNotes or newNotes
-            const existingInUpdated = updatedNotes.findIndex(un => un.id === parentId);
-            if (existingInUpdated !== -1) {
-              updatedNotes[existingInUpdated] = updatedParent;
-            } else {
-              const existingInNew = newNotes.findIndex(nn => nn.id === parentId);
-              if (existingInNew !== -1) {
-                newNotes[existingInNew] = updatedParent;
-              } else {
-                updatedNotes.push(updatedParent);
-              }
-            }
-          }
-        }
-      }
-
-      // Apply changes
-      if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
-      if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
-
-      const affectedMap = new Map<string, Note>();
-      const finalNotes = [...targetNotes, ...newNotes];
-
-      updatedNotes.forEach(un => {
-        const affected = syncNoteRelationships(un, finalNotes);
-        affected.forEach(an => affectedMap.set(an.id, an));
-        affectedMap.set(un.id, un);
-      });
-
-      const syncedNotes = finalNotes.map(note => affectedMap.get(note.id) || note);
-
-      // 4. 무결성 자동 세척 및 완료 (sanitizeNoteIntegrity)
-      const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
-
-      await saveNotesToFirestore(finalSanitizedNotes);
-      setState(prev => ({ ...prev, notes: finalSanitizedNotes }));
-      
-      if (!silentSuccess) {
-        showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
-      }
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Hierarchy optimization cancelled');
-      } else {
-        console.error('Hierarchy optimization failed', error);
-        showAlert('오류', '최적화 중 오류가 발생했습니다.', 'error');
-      }
-    } finally {
-      setIsSyncing(false);
-      setProcessStatus(null);
-    }
-  };
-
-  const handleCheckConsistency = async () => {
-    if (state.notes.length === 0) return;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsSyncing(true);
-    setProcessStatus({ message: '설계도 일관성 검증 진행 중...' });
-    try {
-      const { report, inconsistentNotes } = await checkConsistency(state.notes, state.gcm, signal);
-      
-      if (signal.aborted) return;
-
-      const inconsistentMap = new Map(inconsistentNotes.map(n => [n.id, n]));
-      const updatedNotes = state.notes.map(note => {
-        const conflict = inconsistentMap.get(note.id);
-        if (conflict) {
-          return { 
-            ...note, 
-            consistencyConflict: {
-              description: conflict.description,
-              suggestion: conflict.suggestion
-            } 
-          };
-        }
-        if (note.consistencyConflict) {
-          return { ...note, consistencyConflict: undefined };
-        }
-        return note;
-      });
-
-      saveNotesToFirestore(updatedNotes);
-
-      setState(prev => ({
-        ...prev,
-        notes: updatedNotes
-      }));
-      
-      setNextStepSuggestion(report);
-      setRightSidebarOpen(true);
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Check consistency cancelled');
-      } else {
-        console.error('Consistency check failed', error);
-        showAlert('오류', '설계도 일관성 검증 중 오류가 발생했습니다.', 'error');
-      }
-    } finally {
-      setIsSyncing(false);
-      setProcessStatus(null);
-    }
-  };
-
-  const handleGenerateSubModules = async (mainNote: Note) => {
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsDecomposing(true);
-    setProcessStatus({ message: `${mainNote.title}의 하위 모듈 생성 중...` });
-    try {
-      const githubContext = state.githubRepo ? {
-        repoName: state.githubRepo,
-        files: githubFiles.map(f => f.path),
-        readme: githubReadme
-      } : undefined;
-
-      const result = await generateSubModules(mainNote, state.gcm, state.notes, githubContext, signal);
-      
-      if (signal.aborted) return;
-
-      const newNotesWithIds = result.newNotes.map((n) => ({
-        ...n,
-        id: Math.random().toString(36).substr(2, 9),
-        status: 'Planned' as const,
-        priority: 'C' as const,
-      }));
-
-      let updatedNotesList = [...state.notes, ...newNotesWithIds];
-
-      if (result.mainNoteUpdates) {
-        updatedNotesList = updatedNotesList.map(n => 
-          n.id === mainNote.id ? { 
-            ...n, 
-            ...result.mainNoteUpdates,
-            noteType: result.mainNoteUpdates!.noteType as NoteType | undefined
-          } : n
-        );
-      }
-
-      saveNotesToFirestore(updatedNotesList);
-      syncProject({ gcm: result.updatedGcm });
-
-      setState(prev => {
-        return {
-          ...prev,
-          notes: updatedNotesList,
-          gcm: result.updatedGcm
-        };
-      });
-      
-      showAlert('생성 완료', `${newNotesWithIds.length}개의 하위 모듈이 생성되었습니다.`, 'success');
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Generate sub-modules cancelled');
-      } else {
-        console.error('Failed to generate sub-modules:', error);
-        showAlert('오류', `하위 모듈 생성 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
-      }
-    } finally {
-      setIsDecomposing(false);
-      setProcessStatus(null);
-    }
-  };
-
-  const handleAddNote = () => {
-    const newNote: Note = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: '새 노트',
-      folder: '미분류',
-      content: '# 새 노트\n여기에 기능을 설명하세요.',
-      summary: '새로운 기능 설명',
-      status: 'Planned',
-      priority: 'C',
-      version: '1.0.0',
-      lastUpdated: new Date().toISOString(),
-      importance: 3,
-      tags: [],
-      childNoteIds: [],
-      relatedNoteIds: [],
-      parentNoteIds: [],
-      noteType: 'Feature'
-    };
-    handleUpdateNote(newNote);
-    setSelectedNoteId(newNote.id);
-  };
-
-  const handleAddChildNote = (parentId: string) => {
-    const parentNote = state.notes.find(n => n.id === parentId);
-    let childNoteType: NoteType = 'Task';
-    if (parentNote?.noteType === 'Epic') childNoteType = 'Feature';
-    else if (parentNote?.noteType === 'Feature') childNoteType = 'Task';
-
-    const newNote: Note = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: '새 하위 노트',
-      folder: parentNote ? parentNote.folder : '미분류',
-      parentNoteIds: [parentId],
-      content: `# ${parentNote?.title || ''}의 하위 기능\n여기에 세부 기능을 설명하세요.`,
-      summary: '하위 기능 설명',
-      status: 'Planned',
-      priority: 'C',
-      version: '1.0.0',
-      lastUpdated: new Date().toISOString(),
-      importance: 3,
-      tags: [],
-      childNoteIds: [],
-      relatedNoteIds: [],
-      noteType: childNoteType
-    };
-    handleUpdateNote(newNote);
-    setSelectedNoteId(newNote.id);
-  };
-
-  const handleDeleteNote = (noteId: string) => {
-    const targetNote = state.notes.find(n => n.id === noteId);
-    if (!targetNote) return;
-
-    setDialogConfig({
-      isOpen: true,
-      title: '노트 삭제',
-      message: `"${targetNote.title}" 노트를 삭제하시겠습니까?\n이 노트를 부모로 가진 하위 노트들은 부모 연결이 해제됩니다.`,
-      type: 'warning',
-      confirmText: '삭제',
-      cancelText: '취소',
-      onConfirm: () => {
-        // 1. 관계 정리
-        const affectedNotes = cleanupNoteRelationships(noteId, state.notes);
-        
-        // 2. 고아 노드(부모가 0개가 된 자식) 확인
-        const orphans = affectedNotes.filter(n => {
-          const oldNote = state.notes.find(old => old.id === n.id);
-          return (oldNote?.parentNoteIds || []).includes(noteId) && n.parentNoteIds.length === 0;
-        });
-
-        const executeDelete = (deleteOrphans: boolean = false) => {
-          const finalAffectedNotes = [...affectedNotes];
-          const notesToDelete = [noteId];
-          
-          if (deleteOrphans) {
-            orphans.forEach(o => notesToDelete.push(o.id));
-          }
-
-          // Firestore 업데이트
-          if (finalAffectedNotes.length > 0) {
-            saveNotesToFirestore(finalAffectedNotes.filter(n => !notesToDelete.includes(n.id)));
-          }
-          
-          notesToDelete.forEach(id => deleteNoteFromFirestore(id));
-
-          setState(prev => {
-            const notesMap = new Map(prev.notes.map(n => [n.id, n]));
-            finalAffectedNotes.forEach(an => notesMap.set(an.id, an));
-            const filteredNotes = Array.from(notesMap.values()).filter(n => !notesToDelete.includes(n.id));
-            
-            return {
-              ...prev,
-              notes: filteredNotes
-            };
-          });
-
-          if (notesToDelete.includes(selectedNoteId || '')) {
-            setSelectedNoteId(null);
-          }
-          setDialogConfig(null);
-        };
-
-        if (orphans.length > 0) {
-          setDialogConfig({
-            isOpen: true,
-            title: '고아 노드 처리',
-            message: `"${targetNote.title}"를 삭제하면 다음 노드들의 부모가 없어집니다:\n${orphans.map(o => `• ${o.title}`).join('\n')}\n\n이 하위 노드들도 함께 삭제하시겠습니까?`,
-            type: 'warning',
-            confirmText: '모두 삭제',
-            cancelText: '부모 연결만 해제',
-            onConfirm: () => executeDelete(true),
-            onCancel: () => executeDelete(false)
-          });
-        } else {
-          executeDelete(false);
-        }
-      },
-      onCancel: () => setDialogConfig(null)
-    });
-  };
-
-  const handleDeleteFolder = (folderPath: string) => {
-    const notesToDelete = state.notes.filter(n => n.folder === folderPath || n.folder.startsWith(`${folderPath}/`));
-    if (notesToDelete.length === 0) return;
-    
-    setDialogConfig({
-      isOpen: true,
-      title: '폴더 삭제',
-      message: `'${folderPath}' 폴더와 그 안의 하위 노트 ${notesToDelete.length}개를 모두 삭제하시겠습니까?\n이 작업은 복구할 수 없습니다.`,
-      type: 'warning',
-      confirmText: '일괄 삭제',
-      cancelText: '취소',
-      onConfirm: async () => {
-        const ids = notesToDelete.map(n => n.id);
-        const idsSet = new Set(ids);
-        
-        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
-        const affectedNotesMap = new Map<string, Note>();
-        
-        remainingNotes.forEach(note => {
-          let changed = false;
-          let updatedNote = { ...note };
-          
-          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          
-          if (changed) {
-            affectedNotesMap.set(updatedNote.id, updatedNote);
-          }
-        });
-        
-        const finalAffectedNotes = Array.from(affectedNotesMap.values());
-        if (finalAffectedNotes.length > 0) {
-          saveNotesToFirestore(finalAffectedNotes);
-        }
-        
-        await deleteNotesFromFirestore(ids);
-        
-        setState(prev => ({
-          ...prev,
-          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
-        }));
-        
-        if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
-        setDialogConfig(null);
-      },
-      onCancel: () => setDialogConfig(null)
-    });
-  };
-
-  const handleDeleteMultiple = (noteIds: string[]) => {
-    setDialogConfig({
-      isOpen: true,
-      title: '노트 일괄 삭제',
-      message: `선택한 노트 ${noteIds.length}개를 모두 삭제하시겠습니까?\n이 작업은 복구할 수 없습니다.`,
-      type: 'warning',
-      confirmText: '일괄 삭제',
-      cancelText: '취소',
-      onConfirm: async () => {
-        const idsSet = new Set(noteIds);
-        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
-        const affectedNotesMap = new Map<string, Note>();
-        
-        remainingNotes.forEach(note => {
-          let changed = false;
-          let updatedNote = { ...note };
-          
-          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
-            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
-            changed = true;
-          }
-          
-          if (changed) {
-            affectedNotesMap.set(updatedNote.id, updatedNote);
-          }
-        });
-        
-        const finalAffectedNotes = Array.from(affectedNotesMap.values());
-        if (finalAffectedNotes.length > 0) {
-          saveNotesToFirestore(finalAffectedNotes);
-        }
-        
-        await deleteNotesFromFirestore(noteIds);
-        
-        setState(prev => ({
-          ...prev,
-          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
-        }));
-        
-        if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
-        setDialogConfig(null);
-      },
-      onCancel: () => setDialogConfig(null)
-    });
-  };
-
-  const handleWipeSnapshots = async () => {
-    setDialogConfig({
-      isOpen: true,
-      title: '스냅샷 초기화',
-      message: 'GitHub에서 가져온 모든 코드 스냅샷 노트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
-      type: 'warning',
-      confirmText: '초기화',
-      cancelText: '취소',
-      onConfirm: async () => {
-        setDialogConfig(null);
-        try {
-          setProcessStatus({ message: '코드 스냅샷 초기화 중...' });
-          
-          if (userId && currentProjectId) {
-            await clearSyncLog(userId, currentProjectId);
-          }
-          await syncProject({ lastSyncedSha: undefined });
-
-          // 모든 'Reference' 타입의 노트를 싹 다 잡습니다.
-          const snapshotNotes = state.notes.filter(n => n.noteType === 'Reference');
-          const snapshotNoteIds = snapshotNotes.map(n => n.id);
-          
-          if (snapshotNoteIds.length > 0) {
-            // Firestore에서 일괄 삭제
-            await deleteNotesFromFirestore(snapshotNoteIds);
-          }
-          
-          let remainingNotes = state.notes.filter(n => !snapshotNoteIds.includes(n.id));
-
-          // 빈 SHA 장부 노트 생성
-          const logTitle = '[로그] SHA 동기화 장부';
-          const logFolder = '시스템/동기화 로그';
-          const now = new Date().toISOString();
-          const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
-          
-          const newLogNote: Note = {
-            id: Math.random().toString(36).substr(2, 9),
-            title: logTitle,
-            content: emptyLogContent,
-            folder: logFolder,
-            summary: 'GitHub 동기화된 파일들의 SHA 값을 추적하는 장부입니다.',
-            status: 'Done',
-            priority: 'C',
-            version: '1.0.0',
-            lastUpdated: now,
-            importance: 1,
-            tags: ['system-log'],
-            childNoteIds: [],
-            relatedNoteIds: [],
-            parentNoteIds: [],
-            noteType: 'Reference'
-          };
-          
-          await saveNotesToFirestore([newLogNote]);
-          remainingNotes.push(newLogNote);
-
-          setState(prev => ({
-            ...prev,
-            notes: remainingNotes,
-            fileSyncLogs: {},
-            lastSyncedSha: undefined
-          }));
-
-          showAlert('초기화 완료', `${snapshotNoteIds.length}개의 코드 스냅샷이 삭제되고 SHA 장부가 초기화되었습니다.`, 'success');
-        } catch (error) {
-          console.error('Failed to wipe snapshots:', error);
-          showAlert('오류', '코드 스냅샷 초기화에 실패했습니다.', 'error');
-        } finally {
-          setProcessStatus(null);
-        }
-      },
-      onCancel: () => setDialogConfig(null)
-    });
-  };
-
-  const reconcileNoteRelationships = async (allNotes: Note[]): Promise<Note[]> => {
-    const notesMap = new Map(allNotes.map(n => [n.id, { ...n }]));
-    let changed = false;
-
-    // 1. 부모-자식 관계 전수 조사 및 복구
-    for (const note of Array.from(notesMap.values())) {
-      // 부모 -> 자식 방향 확인
-      for (const parentId of (note.parentNoteIds || [])) {
-        const parent = notesMap.get(parentId);
-        if (parent && !(parent.childNoteIds || []).includes(note.id)) {
-          parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
-          changed = true;
-        }
-      }
-
-      // 자식 -> 부모 방향 확인
-      for (const childId of note.childNoteIds) {
-        const child = notesMap.get(childId);
-        if (child && !(child.parentNoteIds || []).includes(note.id)) {
-          child.parentNoteIds = Array.from(new Set([...(child.parentNoteIds || []), note.id]));
-          changed = true;
-        }
-      }
-
-      // 연관 관계 양방향 확인
-      for (const relId of note.relatedNoteIds) {
-        const relNote = notesMap.get(relId);
-        if (relNote && !(relNote.relatedNoteIds || []).includes(note.id)) {
-          relNote.relatedNoteIds = Array.from(new Set([...relNote.relatedNoteIds, note.id]));
-          changed = true;
-        }
-      }
-    }
-
-    if (changed) {
-      const updatedNotes = Array.from(notesMap.values());
-      await saveNotesToFirestore(updatedNotes);
-      setState(prev => ({
-        ...prev,
-        notes: updatedNotes
-      }));
-      return updatedNotes;
-    }
-    return allNotes;
-  };
-
-  const handleSyncGithub = async () => {
-    if (!state.githubRepo) {
-      showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
-      return;
-    }
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsSyncing(true);
-    setProcessStatus({ message: 'Github 파일 목록 및 버전 확인 중...' });
-    try {
-      let filesToProcess: { path: string; sha: string }[] = [];
-      let latestSha = '';
-
-      const files = await fetchGithubFiles(state.githubRepo, state.githubToken, signal);
-      if (signal.aborted) return;
-      setGithubFiles(files);
-      latestSha = await fetchLatestCommitSha(state.githubRepo, state.githubToken, signal);
-      if (signal.aborted) return;
-      
-      // Try to fetch README.md
-      const readmeFile = files.find(f => f.path.toLowerCase() === 'readme.md');
-      if (readmeFile) {
-        try {
-          const content = await fetchGithubFileContent(state.githubRepo, readmeFile.path, state.githubToken, signal);
-          if (signal.aborted) return;
-          setGithubReadme(content);
-        } catch (e) {
-          console.warn("Failed to fetch README.md", e);
-        }
-      }
-
-      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
-      filesToProcess = files.filter(file => 
-        sourceExtensions.some(ext => file.path.endsWith(ext)) &&
-        !file.path.includes('node_modules') &&
-        !file.path.includes('.git') &&
-        !file.path.includes('dist') &&
-        !file.path.includes('build')
-      );
-
-      if (filesToProcess.length === 0) {
-        showAlert('알림', '분석할 소스 파일이 없습니다.', 'info');
-        setIsSyncing(false);
-        setProcessStatus(null);
-        return;
-      }
-
-      // [Sync Log Cleanup] Remove files from logs that no longer exist in GitHub
-      let currentLogs = { ...(state.fileSyncLogs || {}) };
-      const githubFilePaths = new Set(files.map(f => f.path));
-      let logsChanged = false;
-      
-      Object.keys(currentLogs).forEach(path => {
-        if (!githubFilePaths.has(path)) {
-          delete currentLogs[path];
-          logsChanged = true;
-        }
-      });
-      
-      if (logsChanged && userId && currentProjectId) {
-        await saveSyncLog(userId, currentProjectId, currentLogs);
-        setState(prev => ({ ...prev, fileSyncLogs: currentLogs }));
-      }
-
-      // Filter out files already processed for this latestSha to support resuming
-      const filesActuallyToProcess = filesToProcess.filter(f => 
-        currentLogs[f.path] !== f.sha
-      );
-
-      if (filesActuallyToProcess.length === 0) {
-        showAlert('알림', '모든 파일이 이미 최신 상태입니다.', 'info');
-        
-        let currentNotes = [...state.notes];
-        // Even if no files to process, update the global SHA or logs if they changed
-        if (state.lastSyncedSha !== latestSha || logsChanged) {
-          const now = new Date().toISOString();
-          await syncProject({ 
-            lastSyncedAt: now,
-            lastSyncedSha: latestSha
-          });
-          
-          // [로그] SHA 동기화 장부 생성/업데이트
-          const logTitle = '[로그] SHA 동기화 장부';
-          const logFolder = '시스템/동기화 로그';
-          let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
-          
-          const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
-          
-          if (logNote) {
-            logNote = { ...logNote, content: logContent, lastUpdated: now };
-            currentNotes = currentNotes.map(n => n.id === logNote!.id ? logNote! : n);
-            await saveNotesToFirestore([logNote]);
-          } else {
-            const newLogNote: Note = {
-              id: Math.random().toString(36).substr(2, 9),
-              title: logTitle,
-              folder: logFolder,
-              content: logContent,
-              summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
-              status: 'Done',
-              priority: 'C',
-              version: '1.0.0',
-              lastUpdated: now,
-              importance: 1,
-              tags: ['system-log'],
-              childNoteIds: [],
-              relatedNoteIds: [],
-              parentNoteIds: [],
-              noteType: 'Reference'
-            };
-            currentNotes.push(newLogNote);
-            await saveNotesToFirestore([newLogNote]);
-          }
-
-          setState(prev => ({ 
-            ...prev, 
-            notes: currentNotes,
-            lastSyncedAt: now, 
-            lastSyncedSha: latestSha,
-            fileSyncLogs: currentLogs
-          }));
-        }
-        
-        setIsSyncing(false);
-        setProcessStatus(null);
-        return;
-      }
-
-      let currentNotes = [...state.notes];
-      let updateCount = 0;
-      let newCount = 0;
-
-      for (let i = 0; i < filesActuallyToProcess.length; i++) {
-        if (signal.aborted) return;
-        const file = filesActuallyToProcess[i];
-        setProcessStatus({ 
-          message: `${file.path} 분석 및 코드 스냅샷 생성 중 (${i + 1}/${filesActuallyToProcess.length})...`,
-          current: i + 1,
-          total: filesActuallyToProcess.length
-        });
-
-        try {
-          const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken, signal);
-          if (signal.aborted) return;
-          const snapshotNotes = currentNotes.filter(n => n.noteType === 'Reference');
-          
-          // Find all existing Reference notes linked to this file for cleanup
-          const existingFileNotes = snapshotNotes.filter(n => n.githubLink === file.path || n.originPath === file.path);
-          const oldNoteIds = existingFileNotes.map(n => n.id);
-
-          const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
-          if (signal.aborted) return;
-          const touchedNotes: Note[] = [];
-          const processedNoteIds: string[] = [];
-          
-          // 1단계: 식별 및 사전 할당 (Identification & Pre-allocation)
-          const suggestedTaskMap = new Map<string, string>(); // title -> taskId
-          const seenLogicHashes = new Set<string>(); // Prevent duplicate logicHashes in same file
-          const unitsToAnalyze: any[] = [];
-          const unitsToSkip: any[] = [];
-          
-          for (const unit of logicUnits) {
-            if (signal.aborted) return;
-            
-            // Skip if we already processed this logicHash in this file
-            if (seenLogicHashes.has(unit.logicHash)) {
-              console.log(`Skipping duplicate logicHash ${unit.logicHash} in same file.`);
-              continue;
-            }
-            seenLogicHashes.add(unit.logicHash);
-            
-            let taskId = unit.matchedTaskId;
-            if (!taskId && unit.suggestedTask) {
-              const existingTask = currentNotes.find(n => 
-                n.title === unit.suggestedTask!.title && 
-                (n.noteType === 'Task' || n.noteType === 'Feature')
-              );
-              
-              if (existingTask) {
-                taskId = existingTask.id;
-              } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
-                taskId = suggestedTaskMap.get(unit.suggestedTask.title);
-              } else {
-                // Create new leaf Task
-                const newTaskId = Math.random().toString(36).substr(2, 9);
-                suggestedTaskMap.set(unit.suggestedTask.title, newTaskId);
-                taskId = newTaskId;
-                
-                const newTask: Note = {
-                  id: newTaskId,
-                  title: unit.suggestedTask.title,
-                  folder: unit.suggestedTask.folder,
-                  content: unit.suggestedTask.content,
-                  summary: unit.suggestedTask.summary,
-                  noteType: 'Task',
-                  status: 'Planned',
-                  priority: 'C',
-                  version: '1.0.0',
-                  lastUpdated: new Date().toISOString(),
-                  importance: 3,
-                  tags: ['auto-generated', 'design-leading-code'],
-                  relatedNoteIds: [],
-                  childNoteIds: [],
-                  parentNoteIds: [] // Hierarchy validator will fix this
-                };
-                currentNotes.push(newTask);
-                touchedNotes.push(newTask);
-                newCount++;
-              }
-            }
-
-            if (!taskId) continue;
-
-            const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
-            const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
-                                currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
-
-            if (globallyExistingRef) {
-              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches globally.`);
-              unitsToSkip.push({ 
-                unit, 
-                taskId, 
-                analysis: { 
-                  content: globallyExistingRef.content, 
-                  summary: globallyExistingRef.summary, 
-                  importance: globallyExistingRef.importance, 
-                  tags: globallyExistingRef.tags 
-                }, 
-                globallyExistingRef, 
-                existingRef 
-              });
-            } else if (existingRef && existingRef.logicHash === unit.logicHash) {
-              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches locally.`);
-              unitsToSkip.push({ 
-                unit, 
-                taskId, 
-                analysis: { 
-                  content: existingRef.content, 
-                  summary: existingRef.summary, 
-                  importance: existingRef.importance, 
-                  tags: existingRef.tags 
-                }, 
-                globallyExistingRef, 
-                existingRef 
-              });
-            } else {
-              unitsToAnalyze.push({ unit, taskId, globallyExistingRef, existingRef });
-            }
-          }
-
-          // 2단계: 범위가 제한된 병렬 분석 (Scoped Parallel Execution)
-          const analyzedResults: any[] = [];
-          const chunkSize = 5; // AI Rate Limit 방지를 위한 청크 사이즈
-          
-          for (let j = 0; j < unitsToAnalyze.length; j += chunkSize) {
-            if (signal.aborted) return;
-            const chunk = unitsToAnalyze.slice(j, j + chunkSize);
-            
-            setProcessStatus(prev => ({ 
-              ...prev!, 
-              message: `로직 심층 분석 중 (${j + 1}~${Math.min(j + chunkSize, unitsToAnalyze.length)}/${unitsToAnalyze.length})...` 
-            }));
-            
-            const promises = chunk.map(async (item) => {
-              const taskNote = currentNotes.find(n => n.id === item.taskId);
-              if (!taskNote) return null;
-              
-              try {
-                const analysis = await analyzeLogicUnitDeeply(item.unit.title, item.unit.codeSnippet, {
-                  title: taskNote.title,
-                  content: taskNote.content,
-                  summary: taskNote.summary
-                }, signal);
-                return { ...item, analysis };
-              } catch (e) {
-                console.error(`Failed to analyze logic unit ${item.unit.title}:`, e);
-                return null;
-              }
-            });
-            
-            const results = await Promise.all(promises);
-            analyzedResults.push(...results.filter(r => r !== null));
-          }
-
-          if (signal.aborted) return;
-
-          // 3단계: 원자적 통합 (Atomic Merge)
-          const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
-          
-          for (const item of allProcessedUnits) {
-            const { unit, taskId, analysis, globallyExistingRef, existingRef } = item;
-            const taskNote = currentNotes.find(n => n.id === taskId);
-            if (!taskNote) continue;
-
-            // Create or Update Reference note
-            let finalNote: Note;
-            if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
-              // Reuse existing global reference by linking it to the new task
-              finalNote = {
-                ...globallyExistingRef,
-                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId])),
-                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
-                lastUpdated: new Date().toISOString()
-              };
-              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
-              updateCount++;
-            } else if (existingRef) {
-              finalNote = {
-                ...existingRef,
-                content: analysis.content,
-                summary: analysis.summary,
-                importance: analysis.importance,
-                tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
-                lastUpdated: new Date().toISOString(),
-                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId])),
-                folder: taskNote.folder, // Inherit folder from Task
-                logicHash: unit.logicHash,
-                originPath: file.path
-              };
-              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
-              updateCount++;
-            } else {
-              finalNote = {
-                id: Math.random().toString(36).substr(2, 9),
-                title: unit.title,
-                folder: taskNote.folder,
-                content: analysis.content,
-                summary: analysis.summary,
-                version: '1.0.0',
-                lastUpdated: new Date().toISOString(),
-                importance: analysis.importance,
-                tags: analysis.tags,
-                status: 'Done',
-                priority: 'C',
-                childNoteIds: [],
-                parentNoteIds: [taskId],
-                noteType: 'Reference',
-                relatedNoteIds: [taskId],
-                githubLink: file.path,
-                originPath: file.path,
-                logicHash: unit.logicHash
-              };
-              currentNotes.push(finalNote);
-              newCount++;
-            }
-            touchedNotes.push(finalNote);
-            processedNoteIds.push(finalNote.id);
-          }
-
-          // 2. Cleanup discarded logic units (Notes previously linked to this file but no longer present)
-          const discardedNoteIds = oldNoteIds.filter(id => !processedNoteIds.includes(id));
-          for (const id of discardedNoteIds) {
-            const noteIndex = currentNotes.findIndex(n => n.id === id);
-            if (noteIndex !== -1) {
-              const discardedNote = { ...currentNotes[noteIndex] };
-              discardedNote.folder = '시스템/폐기된 소스';
-              discardedNote.parentNoteIds = []; // 부모 연결 해제
-              discardedNote.status = 'Deprecated';
-              if (!(discardedNote.tags || []).includes('discarded')) {
-                discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
-              }
-              currentNotes[noteIndex] = discardedNote;
-              touchedNotes.push(discardedNote);
-            }
-          }
-
-          // 1개 파일 진행이 끝나고 즉시 해당 파일의 로그와 노트를 업데이트
-          if (touchedNotes.length > 0) {
-            await saveNotesToFirestore(touchedNotes);
-          }
-          
-          currentLogs[file.path] = file.sha;
-          const now = new Date().toISOString();
-          if (userId && currentProjectId) {
-            await saveSyncLog(userId, currentProjectId, currentLogs);
-          }
-          await syncProject({ 
-            lastSyncedAt: now
-          });
-
-          // Update local state to reflect progress
-          setState(prev => ({ 
-            ...prev, 
-            notes: currentNotes,
-            fileSyncLogs: { ...currentLogs },
-            lastSyncedAt: now
-          }));
-
-        } catch (e) {
-          if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
-            console.log(`Processing file ${file.path} cancelled`);
-            return;
-          }
-          console.error(`Failed to process file ${file.path}:`, e);
-        }
-      }
-
-      // 모든 파일 처리가 끝난 후 최종 SHA 업데이트
-      await syncProject({
-        lastSyncedSha: latestSha
-      });
-
-      setState(prev => ({ 
-        ...prev, 
-        lastSyncedSha: latestSha
-      }));
-
-      // [Post-Processing] Reconcile relationships without AI
-      setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
-      currentNotes = await reconcileNoteRelationships(currentNotes);
-      if (signal.aborted) return;
-
-      // [로그] SHA 동기화 장부 생성/업데이트
-      const logTitle = '[로그] SHA 동기화 장부';
-      const logFolder = '시스템/동기화 로그';
-      let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
-      
-      const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
-      
-      if (logNote) {
-        logNote = { ...logNote, content: logContent, lastUpdated: new Date().toISOString() };
-        currentNotes = currentNotes.map(n => n.id === logNote!.id ? logNote! : n);
-        await saveNotesToFirestore([logNote]);
-      } else {
-        const newLogNote: Note = {
-          id: Math.random().toString(36).substr(2, 9),
-          title: logTitle,
-          folder: logFolder,
-          content: logContent,
-          summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
-          status: 'Done',
-          priority: 'C',
-          lastUpdated: new Date().toISOString(),
-          version: '1.0.0',
-          importance: 1,
-          tags: ['system-log'],
-          noteType: 'Task',
-          relatedNoteIds: [],
-          childNoteIds: [],
-          parentNoteIds: []
-        };
-        currentNotes.push(newLogNote);
-        await saveNotesToFirestore([newLogNote]);
-      }
-      
-      const { suggestion } = await suggestNextSteps(currentNotes, state.gcm, signal);
-      if (signal.aborted) return;
-      setNextStepSuggestion(suggestion);
-
-      // Ensure the final currentNotes (including log notes) are saved to state
-      setState(prev => ({ ...prev, notes: currentNotes }));
-
-      showAlert(
-        'GitHub 최신 코드 반영 완료', 
-        `분석 완료: ${updateCount}개 스냅샷 업데이트, ${newCount}개 새 스냅샷 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
-        'success'
-      );
-
-      // [Post-Processing] Automatically enforce hierarchy after sync
-      await handleEnforceHierarchy(currentNotes, true);
-
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Sync GitHub cancelled');
-      } else {
-        console.error('Failed to sync with Github:', error);
-        showAlert('오류', `Github 대조 및 통합 실패: ${error instanceof Error ? error.message : String(error)}`, 'error');
-      }
-    } finally {
-      setIsSyncing(false);
-      setProcessStatus(null);
-    }
-  };
-
-
-  const handleUpdateNote = (updatedNote: Note) => {
-    // 0. 순환 참조 검사
-    const oldNote = state.notes.find(n => n.id === updatedNote.id);
-    if (oldNote) {
-      const newParents = (updatedNote.parentNoteIds || []).filter(id => !(oldNote.parentNoteIds || []).includes(id));
-      for (const pId of newParents) {
-        if (wouldCreateCycle(updatedNote.id, pId, state.notes)) {
-          setDialogConfig({
-            isOpen: true,
-            title: '순환 참조 발견',
-            message: `"${updatedNote.title}"를 부모로 설정하면 순환 참조가 발생합니다. 계층 구조를 다시 확인하십시오.`,
-            type: 'error',
-            confirmText: '확인',
-            onConfirm: () => setDialogConfig(null)
-          });
-          return;
-        }
-      }
-    }
-
-    // Mirroring 로직을 사용하여 영향을 받는 모든 노트 리스트를 가져옴
-    const affectedNotes = syncNoteRelationships(updatedNote, state.notes);
-    
-    // 모든 영향을 받은 노트를 Firestore에 저장
-    saveNotesToFirestore(affectedNotes);
-    
-    // 모든 영향을 받은 노트를 상태에 반영 (Firebase 또는 Local State)
-    setState(prev => {
-      const newNotes = [...prev.notes];
-      affectedNotes.forEach(an => {
-        const idx = newNotes.findIndex(n => n.id === an.id);
-        if (idx !== -1) {
-          newNotes[idx] = an;
-        } else {
-          newNotes.push(an);
-        }
-      });
-      return { ...prev, notes: newNotes };
-    });
-  };
-
-  const handleTargetedUpdate = async (noteId: string, command: string) => {
-    const targetNote = state.notes.find(n => n.id === noteId);
-    if (!targetNote) return;
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    const signal = controller.signal;
-
-    try {
-      const { updatedNote, updatedGcm, affectedNoteIds } = await updateSingleNote(
-        targetNote,
-        command,
-        state.gcm,
-        state.notes,
-        signal
-      );
-
-      if (signal.aborted) return;
-
-      saveNotesToFirestore([updatedNote, ...state.notes.filter(n => affectedNoteIds.includes(n.id)).map(n => ({
-        ...n,
-        consistencyConflict: {
-          description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
-          suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
-        }
-      }))]);
-      syncProject({ gcm: updatedGcm });
-
-      setState(prev => ({
-        ...prev,
-        gcm: updatedGcm,
-        notes: prev.notes.map(n => {
-          if (n.id === noteId) return updatedNote;
-          if (affectedNoteIds.includes(n.id)) {
-            // Flag affected notes for user review
-            return {
-              ...n,
-              consistencyConflict: {
-                description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
-                suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
-              }
-            };
-          }
-          return n;
-        })
-      }));
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Targeted update cancelled');
-      } else {
-        console.error('Failed to update note:', error);
-        showAlert('오류', '노트 업데이트에 실패했습니다.', 'error');
-      }
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-    }
-  };
-
-  const selectedNote = state.notes.find((n) => n.id === selectedNoteId) || null;
-
-  const handleAnalyzeNextSteps = async () => {
-    setProcessStatus({ message: '다음 단계 분석 중...' });
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    const signal = controller.signal;
-
-    try {
-      const { suggestion, updatedStatuses } = await suggestNextSteps(state.notes, state.gcm, signal);
-      
-      if (signal.aborted) return;
-      
-      setNextStepSuggestion(suggestion);
-      
-      if (Object.keys(updatedStatuses).length > 0) {
-        const updatedNotes = state.notes.map(n => updatedStatuses[n.id] ? { ...n, status: updatedStatuses[n.id] } : n);
-        saveNotesToFirestore(updatedNotes);
-        setState(prev => ({
-          ...prev,
-          notes: updatedNotes
-        }));
-      }
-      setRightSidebarOpen(true);
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Analyze next steps cancelled');
-      } else {
-        console.error(error);
-        showAlert('오류', '다음 단계 분석에 실패했습니다.', 'error');
-      }
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-      setProcessStatus(null);
-    }
-  };
-
-  const handleChat = async () => {
-    if (!chatInput.trim() || isChatting) return;
-    
-    const now = new Date();
-    const expiryDate = new Date();
-    expiryDate.setDate(now.getDate() + 30);
-
-    const userMsg: ChatMessage = { 
-      id: Math.random().toString(36).substring(2, 11),
-      role: 'user', 
-      content: chatInput, 
-      createdAt: now.toISOString(),
-      expiresAt: expiryDate
-    };
-    
-    setChatInput('');
-    setIsChatting(true);
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    const signal = controller.signal;
-
-    try {
-      if (!userId || !currentProjectId) return;
-      const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
-      await setDoc(doc(chatsRef, userMsg.id), userMsg);
-
-      const history = (state.chatMessages || []).map(m => ({
-        role: m.role,
-        parts: m.content
-      }));
-      
-      const response = await chatWithNotes(chatInput, state.notes, history, signal);
-      
-      if (signal.aborted) return;
-
-      const aiMsg: ChatMessage = { 
-        id: Math.random().toString(36).substring(2, 11),
-        role: 'model', 
-        content: response, 
-        createdAt: new Date().toISOString(),
-        expiresAt: expiryDate
-      };
-      
-      await setDoc(doc(chatsRef, aiMsg.id), aiMsg);
-    } catch (error) {
-      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Chat cancelled');
-      } else {
-        console.error('Chat error:', error);
-        showAlert('오류', '대화 중 오류가 발생했습니다.', 'error');
-      }
-    } finally {
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-      setIsChatting(false);
-    }
-  };
-
-  const handleCreateProject = async (name: string) => {
-    if (!userId) return;
-    const projectRef = doc(collection(db, 'users', userId, 'projects'));
-    try {
-      await setDoc(projectRef, {
-        id: projectRef.id,
-        name,
-        gcm: { entities: {}, variables: {} },
-        lastUpdated: new Date().toISOString()
-      });
-      setCurrentProjectId(projectRef.id);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, projectRef.path);
-    }
-  };
-
-  const handleRenameProject = async (id: string, newName: string) => {
-    if (!userId) return;
-    const projectRef = doc(db, 'users', userId, 'projects', id);
-    try {
-      await updateDoc(projectRef, {
-        name: newName,
-        lastUpdated: new Date().toISOString()
-      });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, projectRef.path);
-    }
-  };
-
-  const handleDeleteProject = async (id: string) => {
-    if (!userId) return;
-
-    const projectName = projects.find(p => p.id === id)?.name || id;
-    
-    setDialogConfig({
-      isOpen: true,
-      title: '프로젝트 삭제',
-      message: `'${projectName}'의 모든 데이터(노트, 채팅 포함)를 영구적으로 삭제하시겠습니까? 이 작업은 복구할 수 없습니다.`,
-      type: 'warning',
-      confirmText: '영구 삭제',
-      cancelText: '취소',
-      onConfirm: async () => {
-        setDialogConfig(null);
-        setProcessStatus({ message: '프로젝트 데이터 삭제 중...' });
-        try {
-          const batch = writeBatch(db);
-          
-          // 1. 해당 프로젝트의 모든 노트 조회 및 삭제 예약
-          const notesRef = collection(db, 'users', userId, 'projects', id, 'notes');
-          const notesSnap = await getDocs(notesRef);
-          notesSnap.forEach((doc) => batch.delete(doc.ref));
-
-          // 2. 해당 프로젝트의 모든 채팅 내역 조회 및 삭제 예약
-          const chatsRef = collection(db, 'users', userId, 'projects', id, 'chats');
-          const chatsSnap = await getDocs(chatsRef);
-          chatsSnap.forEach((doc) => batch.delete(doc.ref));
-
-          // 3. 프로젝트 문서 자체 삭제 예약
-          const projectRef = doc(db, 'users', userId, 'projects', id);
-          batch.delete(projectRef);
-
-          // 원자적으로 한 번에 실행 (최대 500개 제한이 있으나 보통 프로젝트당 500개 미만으로 가정)
-          await batch.commit();
-          
-          // If we deleted the current project, switch to another one
-          if (id === currentProjectId) {
-            const otherProject = projects.find(p => p.id !== id);
-            setCurrentProjectId(otherProject ? otherProject.id : 'default-project');
-          }
-          
-          showAlert('성공', '프로젝트와 모든 하위 데이터가 삭제되었습니다.', 'success');
-        } catch (e) {
-          handleFirestoreError(e, OperationType.DELETE, `project-${id}`);
-        } finally {
-          setProcessStatus(null);
-        }
-      },
-      onCancel: () => setDialogConfig(null)
-    });
-  };
+  const selectedNote = state.notes.find(n => n.id === selectedNoteId);
 
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden transition-colors duration-200">
@@ -1983,6 +286,8 @@ export const Dashboard: React.FC = () => {
             onDeleteNote={handleDeleteNote}
             onDeleteFolder={handleDeleteFolder}
             onDeleteMultiple={handleDeleteMultiple}
+            isOpen={isSidebarOpen}
+            setIsOpen={setIsSidebarOpen}
           />
         )}
       </div>
@@ -2015,6 +320,8 @@ export const Dashboard: React.FC = () => {
               onDeleteFolder={handleDeleteFolder}
               onDeleteMultiple={handleDeleteMultiple}
               onClose={() => setIsMobileMenuOpen(false)}
+              isOpen={isMobileMenuOpen}
+              setIsOpen={setIsMobileMenuOpen}
             />
           </div>
         </div>
@@ -2165,19 +472,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center gap-1">
               {activeSidebarTab === 'chat' && (state.chatMessages?.length || 0) > 0 && (
                 <button 
-                  onClick={async () => {
-                    if (!userId || !currentProjectId) return;
-                    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
-                    const batch = writeBatch(db);
-                    state.chatMessages?.forEach(msg => {
-                      batch.delete(doc(chatsRef, msg.id));
-                    });
-                    try {
-                      await batch.commit();
-                    } catch (e) {
-                      handleFirestoreError(e, OperationType.DELETE, 'batch-chats');
-                    }
-                  }} 
+                  onClick={handleClearChat} 
                   className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md text-slate-500 hover:text-rose-500 transition-colors"
                   title="대화 내역 삭제"
                 >
@@ -2220,11 +515,11 @@ export const Dashboard: React.FC = () => {
                       placeholder="설계할 기능을 입력하세요 (예: 로그인 기능 추가)"
                       value={featureInput}
                       onChange={(e) => setFeatureInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleDecompose()}
+                      onKeyDown={(e) => e.key === 'Enter' && handleDecompose(featureInput, setFeatureInput)}
                       className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
                     />
                     <button
-                      onClick={handleDecompose}
+                      onClick={() => handleDecompose(featureInput, setFeatureInput)}
                       disabled={isDecomposing || !featureInput.trim()}
                       className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
                     >
@@ -2350,7 +645,7 @@ export const Dashboard: React.FC = () => {
                     multiple
                     accept=".md,.txt,.yaml"
                     ref={textFileInputRef}
-                    onChange={handleTextFileUpload}
+                    onChange={(e) => handleTextFileUpload(e, textFileInputRef)}
                     className="hidden"
                   />
                 </div>

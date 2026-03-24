@@ -56,7 +56,7 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
     note.childNoteIds.forEach(childId => {
       const child = notesMap.get(childId);
       if (child && !(child.parentNoteIds || []).includes(note.id)) {
-        child.parentNoteIds = Array.from(new Set([...child.parentNoteIds, note.id]));
+        child.parentNoteIds = Array.from(new Set([...(child.parentNoteIds || []), note.id]));
         addLog(`자식 노드 '${child.title}'(${child.id})의 부모 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
       }
     });
@@ -65,7 +65,7 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
     note.parentNoteIds.forEach(parentId => {
       const parent = notesMap.get(parentId);
       if (parent && !(parent.childNoteIds || []).includes(note.id)) {
-        parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
+        parent.childNoteIds = Array.from(new Set([...(parent.childNoteIds || []), note.id]));
         addLog(`부모 노드 '${parent.title}'(${parent.id})의 자식 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
       }
     });
@@ -74,7 +74,7 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
     note.relatedNoteIds.forEach(relatedId => {
       const related = notesMap.get(relatedId);
       if (related && !(related.relatedNoteIds || []).includes(note.id)) {
-        related.relatedNoteIds = Array.from(new Set([...related.relatedNoteIds, note.id]));
+        related.relatedNoteIds = Array.from(new Set([...(related.relatedNoteIds || []), note.id]));
         addLog(`연관 노드 '${related.title}'(${related.id})의 연관 목록에 '${note.title}'(${note.id}) 추가 (대칭성 복구)`);
       }
     });

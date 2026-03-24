@@ -114,7 +114,11 @@ export const useChatSession = (
   };
 
   const addChatMessage = async (msg: Omit<ChatMessage, 'id' | 'createdAt' | 'expiresAt'>) => {
-    if (!userId || !currentProjectId) return;
+    console.log('Adding chat message:', msg);
+    if (!userId || !currentProjectId) {
+      console.warn('Cannot add chat message: missing userId or currentProjectId', { userId, currentProjectId });
+      return;
+    }
     const now = new Date();
     const expiryDate = new Date();
     expiryDate.setDate(now.getDate() + 30);
@@ -128,6 +132,7 @@ export const useChatSession = (
 
     const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
     await setDoc(doc(chatsRef, newMsg.id), newMsg);
+    console.log('Chat message added successfully:', newMsg.id);
   };
 
   const updateChatMessage = async (id: string, updates: Partial<ChatMessage>) => {

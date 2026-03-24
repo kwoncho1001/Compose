@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Note, AppState } from '../types';
-import { decomposeFeature, optimizeBlueprint, checkConsistency, generateSubModules, suggestNextSteps } from '../services/gemini';
+import { optimizeBlueprint, checkConsistency, generateSubModules, suggestNextSteps } from '../services/gemini';
 import { findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
 import { suggestOrCreateParentsBatch } from '../services/gemini';
 import { syncNoteRelationships } from '../utils/noteMirroring';
@@ -25,63 +25,6 @@ export const useAIAnalysis = (
   githubFiles: { path: string; sha: string }[],
   githubReadme: string
 ) => {
-
-  const handleDecompose = async (featureInput: string, setFeatureInput: React.Dispatch<React.SetStateAction<string>>) => {
-    if (!featureInput.trim()) return;
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    const signal = abortController.signal;
-
-    setIsDecomposing(true);
-    setProcessStatus({ message: 'Analyzing feature request...' });
-    try {
-      const githubContext = state.githubRepo ? {
-        repoName: state.githubRepo,
-        files: githubFiles.map(f => f.path),
-        readme: githubReadme
-      } : undefined;
-
-      const { newNotes, updatedNotes, updatedGcm } = await decomposeFeature(featureInput, state.gcm, state.notes, githubContext, signal);
-      
-      if (signal.aborted) return;
-
-      setProcessStatus({ message: 'Updating project state...' });
-
-      const existingNotesMap = new Map(state.notes.map(n => [n.id, n]));
-      updatedNotes.forEach(un => {
-        existingNotesMap.set(un.id, un);
-      });
-
-      const combinedNotes = [...Array.from(existingNotesMap.values()), ...newNotes];
-      
-      saveNotesToFirestore(combinedNotes);
-      syncProject({ gcm: updatedGcm });
-
-      setState((prev) => ({
-        ...prev,
-        notes: combinedNotes,
-        gcm: updatedGcm,
-      }));
-      setFeatureInput('');
-      
-      if (newNotes.length > 0) {
-        setSelectedNoteId(newNotes[0].id);
-      } else if (updatedNotes.length > 0) {
-        setSelectedNoteId(updatedNotes[0].id);
-      }
-    } catch (error) {
-      if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {
-        console.log('Decompose feature cancelled');
-      } else {
-        console.error('Failed to decompose feature:', error);
-        showAlert('오류', `기능 분해에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
-      }
-    } finally {
-      setIsDecomposing(false);
-      setProcessStatus(null);
-    }
-  };
 
   const handleOptimizeBlueprint = async () => {
     if (state.notes.length === 0) return;
@@ -199,7 +142,7 @@ export const useAIAnalysis = (
         if (parentId) {
           const updatedOrphan = {
             ...orphanNote,
-            parentNoteIds: Array.from(new Set([...orphanNote.parentNoteIds, parentId]))
+            parentNoteIds: Array.from(new Set([...(orphanNote.parentNoteIds || []), parentId]))
           };
           updatedNotes.push(updatedOrphan);
           
@@ -207,7 +150,7 @@ export const useAIAnalysis = (
           if (existingParent) {
             const updatedParent = {
               ...existingParent,
-              childNoteIds: Array.from(new Set([...existingParent.childNoteIds, orphanNote.id]))
+              childNoteIds: Array.from(new Set([...(existingParent.childNoteIds || []), orphanNote.id]))
             };
             const existingInUpdated = updatedNotes.findIndex(un => un.id === parentId);
             if (existingInUpdated !== -1) {
@@ -413,7 +356,6 @@ export const useAIAnalysis = (
   };
 
   return {
-    handleDecompose,
     handleOptimizeBlueprint,
     handleCheckConsistency,
     handleEnforceHierarchy,

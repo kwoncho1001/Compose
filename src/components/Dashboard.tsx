@@ -11,24 +11,24 @@ import { RightSidebar } from './dashboard/RightSidebar';
 export const Dashboard: React.FC = () => {
   const { uiState, actions, data, refs } = useDashboard();
   const {
-    isSidebarOpen, isMobileMenuOpen, activeSidebarTab, selectedNoteId, featureInput,
+    isSidebarOpen, isMobileMenuOpen, activeSidebarTab, selectedNoteId,
     darkMode, isDecomposing, isSyncing, processStatus, nextStepSuggestion,
     rightSidebarOpen, viewMode, isInitialLoading, chatInput, isChatting
   } = uiState;
 
   const {
     setIsSidebarOpen, setIsMobileMenuOpen, setActiveSidebarTab, setSelectedNoteId,
-    setFeatureInput, setDarkMode, setViewMode, setRightSidebarOpen, setChatInput,
+    setDarkMode, setViewMode, setRightSidebarOpen, setChatInput,
     handleCancelProcess, showAlert, handleExport, handleImport, setCurrentProjectId,
     handleCreateProject, handleRenameProject, handleDeleteProject, handleUpdateNote,
     handleDeleteNote, handleDeleteFolder, handleDeleteMultiple, handleSanitizeIntegrity,
     handleTargetedUpdate, handleAddNote, handleAddChildNote, handleTextFileUpload,
-    handleDecompose, handleOptimizeBlueprint, handleCheckConsistency, handleEnforceHierarchy,
+    handleOptimizeBlueprint, handleCheckConsistency, handleEnforceHierarchy,
     handleGenerateSubModules, handleAnalyzeNextSteps, handleSyncGithub, handleWipeSnapshots,
     handleChat, handleClearChat, syncProject
   } = actions;
 
-  const { state, projects, currentProjectId, selectedNote, dialogConfig } = data;
+  const { state, setState, projects, currentProjectId, selectedNote, dialogConfig } = data;
   const { fileInputRef, textFileInputRef, chatEndRef } = refs;
 
   if (isInitialLoading) {
@@ -88,9 +88,7 @@ export const Dashboard: React.FC = () => {
         <RightSidebar 
           activeSidebarTab={activeSidebarTab} setActiveSidebarTab={setActiveSidebarTab}
           handleClearChat={handleClearChat} setRightSidebarOpen={setRightSidebarOpen}
-          featureInput={featureInput} setFeatureInput={setFeatureInput}
-          handleDecompose={handleDecompose} isDecomposing={isDecomposing}
-          state={state} setState={() => {}} syncProject={syncProject}
+          state={state} setState={setState} syncProject={syncProject}
           handleSyncGithub={handleSyncGithub} isSyncing={isSyncing}
           handleWipeSnapshots={handleWipeSnapshots} handleOptimizeBlueprint={handleOptimizeBlueprint}
           handleCheckConsistency={handleCheckConsistency} handleEnforceHierarchy={handleEnforceHierarchy}
@@ -99,7 +97,9 @@ export const Dashboard: React.FC = () => {
           nextStepSuggestion={nextStepSuggestion} chatInput={chatInput}
           setChatInput={setChatInput} handleChat={handleChat}
           isChatting={isChatting} chatEndRef={chatEndRef}
-          onInteractiveAction={(actions as any).onInteractiveAction}
+          onInteractiveAction={actions.onInteractiveAction}
+          onStartSynthesis={actions.startSynthesis}
+          isSynthesizing={actions.isSynthesizing}
         />
       )}
 

@@ -8,6 +8,7 @@ import { safeJsonParse } from "./utils";
  */
 export const refineSearchGoal = async (query: string, signal?: AbortSignal): Promise<string[]> => {
   try {
+    console.log('Refining search goal for:', query);
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
       contents: `
@@ -22,7 +23,10 @@ export const refineSearchGoal = async (query: string, signal?: AbortSignal): Pro
       }
     });
     if (signal?.aborted) throw new Error("Operation cancelled");
-    return safeJsonParse(response.text || "[]") || [query];
+    console.log('Raw response from AI:', response.text);
+    const result = safeJsonParse(response.text || "[]") || [query];
+    console.log('Parsed goals:', result);
+    return result;
   } catch (error) {
     if (error instanceof Error && error.message === "Operation cancelled") throw error;
     console.error('Refining goals failed:', error);

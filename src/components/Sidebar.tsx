@@ -77,15 +77,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   } = useProjectActions(currentProjectId, onCreateProject, onRenameProject);
 
   const handleDeleteSelected = () => {
-    if (window.confirm(`선택한 ${selectedNotes.size}개의 노트를 삭제하시겠습니까?`)) {
-      if (onDeleteMultiple) {
-        onDeleteMultiple(Array.from(selectedNotes));
-      } else {
-        selectedNotes.forEach(id => onDeleteNote(id));
-      }
-      selectedNotes.clear();
-      setIsSelectMode(false);
+    if (onDeleteMultiple) {
+      onDeleteMultiple(Array.from(selectedNotes));
+    } else {
+      selectedNotes.forEach(id => onDeleteNote(id));
     }
+    selectedNotes.clear();
+    setIsSelectMode(false);
   };
 
   return (

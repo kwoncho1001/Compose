@@ -49,7 +49,7 @@ export const syncHierarchy = (
     if (parent && !(parent.childNoteIds || []).includes(newNote.id)) {
       const updatedParent = {
         ...parent,
-        childNoteIds: Array.from(new Set([...parent.childNoteIds, newNote.id]))
+        childNoteIds: Array.from(new Set([...(parent.childNoteIds || []), newNote.id]))
       };
       affectedNotes.set(updatedParent.id, updatedParent);
     }
@@ -60,7 +60,7 @@ export const syncHierarchy = (
     if (parent && (parent.childNoteIds || []).includes(newNote.id)) {
       const updatedParent = {
         ...parent,
-        childNoteIds: parent.childNoteIds.filter(id => id !== newNote.id)
+        childNoteIds: (parent.childNoteIds || []).filter(id => id !== newNote.id)
       };
       affectedNotes.set(updatedParent.id, updatedParent);
     }
@@ -75,7 +75,7 @@ export const syncHierarchy = (
     if (child && !(child.parentNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(childId, { 
         ...child, 
-        parentNoteIds: Array.from(new Set([...child.parentNoteIds, newNote.id])) 
+        parentNoteIds: Array.from(new Set([...(child.parentNoteIds || []), newNote.id])) 
       });
     }
   });
@@ -85,7 +85,7 @@ export const syncHierarchy = (
     if (child && (child.parentNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(childId, { 
         ...child, 
-        parentNoteIds: child.parentNoteIds.filter(id => id !== newNote.id) 
+        parentNoteIds: (child.parentNoteIds || []).filter(id => id !== newNote.id) 
       });
     }
   });
@@ -105,7 +105,7 @@ const syncRelated = (
     if (relNote && !(relNote.relatedNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(relId, {
         ...relNote,
-        relatedNoteIds: Array.from(new Set([...relNote.relatedNoteIds, newNote.id]))
+        relatedNoteIds: Array.from(new Set([...(relNote.relatedNoteIds || []), newNote.id]))
       });
     }
   });
@@ -115,7 +115,7 @@ const syncRelated = (
     if (relNote && (relNote.relatedNoteIds || []).includes(newNote.id)) {
       affectedNotes.set(relId, {
         ...relNote,
-        relatedNoteIds: relNote.relatedNoteIds.filter(id => id !== newNote.id)
+        relatedNoteIds: (relNote.relatedNoteIds || []).filter(id => id !== newNote.id)
       });
     }
   });
@@ -133,19 +133,19 @@ export const cleanupNoteRelationships = (
 
     // 1. 부모 관계 정리
     if ((updatedNote.parentNoteIds || []).includes(deletedNoteId)) {
-      updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => id !== deletedNoteId);
+      updatedNote.parentNoteIds = (updatedNote.parentNoteIds || []).filter(id => id !== deletedNoteId);
       changed = true;
     }
 
     // 2. 자식 관계 정리
     if ((updatedNote.childNoteIds || []).includes(deletedNoteId)) {
-      updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => id !== deletedNoteId);
+      updatedNote.childNoteIds = (updatedNote.childNoteIds || []).filter(id => id !== deletedNoteId);
       changed = true;
     }
 
     // 3. 연관 관계 정리
     if ((updatedNote.relatedNoteIds || []).includes(deletedNoteId)) {
-      updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => id !== deletedNoteId);
+      updatedNote.relatedNoteIds = (updatedNote.relatedNoteIds || []).filter(id => id !== deletedNoteId);
       changed = true;
     }
 

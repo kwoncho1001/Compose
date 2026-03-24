@@ -22,15 +22,15 @@ export const NoteMetadataEditor: React.FC<NoteMetadataEditorProps> = ({
   isSnapshotNote
 }) => {
   const handleParentAdd = (pId: string) => {
-    if (isSnapshotNote || editData.parentNoteIds.includes(pId)) return;
-    const newParentIds = [...editData.parentNoteIds, pId];
+    if (isSnapshotNote || (editData.parentNoteIds || []).includes(pId)) return;
+    const newParentIds = [...(editData.parentNoteIds || []), pId];
     setEditData((prev: any) => ({ ...prev, parentNoteIds: newParentIds }));
     syncChanges({ parentNoteIds: newParentIds });
   };
 
   const handleParentRemove = (pId: string) => {
     if (isSnapshotNote) return;
-    const newParentIds = editData.parentNoteIds.filter((id: string) => id !== pId);
+    const newParentIds = (editData.parentNoteIds || []).filter((id: string) => id !== pId);
     setEditData((prev: any) => ({ ...prev, parentNoteIds: newParentIds }));
     syncChanges({ parentNoteIds: newParentIds });
   };
@@ -42,15 +42,15 @@ export const NoteMetadataEditor: React.FC<NoteMetadataEditorProps> = ({
   };
 
   const handleRelatedAdd = (relId: string) => {
-    if (isSnapshotNote || editData.relatedNoteIds.includes(relId)) return;
-    const newRelIds = [...editData.relatedNoteIds, relId];
+    if (isSnapshotNote || (editData.relatedNoteIds || []).includes(relId)) return;
+    const newRelIds = [...(editData.relatedNoteIds || []), relId];
     setEditData((prev: any) => ({ ...prev, relatedNoteIds: newRelIds }));
     syncChanges({ relatedNoteIds: newRelIds });
   };
 
   const handleRelatedRemove = (relId: string) => {
     if (isSnapshotNote) return;
-    const newRelIds = editData.relatedNoteIds.filter((id: string) => id !== relId);
+    const newRelIds = (editData.relatedNoteIds || []).filter((id: string) => id !== relId);
     setEditData((prev: any) => ({ ...prev, relatedNoteIds: newRelIds }));
     syncChanges({ relatedNoteIds: newRelIds });
   };

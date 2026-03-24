@@ -20,7 +20,6 @@ export const useDashboard = () => {
   const textFileInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const [featureInput, setFeatureInput] = useState('');
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('vibe-architect-theme') === 'dark' || 
@@ -65,6 +64,16 @@ export const useDashboard = () => {
     confirmText?: string;
     cancelText?: string;
   } | null>(null);
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('vibe-architect-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('vibe-architect-theme', 'light');
+    }
+  }, [darkMode]);
 
   const showAlert = useCallback((title: string, message: string, type: 'info' | 'warning' | 'error' | 'success' = 'info') => {
     setDialogConfig({
@@ -124,8 +133,16 @@ export const useDashboard = () => {
     abortControllerRef
   );
 
+  useEffect(() => {
+    if (!isInitialLoading && state.notes.length > 0) {
+      const timer = setTimeout(() => {
+        handleSanitizeIntegrity(true);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isInitialLoading, state.notes.length, handleSanitizeIntegrity]);
+
   const {
-    handleDecompose,
     handleOptimizeBlueprint,
     handleCheckConsistency,
     handleEnforceHierarchy,
@@ -188,21 +205,25 @@ export const useDashboard = () => {
     chatSession.updateChatMessage,
     saveNotesToFirestore,
     setProcessStatus,
-    showAlert
+    showAlert,
+    setActiveSidebarTab
   );
 
-  const handleInteractiveAction = useCallback(async (messageId: string, selected: string[]) => {
+  const handleInteractiveAction = useCallback(async (messageId: string, selected: string[], isSubmit?: boolean) => {
     const msg = state.chatMessages?.find(m => m.id === messageId);
     if (!msg || !msg.interactive) return;
 
-    if (msg.interactive.type === 'goals') {
-      await knowledgeSynthesis.handleGoalSelection(messageId, selected);
-    } else if (msg.interactive.type === 'repos') {
-      await knowledgeSynthesis.handleRepoSelection(messageId, selected);
-    } else if (msg.interactive.type === 'features') {
-      await knowledgeSynthesis.handleFeatureSelection(messageId, selected);
+    if (isSubmit) {
+      if (msg.interactive.type === 'goals') {
+        await knowledgeSynthesis.handleGoalSelection(messageId, selected);
+      }
+    } else {
+      // Just update selection state in Firestore
+      await chatSession.updateChatMessage(messageId, {
+        interactive: { ...msg.interactive, selected }
+      });
     }
-  }, [state.chatMessages, knowledgeSynthesis]);
+  }, [state.chatMessages, knowledgeSynthesis, chatSession]);
 
   const handleChatSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -263,7 +284,6 @@ export const useDashboard = () => {
     isMobileMenuOpen,
     activeSidebarTab,
     selectedNoteId,
-    featureInput,
     darkMode,
     isDecomposing,
     isSyncing,
@@ -284,7 +304,6 @@ export const useDashboard = () => {
     setIsMobileMenuOpen,
     setActiveSidebarTab,
     setSelectedNoteId,
-    setFeatureInput,
     setDarkMode,
     setViewMode,
     setRightSidebarOpen,
@@ -306,7 +325,6 @@ export const useDashboard = () => {
     handleAddNote,
     handleAddChildNote,
     handleTextFileUpload,
-    handleDecompose,
     handleOptimizeBlueprint,
     handleCheckConsistency,
     handleEnforceHierarchy,
@@ -317,14 +335,17 @@ export const useDashboard = () => {
     handleChat: (e?: React.FormEvent) => handleChatSubmit(e || { preventDefault: () => {} } as React.FormEvent),
     handleClearChat: chatSession.handleClearChat,
     onInteractiveAction: handleInteractiveAction,
+    startSynthesis: knowledgeSynthesis.startSynthesis,
+    isSynthesizing: knowledgeSynthesis.isSynthesizing,
     syncProject
   };
 
   const data: DashboardData = {
     state,
+    setState,
     projects,
     currentProjectId,
-    userId,
+    userId: userId || null,
     selectedNote,
     dialogConfig,
     setDialogConfig

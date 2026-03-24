@@ -35,7 +35,7 @@ export const useNoteSync = (
         notesList.push(doc.data() as Note);
       });
       
-      notesList.sort((a, b) => a.title.localeCompare(b.title));
+      notesList.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
       setState(prev => ({ ...prev, notes: notesList }));
       setIsInitialLoading(false);
@@ -62,7 +62,7 @@ export const useNoteSync = (
     try {
       await deleteDoc(noteRef);
     } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
+      handleFirestoreError(e, OperationType.DELETE, noteRef.path);
     }
   };
 
@@ -208,7 +208,7 @@ export const useNoteSync = (
           return (oldNote?.parentNoteIds || []).includes(noteId) && n.parentNoteIds.length === 0;
         });
 
-        const executeDelete = (deleteOrphans: boolean = false) => {
+        const executeDelete = async (deleteOrphans: boolean = false) => {
           const finalAffectedNotes = [...affectedNotes];
           const notesToDelete = [noteId];
           
@@ -220,7 +220,7 @@ export const useNoteSync = (
             saveNotesToFirestore(finalAffectedNotes.filter(n => !notesToDelete.includes(n.id)));
           }
           
-          notesToDelete.forEach(id => deleteNoteFromFirestore(id));
+          await deleteNotesFromFirestore(notesToDelete);
 
           setState(prev => {
             const notesMap = new Map(prev.notes.map(n => [n.id, n]));

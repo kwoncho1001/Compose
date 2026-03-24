@@ -23,6 +23,7 @@ export const updateCodeSnapshot = async (
       content: string;
       summary: string;
       status: string;
+      noteType: 'Task' | 'Feature';
       tags: string[];
     };
     matchedReferenceId?: string;
@@ -58,15 +59,15 @@ ${JSON.stringify(referenceNotes.map(n => ({ id: n.id, title: n.title, summary: n
    - **IMPORTANT**: 응답이 잘리지 않도록 \`codeSnippet\`은 로직의 핵심 부분만 포함하고, 너무 길 경우 생략(...)을 사용하지 말고 로직의 시작과 끝이 명확한 최소 단위로 유지하십시오.
    - 각 로직 유닛에 대해 고유한 **logicHash**를 생성하십시오. 이는 코드 내용이 변하지 않으면 유지되어야 하는 지문입니다.
 
-2. **설계도 매핑 및 자동 Task 생성 (Step 2 & 2-1)**:
-   - 각 유닛은 반드시 대응하는 Task 노드를 가져야 합니다. 추출된 각 로직 유닛이 [기존 설계도 목록] 중 어떤 'Task'를 구현하고 있는지 ID를 매핑하십시오 (\`matchedTaskId\`).
-   - 만약 매핑할 적절한 Task가 없다면, 도메인을 분석하여 즉시 새로운 **말단 Task**를 제안하십시오 (\`suggestedTask\`).
-   - **Task 생성 규칙**: 매핑할 Task가 없을 때 제안하는 suggestedTask는 반드시 다음을 준수합니다.
-     - 상태(Status): 이미 구현된 코드에서 추출되었으므로 무조건 'Done'으로 설정합니다.
-     - 요약(Summary): Reference 파일의 로직을 바탕으로 한 문장 형태의 **'초핵심 기술 요약'**을 작성합니다.
-     - 태그(Tags): 'auto-generated', 'design-leading-code'와 함께 로직의 특성(예: 'Logic', 'API')을 포함합니다.
-   - **전략적 생략**: 상위 계층(Epic, Feature)은 여기서 생성하지 마십시오. 오직 이 로직을 담을 '말단 Task'만 제안하십시오. (계층 구조 보정 시스템이 나중에 부모를 찾아줄 것입니다.)
-   - 제안된 Task의 폴더는 도메인 맥락에 맞게 설정하십시오.
+2. **설계도 매핑 및 자동 부모(Task/Feature) 생성 (Step 2 & 2-1)**:
+   - 각 유닛은 반드시 대응하는 부모(Task 또는 Feature) 노드를 가져야 합니다.
+   - 만약 매핑할 적절한 노드가 없다면, 도메인을 분석하여 새로운 부모 노드를 제안하십시오 (\`suggestedTask\`).
+   - **부모 생성 규칙**:
+     - **noteType 결정**: 해당 로직이 구체적인 '행위'나 '절차'라면 **'Task'**로, 로직 자체가 하나의 독립적인 '기능 단위'나 '명세'를 대표한다면 **'Feature'**로 설정하십시오.
+     - **상태(Status)**: 이미 구현된 코드이므로 무조건 'Done'으로 설정합니다.
+     - **요약(Summary)**: 로직을 바탕으로 한 문장 형태의 '초핵심 기술 요약'을 작성합니다.
+   - **전략적 계층**: 오직 이 로직을 직접 담을 직계 부모(말단 Task 혹은 핵심 Feature)만 제안하십시오.
+   - 제안된 노드의 폴더는 도메인 맥락에 맞게 설정하십시오.
 
 3. **기존 구현체 업데이트 매칭**:
    - 만약 기존 Reference 목록에 이 파일과 관련된 동일한 목적의 구현 노트가 있다면 \`matchedReferenceId\`를 지정하십시오. 
@@ -81,11 +82,12 @@ Return JSON:
       "purpose": "이 로직이 왜 독립적인지, 어떤 설계를 충족하는지 구체적으로 기술",
       "matchedTaskId": "기존_Task_ID",
       "suggestedTask": {
-        "title": "새로 제안하는 Task 제목",
+        "title": "새로 제안하는 노드 제목",
         "folder": "도메인/경로",
-        "content": "Task의 상세 설계 내용",
+        "content": "노드의 상세 설계 내용",
         "summary": "코드를 기반으로 한 1문장 초핵심 요약",
         "status": "Done",
+        "noteType": "Task",
         "tags": ["auto-generated", "design-leading-code", "Logic"]
       },
       "matchedReferenceId": "기존_Reference_ID",
@@ -123,10 +125,11 @@ Return JSON:
                     folder: { type: Type.STRING },
                     content: { type: Type.STRING },
                     summary: { type: Type.STRING, description: "코드를 기반으로 한 1문장 초핵심 요약" },
-                    status: { type: Type.STRING, enum: ['Done'], description: "자동 생성된 Task의 상태는 항상 Done" },
+                    status: { type: Type.STRING, enum: ['Done'], description: "자동 생성된 노드의 상태는 항상 Done" },
+                    noteType: { type: Type.STRING, enum: ['Task', 'Feature'], description: "로직의 성격에 따라 Task 또는 Feature 선택" },
                     tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "auto-generated, design-leading-code 포함" }
                   },
-                  required: ["title", "folder", "content", "summary", "status", "tags"]
+                  required: ["title", "folder", "content", "summary", "status", "noteType", "tags"]
                 },
                 matchedReferenceId: { type: Type.STRING },
                 tags: { type: Type.ARRAY, items: { type: Type.STRING } },

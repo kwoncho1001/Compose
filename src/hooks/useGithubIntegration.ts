@@ -1,11 +1,30 @@
 import { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { Note, AppState } from '../types';
+import { Note, AppState, NoteType } from '../types';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
 import { updateCodeSnapshot, analyzeLogicUnitDeeply } from '../services/gemini';
 import { syncNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
+
+/**
+ * AI가 생성한 콘텐츠에서 JSON 마크다운 블록이나 불필요한 따옴표를 제거하고 순수 텍스트만 추출합니다.
+ */
+const parseAIContent = (rawContent: string): string => {
+  if (!rawContent) return '';
+  try {
+    // 만약 내용 전체가 JSON 문자열로 감싸져 있다면 파싱 시도
+    const parsed = JSON.parse(rawContent);
+    // JSON 객체 내부에 content 필드가 있다면 그것을 반환, 없으면 문자열화하여 반환
+    return typeof parsed === 'object' ? (parsed.content || JSON.stringify(parsed, null, 2)) : String(parsed);
+  } catch (e) {
+    // JSON이 아니면 마크다운 코드 블록(```json ... ```) 제거 및 정리
+    return rawContent
+      .replace(/```json\s?|```/g, '') // 마크다운 태그 제거
+      .replace(/^"|"$/g, '')         // 불필요한 앞뒤 따옴표 제거
+      .trim();
+  }
+};
 
 export const useGithubIntegration = (
   userId: string | undefined,
@@ -117,12 +136,12 @@ export const useGithubIntegration = (
       for (const parentId of (note.parentNoteIds || [])) {
         const parent = notesMap.get(parentId);
         if (parent && !(parent.childNoteIds || []).includes(note.id)) {
-          parent.childNoteIds = Array.from(new Set([...parent.childNoteIds, note.id]));
+          parent.childNoteIds = Array.from(new Set([...(parent.childNoteIds || []), note.id]));
           changed = true;
         }
       }
 
-      for (const childId of note.childNoteIds) {
+      for (const childId of (note.childNoteIds || [])) {
         const child = notesMap.get(childId);
         if (child && !(child.parentNoteIds || []).includes(note.id)) {
           child.parentNoteIds = Array.from(new Set([...(child.parentNoteIds || []), note.id]));
@@ -130,10 +149,10 @@ export const useGithubIntegration = (
         }
       }
 
-      for (const relId of note.relatedNoteIds) {
+      for (const relId of (note.relatedNoteIds || [])) {
         const relNote = notesMap.get(relId);
         if (relNote && !(relNote.relatedNoteIds || []).includes(note.id)) {
-          relNote.relatedNoteIds = Array.from(new Set([...relNote.relatedNoteIds, note.id]));
+          relNote.relatedNoteIds = Array.from(new Set([...(relNote.relatedNoteIds || []), note.id]));
           changed = true;
         }
       }
@@ -339,7 +358,8 @@ export const useGithubIntegration = (
                   folder: unit.suggestedTask.folder,
                   content: unit.suggestedTask.content,
                   summary: unit.suggestedTask.summary,
-                  noteType: 'Task',
+                  // AI가 제안한 noteType을 반영 (없으면 기본값 'Task')
+                  noteType: (unit.suggestedTask.noteType as NoteType) || 'Task',
                   status: (unit.suggestedTask.status as any) || 'Done',
                   priority: 'C',
                   version: '1.0.0',
@@ -454,7 +474,7 @@ export const useGithubIntegration = (
             } else if (existingRef) {
               finalNote = {
                 ...existingRef,
-                content: analysis.content,
+                content: parseAIContent(analysis.content),
                 summary: analysis.summary,
                 importance: analysis.importance,
                 tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
@@ -471,7 +491,7 @@ export const useGithubIntegration = (
                 id: Math.random().toString(36).substr(2, 9),
                 title: unit.title,
                 folder: taskNote.folder,
-                content: analysis.content,
+                content: parseAIContent(analysis.content),
                 summary: analysis.summary,
                 version: '1.0.0',
                 lastUpdated: new Date().toISOString(),

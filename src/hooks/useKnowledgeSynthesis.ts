@@ -3,11 +3,9 @@ import { AppState, ChatMessage, Note } from '../types';
 import { 
   refineSearchGoal, 
   translateQueryForGithub, 
-  summarizeReposShort, 
-  extractRepoFeatures, 
   transpileExternalLogic 
 } from '../services/gemini';
-import { searchGithubRepos, getRepoReadme } from '../services/github';
+import { searchGithubRepos, fetchGithubFileContent } from '../services/github';
 
 export const useKnowledgeSynthesis = (
   currentProjectId: string,
@@ -17,184 +15,155 @@ export const useKnowledgeSynthesis = (
   updateChatMessage: (id: string, updates: Partial<ChatMessage>) => Promise<void>,
   saveNotesToFirestore: (notes: Note[]) => Promise<void>,
   setProcessStatus: (status: { message: string } | null) => void,
-  showAlert: (title: string, message: string, type: 'success' | 'error' | 'info') => void
+  showAlert: (title: string, message: string, type: 'success' | 'error' | 'info') => void,
+  setActiveSidebarTab: (tab: 'tools' | 'chat') => void
 ) => {
+  console.log('useKnowledgeSynthesis initialized with project:', currentProjectId);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [currentGoal, setCurrentGoal] = useState<string>('');
 
+  // 1. [의도 파악] 사용자의 입력을 전문적 목표로 분기 (체크박스 제안)
   const startSynthesis = useCallback(async (intent: string) => {
+    console.log('Starting synthesis with intent:', intent);
     setIsSynthesizing(true);
-    setProcessStatus({ message: '의도 분석 및 구현 목표 생성 중...' });
-
+    setProcessStatus({ message: '사용자 의도 정밀 분석 중...' });
     try {
       const goals = await refineSearchGoal(intent);
+      console.log('Refined goals:', goals);
+      
+      // 채팅 탭으로 자동 전환하여 진행 상황 노출
+      setActiveSidebarTab('chat');
       
       await addChatMessage({
         role: 'model',
-        content: `입력하신 의도를 바탕으로 다음의 구현 목표들을 도출했습니다. 가장 적합한 목표들을 선택해 주세요.`,
-        interactive: {
-          type: 'goals',
-          options: goals,
-          selected: []
-        }
+        content: `설계를 위해 다음 중 가장 핵심적인 구현 목표를 선택해 주세요.`,
+        interactive: { type: 'goals', options: goals, selected: [] }
       });
     } catch (error) {
       console.error('Failed to start synthesis:', error);
-      showAlert('오류', '구현 목표 생성에 실패했습니다.', 'error');
+      showAlert('오류', '의도 분석에 실패했습니다.', 'error');
     } finally {
       setIsSynthesizing(false);
       setProcessStatus(null);
     }
-  }, [addChatMessage, setProcessStatus, showAlert]);
+  }, [addChatMessage, setProcessStatus, showAlert, setActiveSidebarTab]);
 
+  // 2. [자율 체인 실행] 선택 이후부터는 AI가 전권을 가짐
   const handleGoalSelection = useCallback(async (messageId: string, selectedGoals: string[]) => {
     setIsSynthesizing(true);
-    setProcessStatus({ message: 'GitHub 검색 전략 수립 중...' });
-
     try {
       // Mark previous message as completed
       await updateChatMessage(messageId, { 
         interactive: { type: 'goals', options: [], selected: selectedGoals, completed: true } 
       });
 
-      const goalText = selectedGoals.join(', ');
-      setCurrentGoal(goalText);
-      const strategy = await translateQueryForGithub(goalText);
+      // Step A: 검색 전략 수립 및 자율 레포 선별
+      setProcessStatus({ message: '최적의 오픈소스 DNA 탐색 및 자율 선별 중...' });
+      const strategy = await translateQueryForGithub(selectedGoals.join(', '));
       
-      setProcessStatus({ message: 'GitHub 레포지토리 검색 중...' });
-      
-      const allFoundRepos: any[] = [];
-      for (const query of strategy.queries) {
-        const results = await searchGithubRepos(query);
-        allFoundRepos.push(...results);
-      }
+      const repoResults = await searchGithubRepos(strategy.queries[0]);
+      const goldenRepos = repoResults.slice(0, 2); // 상위 2개 자율 확정
 
-      // Deduplicate
-      const uniqueRepos = Array.from(new Map(allFoundRepos.map(r => [r.full_name, r])).values());
-
-      await addChatMessage({
-        role: 'model',
-        content: `선택하신 목표를 위해 다음 레포지토리들을 찾았습니다. 분석에 사용할 "골든 레포"를 선택해 주세요.\n\n**검색 전략:** ${strategy.rationale}`,
-        interactive: {
-          type: 'repos',
-          options: uniqueRepos.map(r => ({
-            full_name: r.full_name,
-            nickname: r.full_name.split('/')[1],
-            summary: r.description,
-            url: r.html_url
-          })),
-          selected: []
+      // Step B: 실질적 소스 코드 DNA 추출 (결함 해결)
+      setProcessStatus({ message: '레포지토리 역공학 및 소스 코드 추출 중...' });
+      const externalCodes: { path: string; content: string }[] = [];
+      for (const repo of goldenRepos) {
+        try {
+          // 주요 파일들 시도
+          const mainFiles = ['src/App.tsx', 'src/main.ts', 'src/index.ts', 'index.js', 'README.md'];
+          for (const file of mainFiles) {
+            try {
+              const content = await fetchGithubFileContent(repo.html_url, file);
+              if (content && content.length > 100) { // 최소 길이 체크
+                externalCodes.push({ path: `${repo.full_name}/${file}`, content });
+                if (file !== 'README.md') break; 
+              }
+            } catch (e) { /* ignore */ }
+          }
+        } catch (e) {
+          console.error(`Failed to fetch content for ${repo.full_name}:`, e);
         }
-      });
-    } catch (error) {
-      console.error('Failed to process goals:', error);
-      showAlert('오류', '레포지토리 검색에 실패했습니다.', 'error');
-    } finally {
-      setIsSynthesizing(false);
-      setProcessStatus(null);
-    }
-  }, [addChatMessage, updateChatMessage, setProcessStatus, showAlert]);
-
-  const handleRepoSelection = useCallback(async (messageId: string, selectedRepoNames: string[]) => {
-    setIsSynthesizing(true);
-    setProcessStatus({ message: '레포지토리 분석 및 지식 추출 중...' });
-
-    try {
-      await updateChatMessage(messageId, { 
-        interactive: { type: 'repos', options: [], selected: selectedRepoNames, completed: true } 
-      });
-
-      const repoContexts: Record<string, string> = {};
-      for (const repoName of selectedRepoNames) {
-        const readme = await getRepoReadme(repoName);
-        repoContexts[repoName] = readme;
       }
 
-      setProcessStatus({ message: '핵심 기능 및 아키텍처 요약 중...' });
-      const summaries = await summarizeReposShort(repoContexts, currentGoal);
-      
-      const allFeatures: string[] = [];
-      for (const [repoName, readme] of Object.entries(repoContexts)) {
-        const features = await extractRepoFeatures(repoName, readme);
-        allFeatures.push(...features);
-      }
-
-      const uniqueFeatures = Array.from(new Set(allFeatures));
-
-      await addChatMessage({
-        role: 'model',
-        content: `선택한 레포지토리들에서 다음 핵심 기능들을 추출했습니다. 우리 프로젝트에 이식할 기능들을 선택해 주세요.`,
-        interactive: {
-          type: 'features',
-          options: uniqueFeatures,
-          selected: []
-        }
-      });
-
-    } catch (error) {
-      console.error('Failed to process repos:', error);
-      showAlert('오류', '레포지토리 분석에 실패했습니다.', 'error');
-    } finally {
-      setIsSynthesizing(false);
-      setProcessStatus(null);
-    }
-  }, [addChatMessage, updateChatMessage, setProcessStatus, showAlert, currentGoal]);
-
-  const handleFeatureSelection = useCallback(async (messageId: string, selectedFeatures: string[]) => {
-    setIsSynthesizing(true);
-    setProcessStatus({ message: '지식 이식 및 설계도 생성 중...' });
-
-    try {
-      await updateChatMessage(messageId, { 
-        interactive: { type: 'features', options: [], selected: selectedFeatures, completed: true } 
-      });
-
-      // In a real scenario, we might fetch actual code snippets for these features.
-      // For now, we'll use the feature names as the "logic" to transpile.
+      // Step C: GCM 기반 정문화 이식 (실제 코드 주입)
+      setProcessStatus({ message: 'GCM 변수 정문화 및 원자적 설계도 생성 중...' });
       const transpilationResults = await transpileExternalLogic(
-        selectedFeatures,
-        [], // No actual code snippets for now
+        selectedGoals,
+        externalCodes, // 실제 추출된 소스 코드 주입
         state.gcm,
         state.notes
       );
 
+      // Step D: 계층 구조 무결성 즉시 반영 (Reference 노출 결함 해결)
       const newNotes: Note[] = transpilationResults.newNotes.map(n => ({
         ...n,
         id: Math.random().toString(36).substr(2, 9),
-        status: 'Planned',
+        status: 'Done', // 이미 구현된 코드이므로 Done으로 설정
         priority: 'C',
         lastUpdated: new Date().toISOString(),
         version: '1.0.0'
       }));
 
-      await saveNotesToFirestore(newNotes);
+      // [Surgical Fix] Reference 노드 생성 시 부모 Task와 즉시 양방향 링크 연결
+      const updatedExistingNotes = [...state.notes];
+      newNotes.forEach(newNote => {
+        const parentId = newNote.parentNoteIds?.[0];
+        if (newNote.noteType === 'Reference' && parentId) {
+          const parentIndex = updatedExistingNotes.findIndex(n => n.id === parentId);
+          if (parentIndex !== -1) {
+            const parent = updatedExistingNotes[parentIndex];
+            if (!parent.childNoteIds?.includes(newNote.id)) {
+              updatedExistingNotes[parentIndex] = {
+                ...parent,
+                childNoteIds: [...(parent.childNoteIds || []), newNote.id]
+              };
+            }
+          } else {
+            // 새로 생성된 노트들 중에서도 부모를 찾을 수 있음
+            const newParentIndex = newNotes.findIndex(n => n.id === parentId);
+            if (newParentIndex !== -1) {
+              const newParent = newNotes[newParentIndex];
+              if (!newParent.childNoteIds?.includes(newNote.id)) {
+                newNotes[newParentIndex] = {
+                  ...newParent,
+                  childNoteIds: [...(newParent.childNoteIds || []), newNote.id]
+                };
+              }
+            }
+          }
+        }
+      });
+
+      const finalNotes = [...updatedExistingNotes, ...newNotes];
       
+      // 모든 변경된 노트 저장
+      const notesToSave = [...newNotes];
+      updatedExistingNotes.forEach((n, i) => {
+        if (n !== state.notes[i]) notesToSave.push(n);
+      });
+      
+      await saveNotesToFirestore(notesToSave);
+
       setState(prev => ({
         ...prev,
-        notes: [...prev.notes, ...newNotes],
+        notes: finalNotes,
         gcm: transpilationResults.updatedGcm
       }));
 
       await addChatMessage({
         role: 'model',
-        content: `선택하신 기능들이 성공적으로 이식되었습니다. ${newNotes.length}개의 새로운 노드가 생성되었으며, GCM이 업데이트되었습니다.`
+        content: `자율 아키텍처 합성이 완료되었습니다. ${newNotes.length}개의 새로운 설계 노드가 생성되었으며, 프로젝트 DNA(GCM)가 업데이트되었습니다.`
       });
 
-      showAlert('성공', '지식 이식 및 설계도 생성이 완료되었습니다.', 'success');
+      showAlert('성공', '자율 아키텍처 합성이 완료되었습니다.', 'success');
+
     } catch (error) {
-      console.error('Failed to transpile features:', error);
-      showAlert('오류', '지식 이식에 실패했습니다.', 'error');
+      console.error('Synthesis chain failed:', error);
+      showAlert('오류', '자율 합성에 실패했습니다.', 'error');
     } finally {
       setIsSynthesizing(false);
       setProcessStatus(null);
     }
   }, [state, setState, addChatMessage, updateChatMessage, saveNotesToFirestore, setProcessStatus, showAlert]);
 
-  return {
-    isSynthesizing,
-    startSynthesis,
-    handleGoalSelection,
-    handleRepoSelection,
-    handleFeatureSelection
-  };
+  return { isSynthesizing, startSynthesis, handleGoalSelection };
 };

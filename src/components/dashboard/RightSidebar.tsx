@@ -6,15 +6,13 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { AppState } from '../../types';
 
+import { SynthesisSidebar } from './SynthesisSidebar';
+
 interface RightSidebarProps {
   activeSidebarTab: 'tools' | 'chat';
   setActiveSidebarTab: (tab: 'tools' | 'chat') => void;
   handleClearChat: () => void;
   setRightSidebarOpen: (open: boolean) => void;
-  featureInput: string;
-  setFeatureInput: (input: string) => void;
-  handleDecompose: (input: string, setInput: React.Dispatch<React.SetStateAction<string>>) => Promise<void>;
-  isDecomposing: boolean;
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
   syncProject: (data: Partial<AppState>) => void;
@@ -34,7 +32,9 @@ interface RightSidebarProps {
   handleChat: () => void;
   isChatting: boolean;
   chatEndRef: React.RefObject<HTMLDivElement>;
-  onInteractiveAction?: (messageId: string, selected: string[]) => void;
+  onInteractiveAction?: (messageId: string, selected: string[], isSubmit?: boolean) => void;
+  onStartSynthesis: (intent: string) => void;
+  isSynthesizing: boolean;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({
@@ -42,10 +42,6 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   setActiveSidebarTab,
   handleClearChat,
   setRightSidebarOpen,
-  featureInput,
-  setFeatureInput,
-  handleDecompose,
-  isDecomposing,
   state,
   setState,
   syncProject,
@@ -65,7 +61,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   handleChat,
   isChatting,
   chatEndRef,
-  onInteractiveAction
+  onInteractiveAction,
+  onStartSynthesis,
+  isSynthesizing
 }) => {
   return (
     <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 h-full flex flex-col shadow-xl z-20 transition-colors duration-200">
@@ -111,27 +109,9 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       <div className="flex-1 overflow-y-auto">
         {activeSidebarTab === 'tools' ? (
           <div className="p-4 space-y-6">
-            {/* 섹션 1: 기능 설계 도구 */}
-            <div className="space-y-3">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">기능 설계</h3>
-              <div className="flex flex-col gap-2">
-                <input
-                  type="text"
-                  placeholder="설계할 기능을 입력하세요 (예: 로그인 기능 추가)"
-                  value={featureInput}
-                  onChange={(e) => setFeatureInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleDecompose(featureInput, setFeatureInput)}
-                  className="w-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 rounded-md px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-                <button
-                  onClick={() => handleDecompose(featureInput, setFeatureInput)}
-                  disabled={isDecomposing || !featureInput.trim()}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
-                >
-                  {isDecomposing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                  기능 분해 실행
-                </button>
-              </div>
+            {/* 섹션 1: 자율 아키텍처 합성 (AAS) */}
+            <div className="pt-2">
+              <SynthesisSidebar onStart={onStartSynthesis} isSynthesizing={isSynthesizing} />
             </div>
 
             {/* 섹션 2: Github 코드 대조 및 통합 */}
@@ -322,7 +302,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                                       const newSelected = e.target.checked 
                                         ? [...(msg.interactive?.selected || []), value]
                                         : (msg.interactive?.selected || []).filter(v => v !== value);
-                                      onInteractiveAction?.(msg.id, newSelected);
+                                      onInteractiveAction?.(msg.id, newSelected, false);
                                     }}
                                     className="mt-1 w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                                   />
@@ -335,7 +315,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                             })}
                           </div>
                           <button
-                            onClick={() => onInteractiveAction?.(msg.id, msg.interactive?.selected || [])}
+                            onClick={() => onInteractiveAction?.(msg.id, msg.interactive?.selected || [], true)}
                             disabled={!msg.interactive.selected.length}
                             className="w-full py-2 bg-indigo-600 text-white rounded-md text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 transition-all shadow-sm"
                           >

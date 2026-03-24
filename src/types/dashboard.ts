@@ -5,7 +5,6 @@ export interface DashboardUIState {
   isMobileMenuOpen: boolean;
   activeSidebarTab: 'tools' | 'chat';
   selectedNoteId: string | null;
-  featureInput: string;
   darkMode: boolean;
   isDecomposing: boolean;
   isSyncing: boolean;
@@ -26,7 +25,6 @@ export interface DashboardActions {
   setIsMobileMenuOpen: (open: boolean) => void;
   setActiveSidebarTab: (tab: 'tools' | 'chat') => void;
   setSelectedNoteId: (id: string | null) => void;
-  setFeatureInput: (input: string) => void;
   setDarkMode: (dark: boolean) => void;
   setViewMode: (mode: 'editor' | 'mindmap') => void;
   setRightSidebarOpen: (open: boolean) => void;
@@ -55,7 +53,6 @@ export interface DashboardActions {
   handleTextFileUpload: (e: React.ChangeEvent<HTMLInputElement>, ref: React.RefObject<HTMLInputElement>) => void;
   
   // AI Actions
-  handleDecompose: (input: string, setInput: React.Dispatch<React.SetStateAction<string>>) => Promise<void>;
   handleOptimizeBlueprint: () => Promise<void>;
   handleCheckConsistency: () => Promise<void>;
   handleEnforceHierarchy: () => Promise<void>;
@@ -69,12 +66,15 @@ export interface DashboardActions {
   // Chat Actions
   handleChat: () => Promise<void>;
   handleClearChat: () => void;
-  onInteractiveAction: (messageId: string, selected: string[]) => Promise<void>;
+  onInteractiveAction: (messageId: string, selected: string[], isSubmit?: boolean) => Promise<void>;
+  startSynthesis: (intent: string) => Promise<void>;
+  isSynthesizing: boolean;
   syncProject: (data: Partial<AppState>) => void;
 }
 
 export interface DashboardData {
   state: AppState;
+  setState: React.Dispatch<React.SetStateAction<AppState>>;
   projects: { id: string; name: string }[];
   currentProjectId: string;
   userId: string | null;

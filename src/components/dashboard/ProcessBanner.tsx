@@ -1,36 +1,45 @@
 import React from 'react';
-import { Loader2, XCircle } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 
 interface ProcessBannerProps {
-  status: { message: string; current?: number; total?: number } | null;
-  onCancel: () => void;
+  processStatus: { message: string; current?: number; total?: number } | null;
+  handleCancelProcess: () => void;
 }
 
-export const ProcessBanner: React.FC<ProcessBannerProps> = ({ status, onCancel }) => {
-  if (!status) return null;
+export const ProcessBanner: React.FC<ProcessBannerProps> = ({
+  processStatus,
+  handleCancelProcess
+}) => {
+  if (!processStatus) return null;
 
   return (
-    <div className="bg-blue-50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-900/50 p-4 flex items-center justify-between animate-in slide-in-from-top">
+    <div className="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
       <div className="flex items-center gap-3">
-        <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
-        <div className="flex flex-col">
-          <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
-            {status.message}
-          </span>
-          {status.total && status.current !== undefined && (
-            <span className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
-              진행률: {status.current} / {status.total} ({Math.round((status.current / status.total) * 100)}%)
-            </span>
-          )}
-        </div>
+        <Loader2 className="w-5 h-5 animate-spin" />
+        <span className="font-medium">{processStatus.message}</span>
       </div>
-      <button
-        onClick={onCancel}
-        className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium"
-      >
-        <XCircle className="w-4 h-4" />
-        취소
-      </button>
+      <div className="flex items-center gap-4">
+        {processStatus.current !== undefined && processStatus.total !== undefined && (
+          <>
+            <div className="text-xs font-mono bg-indigo-500 px-2 py-1 rounded">
+              {processStatus.current} / {processStatus.total} 파일
+            </div>
+            <div className="w-48 h-2 bg-indigo-800 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-white transition-all duration-500" 
+                style={{ width: `${(processStatus.current / processStatus.total) * 100}%` }}
+              />
+            </div>
+          </>
+        )}
+        <button 
+          onClick={handleCancelProcess}
+          className="ml-4 px-3 py-1 bg-white/20 hover:bg-white/30 rounded text-sm font-medium transition-colors flex items-center gap-1"
+        >
+          <X className="w-4 h-4" />
+          중단
+        </button>
+      </div>
     </div>
   );
 };

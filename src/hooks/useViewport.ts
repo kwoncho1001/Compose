@@ -52,6 +52,11 @@ export const useViewport = (initialScale = 1) => {
     isDragging.current = false;
   }, []);
 
+  useEffect(() => {
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseUp]);
+
   const resetViewport = useCallback(() => {
     setViewport({ scale: initialScale, offset: { x: 0, y: 0 } });
   }, [initialScale]);

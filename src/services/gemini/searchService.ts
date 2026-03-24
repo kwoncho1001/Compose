@@ -3,56 +3,44 @@ import { SearchStrategy } from "../../types";
 import { safeJsonParse } from "./utils";
 
 /**
- * [로직 1] refineSearchGoal
- * 키워드를 구체적인 기능 구현 목표로 정제합니다.
+ * [교정] refineSearchGoal
+ * 3가지의 기능 중심 목표로 정제 (Array 구조 복구)
  */
-export const refineSearchGoal = async (keyword: string): Promise<string> => {
-  const prompt = `
-    You are a Senior Efficiency Architect. 
-    Refine the following search keyword into a specific, functional development goal for a GitHub search.
-    Focus on implementation details and core logic.
-    
-    Keyword: "${keyword}"
-    
-    Output only the refined goal sentence.
-  `;
-
+export const refineSearchGoal = async (query: string, signal?: AbortSignal): Promise<string[]> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: prompt,
+      contents: `입력 키워드 "${query}"를 바탕으로 GitHub 검색에 적합한 기능 중심 설명 3가지를 생성하십시오.`,
+      config: {
+        responseMimeType: "application/json",
+        // 기존 규격 복구: JSON Array 반환 강제
+      }
     });
-    return response.text?.trim() || keyword;
+    if (signal?.aborted) throw new Error("Operation cancelled");
+    return safeJsonParse(response.text || "[]") || [query];
   } catch (error) {
-    console.error("Error in refineSearchGoal:", error);
-    return keyword; // 실패 시 원본 키워드 반환 (Functional Integrity)
+    if (error instanceof Error && error.message === "Operation cancelled") throw error;
+    console.error('Refining goals failed:', error);
+    return [query]; // 최소 무결성 유지
   }
 };
 
 /**
- * [로직 2] translateQueryForGithub
- * 정제된 목표를 GitHub 검색 전략으로 변환합니다.
+ * [교정] translateQueryForGithub
+ * googleSearch 도구 활용 로직 복구 (Intelligence Restoration)
  */
-export const translateQueryForGithub = async (goal: string): Promise<SearchStrategy> => {
-  const prompt = `
-    Convert the following development goal into a GitHub search strategy.
-    Goal: "${goal}"
-    
-    Return a JSON object with exactly these fields:
-    - query: The main search string (e.g., "react-dnd treeview")
-    - filters: An array of GitHub search filters (e.g., ["stars:>100", "language:typescript"])
-    - rationale: A brief explanation of why this search is effective.
-    
-    Return ONLY valid JSON.
-  `;
-
+export const translateQueryForGithub = async (query: string, signal?: AbortSignal): Promise<SearchStrategy> => {
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: prompt,
+      contents: `요구사항 "${query}"에 대해 googleSearch 도구를 사용하여 최적의 검색 전략과 유명 레포지토리를 찾으십시오.`,
+      config: {
+        // [핵심] 도구 호출 권한 복구
+        tools: [{ googleSearch: {} }] 
+      }
     });
-    const text = response.text || "";
-    const parsed = safeJsonParse(text);
+    if (signal?.aborted) throw new Error("Operation cancelled");
+    const parsed = safeJsonParse(response.text || "{}");
     
     if (parsed) {
       return parsed as SearchStrategy;
@@ -60,11 +48,11 @@ export const translateQueryForGithub = async (goal: string): Promise<SearchStrat
     
     throw new Error("Invalid JSON format from AI");
   } catch (error) {
-    console.error("Error in translateQueryForGithub:", error);
-    // Fallback: 최소한의 검색이라도 가능하도록 기본값 제공
-    return {
-      query: goal,
-      filters: ["stars:>0"],
+    if (error instanceof Error && error.message === "Operation cancelled") throw error;
+    console.error('Translation failed:', error);
+    return { 
+      queries: [query], 
+      suggestedRepos: [],
       rationale: "Fallback search strategy due to processing error."
     };
   }

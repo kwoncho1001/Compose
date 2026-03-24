@@ -4,6 +4,7 @@ import { FolderTree, Tag, Link2, Layers, Hash, Star, Clock } from 'lucide-react'
 
 interface NoteMetadataEditorProps {
   editData: {
+    id: string;
     folder: string;
     status: NoteStatus;
     priority: NotePriority;

@@ -10,7 +10,7 @@ export const suggestOrCreateParentsBatch = async (
 ): Promise<{
   results: {
     orphanNoteId: string;
-    action: 'link' | 'create' | 'clear';
+    action: 'match' | 'create' | 'clear';
     parentId?: string;
     newNote?: Omit<Note, 'id' | 'status'>;
   }[];
@@ -37,8 +37,8 @@ ${JSON.stringify(existingPotentialParents.map(n => ({ id: n.id, title: n.title, 
    - 유사한 도메인이나 기능을 수행하는 Task들을 하나의 Feature로 묶으십시오.
    - Feature들을 하나의 거대한 Epic(예: 'Core Engine', 'UI Framework')으로 묶으십시오.
 3. **결과 형식**:
-   - 각 orphanNoteId에 대해 action을 'link'(기존 부모 연결), 'create'(새 부모 생성), 'clear'(연결 해제) 중 하나로 지정하십시오.
-   - 'link'인 경우 parentId를 제공하십시오.
+   - 각 orphanNoteId에 대해 action을 'match'(기존 부모 연결), 'create'(새 부모 생성), 'clear'(연결 해제) 중 하나로 지정하십시오.
+   - 'match'인 경우 parentId를 제공하십시오.
    - 'create'인 경우 newNote를 생성하십시오.
    - newNote 생성 시:
      - noteType: 'Epic' 또는 'Feature' 중 적절한 것 선택.
@@ -51,8 +51,8 @@ Return JSON:
   "results": [
     {
       "orphanNoteId": "Task_ID",
-      "action": "link" | "create" | "clear",
-      "parentId": "기존_부모_ID (action이 link일 때)",
+      "action": "match" | "create" | "clear",
+      "parentId": "기존_부모_ID (action이 match일 때)",
       "newNote": { ...Note schema without id/status (action이 create일 때)... }
     }
   ]
@@ -74,7 +74,7 @@ Return JSON:
               type: Type.OBJECT,
               properties: {
                 orphanNoteId: { type: Type.STRING },
-                action: { type: Type.STRING, enum: ['link', 'create', 'clear'] },
+                action: { type: Type.STRING, enum: ['match', 'create', 'clear'] },
                 parentId: { type: Type.STRING },
                 newNote: noteSchema
               },

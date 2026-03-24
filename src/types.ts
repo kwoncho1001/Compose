@@ -77,3 +77,28 @@ export interface ChatMessage {
   createdAt: string;
   expiresAt: any; // Firebase Timestamp
 }
+
+export interface SearchStrategy {
+  query: string;
+  filters: string[];
+  rationale: string;
+}
+
+export interface RepoSummary {
+  nickname: string;
+  summary: string;
+  features: string;
+}
+
+export type RepoSummaries = Record<string, RepoSummary>;
+
+export interface TranspilationResult {
+  newNotes: Note[];
+  updatedGcm: GCM;
+}
+
+export interface ParentSuggestion {
+  action: 'match' | 'create';
+  parentId?: string;
+  newNote?: Partial<Note>;
+}

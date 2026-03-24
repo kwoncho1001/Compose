@@ -12,3 +12,6 @@ export * from './gemini/noteUpdateService';
 export * from './gemini/validationService';
 export * from './gemini/hierarchyService';
 export * from './gemini/assistantService';
+export * from './gemini/searchService';
+export * from './gemini/analyzeService';
+export * from './gemini/transpileService';

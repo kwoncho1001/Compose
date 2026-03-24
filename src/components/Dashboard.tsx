@@ -569,13 +569,16 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const handleEnforceHierarchy = async () => {
-    if (state.notes.length === 0 || !userId || !currentProjectId) return;
+  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false) => {
+    const targetNotes = notesList || state.notes;
+    if (targetNotes.length === 0 || !userId || !currentProjectId) return;
 
-    const invalidNotes = findInvalidHierarchyNotes(state.notes);
+    const invalidNotes = findInvalidHierarchyNotes(targetNotes);
     
     if (invalidNotes.length === 0) {
-      showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
+      if (!silentSuccess) {
+        showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
+      }
       return;
     }
 
@@ -584,16 +587,16 @@ export const Dashboard: React.FC = () => {
     const signal = abortController.signal;
 
     setIsSyncing(true);
-    setProcessStatus({ message: `계층 구조 분석 중 (${invalidNotes.length}개 노드)...` });
+    setProcessStatus({ message: `계층 구조 자동 보정 중 (${invalidNotes.length}개 노드)...` });
 
     try {
-      const { results } = await suggestOrCreateParentsBatch(invalidNotes, state.notes, signal);
+      const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
       
       if (signal.aborted) return;
 
       const newNotes: Note[] = [];
       const updatedNotes: Note[] = [];
-      let currentAllNotes = [...state.notes];
+      let currentAllNotes = [...targetNotes];
 
       // Group by newNote title to avoid creating duplicate parents for the same batch
       const newParentMap = new Map<string, string>(); // title -> id
@@ -665,7 +668,7 @@ export const Dashboard: React.FC = () => {
       if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
 
       const affectedMap = new Map<string, Note>();
-      const finalNotes = [...state.notes, ...newNotes];
+      const finalNotes = [...targetNotes, ...newNotes];
 
       updatedNotes.forEach(un => {
         const affected = syncNoteRelationships(un, finalNotes);
@@ -681,7 +684,9 @@ export const Dashboard: React.FC = () => {
       await saveNotesToFirestore(finalSanitizedNotes);
       setState(prev => ({ ...prev, notes: finalSanitizedNotes }));
       
-      showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
+      if (!silentSuccess) {
+        showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
+      }
     } catch (error) {
       if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Hierarchy optimization cancelled');
@@ -1120,7 +1125,7 @@ export const Dashboard: React.FC = () => {
     });
   };
 
-  const reconcileNoteRelationships = async (allNotes: Note[]) => {
+  const reconcileNoteRelationships = async (allNotes: Note[]): Promise<Note[]> => {
     const notesMap = new Map(allNotes.map(n => [n.id, { ...n }]));
     let changed = false;
 
@@ -1161,7 +1166,9 @@ export const Dashboard: React.FC = () => {
         ...prev,
         notes: updatedNotes
       }));
+      return updatedNotes;
     }
+    return allNotes;
   };
 
   const handleSyncGithub = async () => {
@@ -1576,7 +1583,7 @@ export const Dashboard: React.FC = () => {
 
       // [Post-Processing] Reconcile relationships without AI
       setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
-      await reconcileNoteRelationships(currentNotes);
+      currentNotes = await reconcileNoteRelationships(currentNotes);
       if (signal.aborted) return;
 
       // [로그] SHA 동기화 장부 생성/업데이트
@@ -1616,11 +1623,17 @@ export const Dashboard: React.FC = () => {
       if (signal.aborted) return;
       setNextStepSuggestion(suggestion);
 
+      // Ensure the final currentNotes (including log notes) are saved to state
+      setState(prev => ({ ...prev, notes: currentNotes }));
+
       showAlert(
         'GitHub 최신 코드 반영 완료', 
         `분석 완료: ${updateCount}개 스냅샷 업데이트, ${newCount}개 새 스냅샷 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
         'success'
       );
+
+      // [Post-Processing] Automatically enforce hierarchy after sync
+      await handleEnforceHierarchy(currentNotes, true);
 
     } catch (error) {
       if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
@@ -2304,7 +2317,7 @@ export const Dashboard: React.FC = () => {
                       {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />} 일관성 검증
                     </button>
                     <button
-                      onClick={handleEnforceHierarchy}
+                      onClick={() => handleEnforceHierarchy()}
                       disabled={isSyncing || state.notes.length === 0}
                       className="col-span-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 py-2.5 rounded-md text-[10px] font-bold border border-amber-100 dark:border-amber-800/50 flex items-center justify-center gap-1.5 shadow-sm"
                     >

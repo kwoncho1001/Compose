@@ -210,15 +210,20 @@ export const Dashboard: React.FC = () => {
 
   const saveNotesToFirestore = async (notes: Note[]) => {
     if (!userId || !currentProjectId) return;
-    const batch = writeBatch(db);
-    notes.forEach(note => {
-      const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-      batch.set(noteRef, cleanObject(note));
-    });
-    try {
-      await batch.commit();
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
+    
+    const chunkSize = 500;
+    for (let i = 0; i < notes.length; i += chunkSize) {
+      const chunk = notes.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      chunk.forEach(note => {
+        const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
+        batch.set(noteRef, cleanObject(note));
+      });
+      try {
+        await batch.commit();
+      } catch (e) {
+        handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
+      }
     }
   };
 
@@ -1317,14 +1322,24 @@ export const Dashboard: React.FC = () => {
           const touchedNotes: Note[] = [];
           const processedNoteIds: string[] = [];
           
-          // 1. Process logicUnits (Significant Logic Units)
+          // 1단계: 식별 및 사전 할당 (Identification & Pre-allocation)
+          const suggestedTaskMap = new Map<string, string>(); // title -> taskId
+          const seenLogicHashes = new Set<string>(); // Prevent duplicate logicHashes in same file
+          const unitsToAnalyze: any[] = [];
+          const unitsToSkip: any[] = [];
+          
           for (const unit of logicUnits) {
             if (signal.aborted) return;
             
-            // Step 2: Determine Task ID
+            // Skip if we already processed this logicHash in this file
+            if (seenLogicHashes.has(unit.logicHash)) {
+              console.log(`Skipping duplicate logicHash ${unit.logicHash} in same file.`);
+              continue;
+            }
+            seenLogicHashes.add(unit.logicHash);
+            
             let taskId = unit.matchedTaskId;
             if (!taskId && unit.suggestedTask) {
-              // Check if we already created this task in this sync session or if it exists
               const existingTask = currentNotes.find(n => 
                 n.title === unit.suggestedTask!.title && 
                 (n.noteType === 'Task' || n.noteType === 'Feature')
@@ -1332,9 +1347,14 @@ export const Dashboard: React.FC = () => {
               
               if (existingTask) {
                 taskId = existingTask.id;
+              } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
+                taskId = suggestedTaskMap.get(unit.suggestedTask.title);
               } else {
                 // Create new leaf Task
                 const newTaskId = Math.random().toString(36).substr(2, 9);
+                suggestedTaskMap.set(unit.suggestedTask.title, newTaskId);
+                taskId = newTaskId;
+                
                 const newTask: Note = {
                   id: newTaskId,
                   title: unit.suggestedTask.title,
@@ -1355,50 +1375,91 @@ export const Dashboard: React.FC = () => {
                 currentNotes.push(newTask);
                 touchedNotes.push(newTask);
                 newCount++;
-                taskId = newTaskId;
               }
             }
 
             if (!taskId) continue;
 
-            // Step 3: Deep-Dive Analysis
-            const taskNote = currentNotes.find(n => n.id === taskId);
-            if (!taskNote) continue;
-
-            // Smart Sync: Check if logicHash matches existing note globally
             const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
-            
             const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
                                 currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
 
-            let analysis;
             if (globallyExistingRef) {
-              // logicHash matches globally, skip deep-dive and reuse
               console.log(`Skipping deep-dive for ${unit.title} as logicHash matches globally.`);
-              analysis = {
-                content: globallyExistingRef.content,
-                summary: globallyExistingRef.summary,
-                importance: globallyExistingRef.importance,
-                tags: globallyExistingRef.tags
-              };
+              unitsToSkip.push({ 
+                unit, 
+                taskId, 
+                analysis: { 
+                  content: globallyExistingRef.content, 
+                  summary: globallyExistingRef.summary, 
+                  importance: globallyExistingRef.importance, 
+                  tags: globallyExistingRef.tags 
+                }, 
+                globallyExistingRef, 
+                existingRef 
+              });
             } else if (existingRef && existingRef.logicHash === unit.logicHash) {
-              // logicHash matches local file, skip deep-dive
               console.log(`Skipping deep-dive for ${unit.title} as logicHash matches locally.`);
-              analysis = {
-                content: existingRef.content,
-                summary: existingRef.summary,
-                importance: existingRef.importance,
-                tags: existingRef.tags
-              };
+              unitsToSkip.push({ 
+                unit, 
+                taskId, 
+                analysis: { 
+                  content: existingRef.content, 
+                  summary: existingRef.summary, 
+                  importance: existingRef.importance, 
+                  tags: existingRef.tags 
+                }, 
+                globallyExistingRef, 
+                existingRef 
+              });
             } else {
-              setProcessStatus(prev => ({ ...prev!, message: `로직 심층 분석 중: ${unit.title}` }));
-              analysis = await analyzeLogicUnitDeeply(unit.title, unit.codeSnippet, {
-                title: taskNote.title,
-                content: taskNote.content,
-                summary: taskNote.summary
-              }, signal);
-              if (signal.aborted) return;
+              unitsToAnalyze.push({ unit, taskId, globallyExistingRef, existingRef });
             }
+          }
+
+          // 2단계: 범위가 제한된 병렬 분석 (Scoped Parallel Execution)
+          const analyzedResults: any[] = [];
+          const chunkSize = 5; // AI Rate Limit 방지를 위한 청크 사이즈
+          
+          for (let j = 0; j < unitsToAnalyze.length; j += chunkSize) {
+            if (signal.aborted) return;
+            const chunk = unitsToAnalyze.slice(j, j + chunkSize);
+            
+            setProcessStatus(prev => ({ 
+              ...prev!, 
+              message: `로직 심층 분석 중 (${j + 1}~${Math.min(j + chunkSize, unitsToAnalyze.length)}/${unitsToAnalyze.length})...` 
+            }));
+            
+            const promises = chunk.map(async (item) => {
+              const taskNote = currentNotes.find(n => n.id === item.taskId);
+              if (!taskNote) return null;
+              
+              try {
+                const analysis = await analyzeLogicUnitDeeply(item.unit.title, item.unit.codeSnippet, {
+                  title: taskNote.title,
+                  content: taskNote.content,
+                  summary: taskNote.summary
+                }, signal);
+                return { ...item, analysis };
+              } catch (e) {
+                console.error(`Failed to analyze logic unit ${item.unit.title}:`, e);
+                return null;
+              }
+            });
+            
+            const results = await Promise.all(promises);
+            analyzedResults.push(...results.filter(r => r !== null));
+          }
+
+          if (signal.aborted) return;
+
+          // 3단계: 원자적 통합 (Atomic Merge)
+          const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
+          
+          for (const item of allProcessedUnits) {
+            const { unit, taskId, analysis, globallyExistingRef, existingRef } = item;
+            const taskNote = currentNotes.find(n => n.id === taskId);
+            if (!taskNote) continue;
 
             // Create or Update Reference note
             let finalNote: Note;

@@ -3,6 +3,7 @@ import { Note } from "../../types";
 import { MODEL_NAME, systemInstruction, noteSchema } from "./config";
 import { generateContentWithRetry } from "./core";
 import { safeJsonParse, sanitizeNotes } from "./utils";
+import { extractLogicUnits } from "../../utils/codeParser";
 
 export const analyzeLogicUnitDeeply = async (
   unitTitle: string,
@@ -74,6 +75,72 @@ Return JSON:
     importance: result?.importance || 3,
     tags: result?.tags || []
   };
+};
+
+export const syncFileAtomically = async (
+  fileName: string,
+  fileContent: string,
+  existingNotes: Note[],
+  signal?: AbortSignal
+): Promise<Omit<Note, 'id' | 'status'>[]> => {
+  // 1. 물리적 로직 단위 추출
+  const physicalUnits = extractLogicUnits(fileContent, fileName);
+  
+  const results: Omit<Note, 'id' | 'status'>[] = [];
+  
+  // 2. 파일 자체를 나타내는 부모 Reference 노드 생성
+  const fileNote: Omit<Note, 'id' | 'status'> = {
+    title: fileName,
+    folder: `시스템/${fileName}`,
+    content: `# ${fileName}\n\n이 파일은 다음 원자적 로직 단위들로 구성되어 있습니다.`,
+    summary: `${fileName} 파일의 전체 구조 및 로직 요약`,
+    version: '1.0.0',
+    lastUpdated: new Date().toISOString(),
+    importance: 3,
+    priority: 'B',
+    tags: ['github-sync', 'file-reference'],
+    noteType: 'Reference',
+    parentNoteIds: [],
+    relatedNoteIds: [],
+    childNoteIds: []
+  };
+  results.push(fileNote);
+
+  // 3. 각 단위별 심층 분석 및 노드화
+  for (const unit of physicalUnits) {
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    // 파일 전체의 맥락을 일부 제공하여 분석 품질 향상
+    const analysis = await analyzeLogicUnitDeeply(
+      unit.title,
+      unit.codeSnippet,
+      { 
+        title: fileName, 
+        content: fileContent.slice(0, 2000), // 파일 상단 컨텍스트
+        summary: "GitHub 동기화 파이프라인에서 추출된 원자적 로직 단위입니다." 
+      },
+      signal
+    );
+
+    const unitNote: Omit<Note, 'id' | 'status'> = {
+      title: unit.title,
+      folder: `시스템/${fileName}`,
+      content: analysis.content,
+      summary: analysis.summary,
+      version: '1.0.0',
+      lastUpdated: new Date().toISOString(),
+      importance: analysis.importance,
+      priority: analysis.importance >= 4 ? 'A' : 'B',
+      tags: [...analysis.tags, 'atomic-unit', 'github-sync'],
+      noteType: 'Task', // 원자적 단위는 구현 단위인 Task로 취급
+      parentNoteIds: [], // 나중에 hook에서 연결
+      relatedNoteIds: [],
+      childNoteIds: []
+    };
+    results.push(unitNote);
+  }
+
+  return results;
 };
 
 export const generateNoteFromCode = async (

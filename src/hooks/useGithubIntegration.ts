@@ -4,9 +4,9 @@ import { Note, AppState, NoteType } from '../types';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
 import { updateCodeSnapshot, analyzeLogicUnitDeeply } from '../services/gemini';
+import { extractLogicUnits } from '../utils/codeParser';
 import { syncNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
-import { normalizeHierarchy } from '../utils/hierarchyValidator';
 
 /**
  * AI가 생성한 콘텐츠에서 JSON 마크다운 블록이나 불필요한 따옴표를 제거하고 순수 텍스트만 추출합니다.
@@ -171,6 +171,47 @@ export const useGithubIntegration = (
     return allNotes;
   };
 
+  const normalizeHierarchy = (promotedNote: Note, allNotes: Note[]): Note[] => {
+    const touchedNotes: Note[] = [];
+    
+    // 1. Feature로 승격되었는데 부모도 Feature인 경우 (규칙 위반)
+    if (promotedNote.noteType === 'Feature') {
+      const parentIds = [...(promotedNote.parentNoteIds || [])];
+      let hierarchyChanged = false;
+
+      parentIds.forEach(parentId => {
+        const parentNote = allNotes.find(n => n.id === parentId);
+        if (parentNote && parentNote.noteType === 'Feature') {
+          // 2. 부모 Feature의 부모(Epic)를 찾음
+          const grandParentEpic = allNotes.find(n => 
+            (parentNote.parentNoteIds || []).includes(n.id) && n.noteType === 'Epic'
+          );
+
+          if (grandParentEpic) {
+            // 3. 재배치: 부모의 부모(Epic)에게 직접 붙임
+            promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+            promotedNote.parentNoteIds.push(grandParentEpic.id);
+            
+            // 4. 기존 부모와의 관계는 '연관됨'으로 유지
+            promotedNote.relatedNoteIds = Array.from(new Set([...(promotedNote.relatedNoteIds || []), parentId]));
+            
+            hierarchyChanged = true;
+          } else {
+            // 만약 조부모 Epic이 없다면? 이 Feature는 최상위 Feature로서 독립시킴 (부모 연결 해제)
+            promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+            hierarchyChanged = true;
+          }
+        }
+      });
+
+      if (hierarchyChanged) {
+        touchedNotes.push(promotedNote);
+      }
+    }
+    
+    return touchedNotes;
+  };
+
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
@@ -318,11 +359,43 @@ export const useGithubIntegration = (
           const existingFileNotes = snapshotNotes.filter(n => n.githubLink === file.path || n.originPath === file.path);
           const oldNoteIds = existingFileNotes.map(n => n.id);
 
-          const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, signal);
+          const physicalUnits = extractLogicUnits(content, file.path);
+          const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, physicalUnits, signal);
           if (signal.aborted) return;
           const touchedNotes: Note[] = [];
           const processedNoteIds: string[] = [];
           
+          // 1. 파일 레퍼런스 노드 생성/확보 (Atomic Units의 부모 역할)
+          let fileNote = currentNotes.find(n => n.noteType === 'Reference' && n.githubLink === file.path);
+          const nowStr = new Date().toISOString();
+          if (!fileNote) {
+            const newFileNoteId = Math.random().toString(36).substr(2, 9);
+            fileNote = {
+              id: newFileNoteId,
+              title: file.path.split('/').pop() || file.path,
+              folder: `시스템/파일/${file.path.split('/').slice(0, -1).join('/') || 'Root'}`,
+              content: `# ${file.path}\n\n이 파일은 GitHub에서 동기화되었습니다.`,
+              summary: `${file.path} 파일의 전체 구조 및 로직 요약`,
+              status: 'Done',
+              version: '1.0.0',
+              lastUpdated: nowStr,
+              importance: 3,
+              priority: 'B',
+              tags: ['github-sync', 'file-reference'],
+              noteType: 'Reference',
+              githubLink: file.path,
+              parentNoteIds: [], 
+              childNoteIds: [],
+              relatedNoteIds: []
+            };
+            currentNotes.push(fileNote);
+            touchedNotes.push(fileNote);
+          } else {
+            fileNote = { ...fileNote, lastUpdated: nowStr };
+            currentNotes = currentNotes.map(n => n.id === fileNote!.id ? fileNote! : n);
+            if (!touchedNotes.some(tn => tn.id === fileNote!.id)) touchedNotes.push(fileNote);
+          }
+
           const suggestedTaskMap = new Map<string, string>();
           const seenLogicHashes = new Set<string>();
           const unitsToAnalyze: any[] = [];
@@ -485,8 +558,8 @@ export const useGithubIntegration = (
             if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
               finalNote = {
                 ...globallyExistingRef,
-                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId])),
-                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
+                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId, fileNote.id])),
+                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId, fileNote.id])),
                 lastUpdated: new Date().toISOString()
               };
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
@@ -499,7 +572,7 @@ export const useGithubIntegration = (
                 importance: analysis.importance,
                 tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
                 lastUpdated: new Date().toISOString(),
-                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId])),
+                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId, fileNote.id])),
                 folder: taskNote.folder,
                 logicHash: unit.logicHash,
                 originPath: file.path
@@ -520,7 +593,7 @@ export const useGithubIntegration = (
                 status: 'Done',
                 priority: 'C',
                 childNoteIds: [],
-                parentNoteIds: [taskId],
+                parentNoteIds: [taskId, fileNote.id],
                 noteType: 'Reference',
                 relatedNoteIds: [taskId],
                 githubLink: file.path,
@@ -528,7 +601,14 @@ export const useGithubIntegration = (
                 logicHash: unit.logicHash
               };
               currentNotes.push(finalNote);
+              touchedNotes.push(finalNote);
               newCount++;
+            }
+
+            // 파일 노드를 해당 Task의 자식으로도 연결 (계층 구조 강화)
+            if (fileNote && !fileNote.parentNoteIds.includes(taskId)) {
+              fileNote.parentNoteIds.push(taskId);
+              if (!touchedNotes.some(tn => tn.id === fileNote!.id)) touchedNotes.push(fileNote);
             }
 
             // [개선 2] 루프 내에서 즉각적인 양방향 링크 (Bi-directional Link)

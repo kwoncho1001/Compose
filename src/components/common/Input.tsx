@@ -36,6 +36,7 @@ export const Input: React.FC<InputProps> = ({
             ${className}
           `}
           {...props}
+          value={props.value ?? ''}
         />
       </div>
       {error && (

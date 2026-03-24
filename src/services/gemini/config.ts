@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 
 export const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-export const MODEL_NAME = "gemini-3-flash-preview";
+export const MODEL_NAME = "gemini-2.5-flash";
 
 export const systemInstruction = `
 당신은 Vibe-Architect 프로젝트의 핵심 설계자이자 코드를 유전자 단위로 분해하는 분석가입니다. 모든 작업은 '도메인 중심 트리 구조'를 따릅니다.

@@ -15,7 +15,7 @@ export const NoteSummarySection: React.FC<NoteSummarySectionProps> = ({
         요약
       </h2>
       <textarea
-        value={summary}
+        value={summary || ''}
         onChange={(e) => !isSnapshotNote && onSummaryChange(e.target.value)}
         onBlur={onSummaryBlur}
         readOnly={isSnapshotNote}

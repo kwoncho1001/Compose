@@ -121,7 +121,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 <input
                   type="text"
                   placeholder="Github Repo URL"
-                  value={state.githubRepo}
+                  value={state.githubRepo || ''}
                   onChange={(e) => {
                     const val = e.target.value;
                     setState(prev => ({ ...prev, githubRepo: val }));
@@ -132,7 +132,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                 <input
                   type="password"
                   placeholder="Github PAT (선택 사항)"
-                  value={state.githubToken}
+                  value={state.githubToken || ''}
                   onChange={(e) => {
                     const val = e.target.value;
                     setState(prev => ({ ...prev, githubToken: val }));

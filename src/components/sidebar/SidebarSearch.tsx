@@ -14,7 +14,7 @@ export const SidebarSearch: React.FC<SidebarSearchProps> = ({ searchTerm, setSea
         <input
           type="text"
           placeholder="노트 검색..."
-          value={searchTerm}
+          value={searchTerm || ''}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="w-full bg-slate-800/50 border border-slate-700 rounded-md pl-9 pr-8 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors"
         />

@@ -22,7 +22,7 @@ export const MetadataFieldGroup: React.FC<MetadataFieldGroupProps> = ({
       <MetadataRow label="폴더" icon={<FolderTree className="w-3 h-3" />}>
         <input
           type="text"
-          value={editData.folder}
+          value={editData.folder || ''}
           onChange={(e) => !isSnapshotNote && setEditData({ ...editData, folder: e.target.value })}
           onBlur={() => syncChanges({ folder: editData.folder })}
           readOnly={isSnapshotNote}
@@ -33,7 +33,7 @@ export const MetadataFieldGroup: React.FC<MetadataFieldGroupProps> = ({
 
       <MetadataRow label="상태" icon={<Activity className="w-3 h-3" />}>
         <select
-          value={editData.status}
+          value={editData.status || 'Planned'}
           onChange={(e) => handleStatusChange(e.target.value as NoteStatus)}
           className="w-full bg-transparent text-xs focus:outline-none text-slate-700 dark:text-slate-300"
         >
@@ -48,7 +48,7 @@ export const MetadataFieldGroup: React.FC<MetadataFieldGroupProps> = ({
 
       <MetadataRow label="우선순위" icon={<Star className="w-3 h-3" />}>
         <select
-          value={editData.priority}
+          value={editData.priority || 'C'}
           onChange={(e) => {
             const val = e.target.value as NotePriority;
             setEditData((prev: any) => ({ ...prev, priority: val }));
@@ -66,7 +66,7 @@ export const MetadataFieldGroup: React.FC<MetadataFieldGroupProps> = ({
       <MetadataRow label="버전" icon={<Hash className="w-3 h-3" />}>
         <input
           type="text"
-          value={editData.version}
+          value={editData.version || '1.0.0'}
           readOnly
           className="w-full bg-transparent text-xs text-slate-500"
         />

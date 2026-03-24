@@ -170,6 +170,47 @@ export const useGithubIntegration = (
     return allNotes;
   };
 
+  const normalizeHierarchy = (promotedNote: Note, allNotes: Note[]): Note[] => {
+    const touchedNotes: Note[] = [];
+    
+    // 1. Feature로 승격되었는데 부모도 Feature인 경우 (규칙 위반)
+    if (promotedNote.noteType === 'Feature') {
+      const parentIds = [...(promotedNote.parentNoteIds || [])];
+      let hierarchyChanged = false;
+
+      parentIds.forEach(parentId => {
+        const parentNote = allNotes.find(n => n.id === parentId);
+        if (parentNote && parentNote.noteType === 'Feature') {
+          // 2. 부모 Feature의 부모(Epic)를 찾음
+          const grandParentEpic = allNotes.find(n => 
+            (parentNote.parentNoteIds || []).includes(n.id) && n.noteType === 'Epic'
+          );
+
+          if (grandParentEpic) {
+            // 3. 재배치: 부모의 부모(Epic)에게 직접 붙임
+            promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+            promotedNote.parentNoteIds.push(grandParentEpic.id);
+            
+            // 4. 기존 부모와의 관계는 '연관됨'으로 유지
+            promotedNote.relatedNoteIds = Array.from(new Set([...(promotedNote.relatedNoteIds || []), parentId]));
+            
+            hierarchyChanged = true;
+          } else {
+            // 만약 조부모 Epic이 없다면? 이 Feature는 최상위 Feature로서 독립시킴 (부모 연결 해제)
+            promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+            hierarchyChanged = true;
+          }
+        }
+      });
+
+      if (hierarchyChanged) {
+        touchedNotes.push(promotedNote);
+      }
+    }
+    
+    return touchedNotes;
+  };
+
   const handleSyncGithub = async () => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
@@ -345,6 +386,25 @@ export const useGithubIntegration = (
               
               if (existingTask) {
                 taskId = existingTask.id;
+                
+                // AI가 Feature를 제안했는데 기존이 Task라면 승격 처리
+                if (existingTask.noteType === 'Task' && unit.suggestedTask!.noteType === 'Feature') {
+                  const promotedNote = { ...existingTask, noteType: 'Feature' as NoteType };
+                  
+                  // 계층 정상화 로직 적용
+                  const hierarchyFixes = normalizeHierarchy(promotedNote, currentNotes);
+                  
+                  currentNotes = currentNotes.map(n => n.id === promotedNote.id ? promotedNote : n);
+                  touchedNotes.push(promotedNote);
+                  
+                  // 정상화 과정에서 수정된 다른 노트들도 반영
+                  hierarchyFixes.forEach(fix => {
+                    if (fix.id !== promotedNote.id) {
+                      currentNotes = currentNotes.map(n => n.id === fix.id ? fix : n);
+                      if (!touchedNotes.some(tn => tn.id === fix.id)) touchedNotes.push(fix);
+                    }
+                  });
+                }
               } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
                 taskId = suggestedTaskMap.get(unit.suggestedTask.title);
               } else {

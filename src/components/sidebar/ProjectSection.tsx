@@ -84,7 +84,7 @@ export const ProjectSection: React.FC<ProjectSectionProps> = ({
             autoFocus
             className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
             placeholder="Vault name..."
-            value={newProjectName}
+            value={newProjectName || ''}
             onChange={e => setNewProjectName(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') handleCreateProject();
@@ -98,7 +98,7 @@ export const ProjectSection: React.FC<ProjectSectionProps> = ({
             autoFocus
             className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
             placeholder="Rename vault..."
-            value={renameProjectName}
+            value={renameProjectName || ''}
             onChange={e => setRenameProjectName(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') handleRenameProject();
@@ -109,7 +109,7 @@ export const ProjectSection: React.FC<ProjectSectionProps> = ({
       ) : (
         <select 
           className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
-          value={currentProjectId}
+          value={currentProjectId || ''}
           onChange={e => onSelectProject(e.target.value)}
         >
           {projects.map(p => (

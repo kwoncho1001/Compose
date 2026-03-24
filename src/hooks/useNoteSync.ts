@@ -164,14 +164,24 @@ export const useNoteSync = (
 
   const handleAddChildNote = (parentId: string) => {
     const parentNote = state.notes.find(n => n.id === parentId);
+    if (!parentNote) return;
+
     let childNoteType: NoteType = 'Task';
-    if (parentNote?.noteType === 'Epic') childNoteType = 'Feature';
-    else if (parentNote?.noteType === 'Feature') childNoteType = 'Task';
+    
+    if (parentNote.noteType === 'Task') {
+      // 1. 부모가 Task인데 자식이 생기려 한다면, 부모를 Feature로 승격
+      handleUpdateNote({ ...parentNote, noteType: 'Feature' });
+      childNoteType = 'Task';
+    } else if (parentNote.noteType === 'Epic') {
+      childNoteType = 'Feature';
+    } else if (parentNote.noteType === 'Feature') {
+      childNoteType = 'Task';
+    }
 
     const newNote: Note = {
       id: Math.random().toString(36).substr(2, 9),
       title: '새 하위 노트',
-      folder: parentNote ? parentNote.folder : '미분류',
+      folder: parentNote.folder,
       content: '# 새 하위 노트\n여기에 세부 기능을 설명하세요.',
       summary: '세부 기능 설명',
       status: 'Planned',

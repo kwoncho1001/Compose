@@ -17,7 +17,7 @@ export const NoteHeader: React.FC<NoteEditorHeaderProps> = ({
       <div className="mb-4">
         <input
           type="text"
-          value={title}
+          value={title || ''}
           onChange={(e) => !isSnapshotNote && onTitleChange(e.target.value)}
           onBlur={onTitleBlur}
           readOnly={isSnapshotNote}

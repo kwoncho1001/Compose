@@ -50,9 +50,9 @@ Return JSON:
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  const result = safeJsonParse(response.text || '{"suggestion": "", "updatedStatuses": {}}');
+  const result = safeJsonParse(response.text || "{}", { suggestion: "", updatedStatuses: {} });
   return {
-    suggestion: result.suggestion || "제안할 내용이 없습니다.",
-    updatedStatuses: result.updatedStatuses || {},
+    suggestion: result?.suggestion || "제안할 내용이 없습니다.",
+    updatedStatuses: result?.updatedStatuses || {},
   };
 };

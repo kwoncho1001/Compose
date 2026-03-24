@@ -433,9 +433,13 @@ export const useGithubIntegration = (
           const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
           
           for (const item of allProcessedUnits) {
+            if (signal.aborted) return;
             const { unit, taskId, analysis, globallyExistingRef, existingRef } = item;
-            const taskNote = currentNotes.find(n => n.id === taskId);
-            if (!taskNote) continue;
+            
+            // [개선 1] 부모 Task를 currentNotes에서 즉시 확보
+            const taskNoteIndex = currentNotes.findIndex(n => n.id === taskId);
+            if (taskNoteIndex === -1) continue;
+            const taskNote = { ...currentNotes[taskNoteIndex] };
 
             let finalNote: Note;
             if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
@@ -486,6 +490,18 @@ export const useGithubIntegration = (
               currentNotes.push(finalNote);
               newCount++;
             }
+
+            // [개선 2] 루프 내에서 즉각적인 양방향 링크 (Bi-directional Link)
+            if (!taskNote.childNoteIds.includes(finalNote.id)) {
+              taskNote.childNoteIds = [...taskNote.childNoteIds, finalNote.id];
+              currentNotes[taskNoteIndex] = taskNote; // currentNotes 배열 업데이트
+              
+              // 부모 Task도 변경되었으므로 DB 저장 대상에 포함
+              if (!touchedNotes.some(n => n.id === taskNote.id)) {
+                touchedNotes.push(taskNote);
+              }
+            }
+
             touchedNotes.push(finalNote);
             processedNoteIds.push(finalNote.id);
           }

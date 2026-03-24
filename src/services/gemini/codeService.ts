@@ -67,7 +67,13 @@ Return JSON:
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  return safeJsonParse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}", { content: "", summary: "", importance: 3, tags: [] });
+  return {
+    content: result?.content || "분석 실패",
+    summary: result?.summary || "분석 실패",
+    importance: result?.importance || 3,
+    tags: result?.tags || []
+  };
 };
 
 export const generateNoteFromCode = async (
@@ -118,7 +124,10 @@ Return JSON matching the Note schema (title, folder, content, summary, importanc
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
-    const result = safeJsonParse(response.text || "{}");
+    const result = safeJsonParse(response.text || "{}", {});
+    if (!result || Object.keys(result).length === 0) {
+      throw new Error("Empty AI response");
+    }
     const sanitized = sanitizeNotes([result], existingNotes);
     return sanitized[0];
   } catch (err) {

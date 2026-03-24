@@ -99,12 +99,12 @@ Return JSON:
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  const result = safeJsonParse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}", { updatedNotes: [], deletedNoteIds: [], updatedGcm: gcm, report: "" });
   return {
-    updatedNotes: result.updatedNotes || [],
-    deletedNoteIds: result.deletedNoteIds || [],
-    updatedGcm: result.updatedGcm || gcm,
-    report: result.report || "최적화가 완료되었습니다."
+    updatedNotes: result?.updatedNotes || [],
+    deletedNoteIds: result?.deletedNoteIds || [],
+    updatedGcm: result?.updatedGcm || gcm,
+    report: result?.report || "최적화가 완료되었습니다."
   };
 };
 
@@ -173,10 +173,10 @@ Return JSON:
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
-    const result = safeJsonParse(response.text || '{"report": "분석 실패", "inconsistentNotes": []}');
+    const result = safeJsonParse(response.text || "{}", { report: "분석 실패", inconsistentNotes: [] });
     return {
-      report: result.report || "분석 결과가 없습니다.",
-      inconsistentNotes: result.inconsistentNotes || [],
+      report: result?.report || "분석 결과가 없습니다.",
+      inconsistentNotes: result?.inconsistentNotes || [],
     };
   } catch (err) {
     if (err?.message === "Operation cancelled" || err === "Operation cancelled") throw err;

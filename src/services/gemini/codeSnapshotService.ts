@@ -51,11 +51,12 @@ ${JSON.stringify(referenceNotes.map(n => ({ id: n.id, title: n.title, summary: n
 
 [작업 지침]
 1. **원자적 로직 추출 (Step 1)**: 
-   - 파일의 물리적 구조를 무시하고, 5~10줄 내외의 **원자적 로직 단위(Atomic Logic Unit)**를 추출하십시오. (최대 15개의 가장 핵심적인 로직 유닛만 추출하여 응답 크기를 제한하십시오.)
+   - 파일의 물리적 구조를 무시하고, 5~10줄 내외의 **원자적 로직 단위(Atomic Logic Unit)**를 추출하십시오. (최대 10개의 가장 핵심적인 로직 유닛만 추출하여 응답 크기를 제한하십시오.)
    - 단순한 함수 나열이 아니라, 정규표현식, 조건부 분기, 에러 처리 등 독립적인 의도를 가진 블록을 모두 별도의 단위로 분해하십시오.
    - 각 유닛에 대해 해당 로직을 포함하는 **정확한 코드 조각(codeSnippet)**을 추출하십시오.
-   - **CRITICAL**: \`codeSnippet\`은 [분석 대상 코드]에 있는 그대로 **정확히 일치하게** 추출해야 합니다. 템플릿 리터럴을 평가하거나, [기존 설계도 목록] 등의 외부 데이터를 주입하거나, 코드를 임의로 수정해서는 절대 안 됩니다. (예: 코드에 \`\${JSON.stringify(...)}\`가 있다면 그 문자열 그대로 추출하십시오.)
-   - 각 로직 유닛에 대해 고유한 **logicHash**를 생성하십시오. 이는 코드 내용이 변하지 않으면 유지되어야 하는 지문입니다. (예: 코드의 핵심 구조를 기반으로 한 짧은 해시 문자열)
+   - **CRITICAL**: \`codeSnippet\`은 [분석 대상 코드]에 있는 그대로 **정확히 일치하게** 추출해야 합니다. 템플릿 리터럴을 평가하거나, [기존 설계도 목록] 등의 외부 데이터를 주입하거나, 코드를 임의로 수정해서는 절대 안 됩니다.
+   - **IMPORTANT**: 응답이 잘리지 않도록 \`codeSnippet\`은 로직의 핵심 부분만 포함하고, 너무 길 경우 생략(...)을 사용하지 말고 로직의 시작과 끝이 명확한 최소 단위로 유지하십시오.
+   - 각 로직 유닛에 대해 고유한 **logicHash**를 생성하십시오. 이는 코드 내용이 변하지 않으면 유지되어야 하는 지문입니다.
 
 2. **설계도 매핑 및 자동 Task 생성 (Step 2 & 2-1)**:
    - 각 유닛은 반드시 대응하는 Task 노드를 가져야 합니다. 추출된 각 로직 유닛이 [기존 설계도 목록] 중 어떤 'Task'를 구현하고 있는지 ID를 매핑하십시오 (\`matchedTaskId\`).
@@ -142,8 +143,8 @@ Return JSON:
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
-  const result = safeJsonParse(response.text || "{}");
+  const result = safeJsonParse(response.text || "{}", { logicUnits: [] });
   return {
-    logicUnits: result.logicUnits || []
+    logicUnits: result?.logicUnits || []
   };
 };

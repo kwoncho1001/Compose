@@ -11,8 +11,27 @@ export const suggestOrCreateParent = async (
   candidateParents: Note[],
   signal?: AbortSignal
 ): Promise<ParentSuggestion> => {
-  // 1. 계층 규칙 정의 (Task -> Feature, Feature -> Epic)
-  const requiredParentType: NoteType = orphanNote.noteType === 'Task' ? 'Feature' : 'Epic';
+  // 1. 계층 규칙 정의
+  let requiredParentType: NoteType;
+  let ruleDescription: string;
+
+  switch (orphanNote.noteType) {
+    case 'Reference':
+      requiredParentType = 'Task'; // Reference can be under Task or Feature, but Task is more specific
+      ruleDescription = '부모는 반드시 Task 또는 Feature 타입이어야 함';
+      break;
+    case 'Task':
+      requiredParentType = 'Feature';
+      ruleDescription = '부모는 반드시 Feature 타입이어야 함';
+      break;
+    case 'Feature':
+      requiredParentType = 'Epic';
+      ruleDescription = '부모는 반드시 Epic 타입이어야 함';
+      break;
+    default:
+      requiredParentType = 'Epic';
+      ruleDescription = '최상위 계층으로 Epic을 권장함';
+  }
   
   // 2. 원본 프롬프트 유지
   const prompt = `
@@ -25,7 +44,10 @@ export const suggestOrCreateParent = async (
     - 내용: ${orphanNote.content.slice(0, 1000)}
 
     [규칙]
-    - ${orphanNote.noteType === 'Task' ? '부모는 반드시 Feature 타입이어야 함' : '부모는 반드시 Epic 타입이어야 함'}
+    - ${ruleDescription}
+    - Epic: 오직 Feature만 자식으로 가질 수 있음.
+    - Feature: 오직 Task 또는 Reference만 자식으로 가질 수 있음.
+    - Task: 오직 Reference만 자식으로 가질 수 있음.
 
     [기존 부모 후보 (이미 존재하는 ${requiredParentType} 목록)]
     ${candidateParents.length > 0 

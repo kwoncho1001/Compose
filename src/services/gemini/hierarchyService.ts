@@ -11,50 +11,50 @@ export const suggestOrCreateParentsBatch = async (
 ): Promise<{
   results: {
     orphanNoteId: string;
-    action: 'match' | 'create' | 'clear';
+    action: 'match' | 'create' | 'clear' | 'update';
     parentId?: string;
     newNote?: Omit<Note, 'id' | 'status'>;
+    updatedNote?: Partial<Note>;
   }[];
 }> => {
   const existingPotentialParents = allNotes.filter(n => n.noteType !== 'Task');
   
   const prompt = `
 당신은 '시스템 아키텍처 계층 구조 설계자'입니다. 
-제공된 '말단 Task' 노트들을 분석하여, 이들을 논리적으로 그룹화할 수 있는 **상위 계층(Epic 또는 Feature)**을 제안하거나 생성하십시오.
+제공된 '규칙 위반' 또는 '고아' 노트들을 분석하여, 계층 구조를 보정하십시오.
 
-[분석 대상 말단 Task들]
-${JSON.stringify(childNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })))}
+[분석 대상 노트들]
+${JSON.stringify(childNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary, noteType: n.noteType, parentNoteIds: n.parentNoteIds })))}
 
-[기존 상위 계층 목록 (재사용 가능)]
-${JSON.stringify(existingPotentialParents.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, folder: n.folder, summary: n.summary })))}
+[기존 전체 노트 목록 (재사용 가능)]
+${JSON.stringify(allNotes.map(n => ({ id: n.id, title: n.title, noteType: n.noteType, folder: n.folder, summary: n.summary })))}
 
 [작업 지침]
-1. **계층 구조 원칙 (Epic -> Feature -> Task)**:
-   - 각 Task는 반드시 하나의 Feature에 속해야 합니다.
-   - 각 Feature는 반드시 하나의 Epic에 속해야 합니다.
-   - 만약 적절한 부모가 [기존 상위 계층 목록]에 없다면, 새로운 부모 노드를 **생성(create)**하십시오.
-   - 만약 해당 Task가 어떤 상위 계층에도 속하지 않아야 한다면(매우 드문 경우), **연결 해제(clear)**를 선택하십시오.
-2. **논리적 그룹화**:
-   - 유사한 도메인이나 기능을 수행하는 Task들을 하나의 Feature로 묶으십시오.
-   - Feature들을 하나의 거대한 Epic(예: 'Core Engine', 'UI Framework')으로 묶으십시오.
+1. **엄격한 계층 규칙 (Epic -> Feature -> Task -> Reference)**:
+   - **Epic**: 오직 Feature만 자식으로 가질 수 있음.
+   - **Feature**: 오직 Task 또는 Reference만 자식으로 가질 수 있음 (Feature/Epic 자식 금지).
+   - **Task**: 오직 Reference만 자식으로 가질 수 있음 (Feature/Epic/Task 자식 금지).
+   - **공통**: Epic이 아닌 모든 노드는 반드시 적절한 상위 부모가 있어야 함 (고아 금지).
+2. **Sibling Promotion 및 타입 전이 (Type Transition)**:
+   - 만약 Task 아래에 또 다른 Task가 있다면, 부모 Task를 Feature로 승격시키거나, 자식 Task를 Feature로 승격시켜 부모의 부모(Epic)에게 연결하십시오.
+   - 만약 Feature 아래에 또 다른 Feature가 있다면, 자식 Feature를 부모의 부모(Epic)에게 직접 연결하여 형제(Sibling) 관계로 만드십시오.
 3. **결과 형식**:
-   - 각 orphanNoteId에 대해 action을 'match'(기존 부모 연결), 'create'(새 부모 생성), 'clear'(연결 해제) 중 하나로 지정하십시오.
-   - 'match'인 경우 parentId를 제공하십시오.
-   - 'create'인 경우 newNote를 생성하십시오.
-   - newNote 생성 시:
-     - noteType: 'Epic' 또는 'Feature' 중 적절한 것 선택.
-     - folder: 도메인 기반 경로 (예: '서비스/인증')
-     - content: 시스템 지침의 4개 섹션 구조 준수.
-     - summary: 1문장 핵심 요약.
+   - 각 orphanNoteId에 대해 action을 지정하십시오:
+     - 'match': 기존 부모 연결 (parentId 필수)
+     - 'create': 새 부모 생성 (newNote 필수)
+     - 'update': 현재 노드의 속성(예: noteType) 변경 (updatedNote 필수)
+     - 'clear': 모든 부모 연결 해제
+   - 'update' 사용 시, \`updatedNote\`에 변경할 필드(예: { "noteType": "Feature" })를 포함하십시오.
 
 Return JSON:
 {
   "results": [
     {
-      "orphanNoteId": "Task_ID",
-      "action": "match" | "create" | "clear",
-      "parentId": "기존_부모_ID (action이 match일 때)",
-      "newNote": { ...Note schema without id/status (action이 create일 때)... }
+      "orphanNoteId": "Note_ID",
+      "action": "match" | "create" | "update" | "clear",
+      "parentId": "기존_부모_ID",
+      "newNote": { ... },
+      "updatedNote": { "noteType": "Feature", "parentNoteIds": ["..."] }
     }
   ]
 }
@@ -75,9 +75,18 @@ Return JSON:
               type: Type.OBJECT,
               properties: {
                 orphanNoteId: { type: Type.STRING },
-                action: { type: Type.STRING, enum: ['match', 'create', 'clear'] },
+                action: { type: Type.STRING, enum: ['match', 'create', 'update', 'clear'] },
                 parentId: { type: Type.STRING },
-                newNote: noteSchema
+                newNote: noteSchema,
+                updatedNote: {
+                  type: Type.OBJECT,
+                  properties: {
+                    noteType: { type: Type.STRING, enum: ['Epic', 'Feature', 'Task', 'Reference'] },
+                    parentNoteIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    title: { type: Type.STRING },
+                    summary: { type: Type.STRING }
+                  }
+                }
               },
               required: ["orphanNoteId", "action"]
             }

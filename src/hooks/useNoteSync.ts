@@ -4,7 +4,7 @@ import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch } from 'fire
 import { Note, AppState, NoteType } from '../types';
 import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
-import { wouldCreateCycle } from '../utils/hierarchyValidator';
+import { wouldCreateCycle, normalizeHierarchy } from '../utils/hierarchyValidator';
 
 import { updateSingleNote } from '../services/gemini';
 
@@ -167,10 +167,11 @@ export const useNoteSync = (
     if (!parentNote) return;
 
     let childNoteType: NoteType = 'Task';
+    let updatedParent: Note | null = null;
     
     if (parentNote.noteType === 'Task') {
       // 1. 부모가 Task인데 자식이 생기려 한다면, 부모를 Feature로 승격
-      handleUpdateNote({ ...parentNote, noteType: 'Feature' });
+      updatedParent = { ...parentNote, noteType: 'Feature' };
       childNoteType = 'Task';
     } else if (parentNote.noteType === 'Epic') {
       childNoteType = 'Feature';
@@ -178,8 +179,9 @@ export const useNoteSync = (
       childNoteType = 'Task';
     }
 
+    const newNoteId = Math.random().toString(36).substr(2, 9);
     const newNote: Note = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: newNoteId,
       title: '새 하위 노트',
       folder: parentNote.folder,
       content: '# 새 하위 노트\n여기에 세부 기능을 설명하세요.',
@@ -195,7 +197,15 @@ export const useNoteSync = (
       parentNoteIds: [parentId],
       noteType: childNoteType
     };
-    handleUpdateNote(newNote);
+
+    let notesToUpdate = [newNote];
+    if (updatedParent) {
+      // 승격된 부모의 계층 정상화 (Sibling Promotion)
+      const hierarchyFixes = normalizeHierarchy(updatedParent, state.notes);
+      notesToUpdate = [...notesToUpdate, updatedParent, ...hierarchyFixes.filter(f => f.id !== updatedParent!.id)];
+    }
+
+    saveNotesToFirestore(notesToUpdate);
     setSelectedNoteId(newNote.id);
   };
 

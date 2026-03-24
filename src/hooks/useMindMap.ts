@@ -1,55 +1,68 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Note } from '../types';
-import { MindMapNode, MindMapLink, ViewMode, MindMapDimensions } from '../types/mindmap';
-import { calculateLayout } from '../utils/layout-engine';
+import { ViewMode } from '../types/mindmap';
 
 export const useMindMap = (notes: Note[], onSelectNote: (id: string) => void) => {
-  const [viewMode, setViewMode] = useState<ViewMode>('TOTAL');
-  const [selectedDomain, setSelectedDomain] = useState<string | undefined>(undefined);
-  const [dimensions, setDimensions] = useState<MindMapDimensions>({
-    width: window.innerWidth,
-    height: window.innerHeight,
-    nodeSpacing: 100,
-  });
+  const [viewMode, setViewMode] = useState<ViewMode>('DOMAIN');
+  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
+  const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
 
-  // Handle window resize
   useEffect(() => {
-    const handleResize = () => {
-      setDimensions({
-        width: window.innerWidth,
-        height: window.innerHeight,
-        nodeSpacing: 100,
-      });
-    };
+    const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Calculate graph data using the layout engine
   const graphData = useMemo(() => {
-    return calculateLayout(notes, dimensions, viewMode, selectedDomain);
-  }, [notes, dimensions, viewMode, selectedDomain]);
+    const nodes: any[] = [];
+    const links: any[] = [];
+    
+    // 1. 도메인(폴더) 노드 생성
+    const domains = Array.from(new Set(notes.map(n => n.folder || '미분류')));
+    domains.forEach(d => {
+      nodes.push({ id: `domain-${d}`, name: d, type: 'domain', val: 15 });
+    });
+
+    // 2. 노트 노드 및 관계 생성
+    notes.forEach(note => {
+      nodes.push({
+        id: note.id,
+        name: note.title,
+        type: 'note',
+        noteType: note.noteType,
+        status: note.status,
+        val: note.noteType === 'Epic' ? 12 : note.noteType === 'Feature' ? 8 : 5
+      });
+
+      // 도메인 연결
+      links.push({ source: `domain-${note.folder || '미분류'}`, target: note.id, type: 'hierarchy' });
+
+      // 부모-자식 관계
+      (note.childNoteIds || []).forEach(childId => {
+        links.push({ source: note.id, target: childId, type: 'hierarchy' });
+      });
+
+      // 연관 관계
+      (note.relatedNoteIds || []).forEach(relId => {
+        links.push({ source: note.id, target: relId, type: 'related' });
+      });
+    });
+
+    return { nodes, links };
+  }, [notes]);
 
   const toggleViewMode = useCallback(() => {
-    setViewMode((prev) => (prev === 'TOTAL' ? 'DOMAIN' : 'TOTAL'));
+    setViewMode(prev => prev === 'TOTAL' ? 'DOMAIN' : 'TOTAL');
   }, []);
 
-  const handleNodeClick = useCallback((node: MindMapNode) => {
+  const handleNodeClick = useCallback((node: any) => {
     if (node.type === 'domain') {
-      setSelectedDomain(node.text);
+      setSelectedDomain(node.name);
       setViewMode('TOTAL');
-    } else if (node.noteId) {
-      onSelectNote(node.noteId);
+    } else {
+      onSelectNote(node.id);
     }
   }, [onSelectNote]);
 
-  return {
-    viewMode,
-    selectedDomain,
-    dimensions,
-    graphData,
-    toggleViewMode,
-    handleNodeClick,
-    setSelectedDomain,
-  };
+  return { viewMode, dimensions, graphData, toggleViewMode, handleNodeClick, setSelectedDomain };
 };

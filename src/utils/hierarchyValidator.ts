@@ -30,7 +30,7 @@ export const wouldCreateCycle = (noteId: string, newParentId: string, allNotes: 
 
 /**
  * 타입 기반 부모 허용 여부 체크
- * Epic > Feature > Task 계층 구조를 강제합니다.
+ * Epic > Feature > Task > Reference 계층 구조를 강제합니다.
  */
 export const isValidRelationship = (parentId: string, childId: string, allNotes: Note[]): boolean => {
   const parent = allNotes.find(n => n.id === parentId);
@@ -41,44 +41,62 @@ export const isValidRelationship = (parentId: string, childId: string, allNotes:
   // Epic은 어떤 부모도 가질 수 없음
   if (child.noteType === 'Epic') return false;
 
+  // Epic의 자식은 반드시 Feature이어야 함
+  if (parent.noteType === 'Epic' && child.noteType !== 'Feature') return false;
+
   // Feature의 부모는 반드시 Epic이어야 함
   if (child.noteType === 'Feature' && parent.noteType !== 'Epic') return false;
+
+  // Feature의 자식은 Task 또는 Reference이어야 함
+  if (parent.noteType === 'Feature' && (child.noteType !== 'Task' && child.noteType !== 'Reference')) return false;
 
   // Task의 부모는 반드시 Feature이어야 함
   if (child.noteType === 'Task' && parent.noteType !== 'Feature') return false;
 
-  // Reference는 자유로운 편이지만, Feature/Task의 자식이 될 수는 있음 (반대는 X)
-  if (parent.noteType === 'Reference' && (child.noteType === 'Feature' || child.noteType === 'Task')) return false;
+  // Task의 자식은 반드시 Reference이어야 함
+  if (parent.noteType === 'Task' && child.noteType !== 'Reference') return false;
+
+  // Reference의 부모는 Feature 또는 Task 또는 Reference이어야 함
+  if (child.noteType === 'Reference' && (parent.noteType !== 'Feature' && parent.noteType !== 'Task' && parent.noteType !== 'Reference')) return false;
 
   return true;
 };
 
 /**
  * "불완전한 노드(Incomplete)" 또는 "규칙 위반 노드" 탐색
+ * 사용자 정의 엄격한 규칙:
+ * 1. Epic: 오직 Feature만 자식으로 가질 수 있음.
+ * 2. Feature: 오직 Task 또는 Reference만 자식으로 가질 수 있음.
+ * 3. Task: 오직 Reference만 자식으로 가질 수 있음.
+ * 4. 공통: Epic이 아닌 모든 노드는 반드시 적절한 상위 부모가 있어야 함 (고아 금지).
  */
 export const findInvalidHierarchyNotes = (allNotes: Note[]): Note[] => {
   return allNotes.filter(note => {
-    if (note.noteType === 'Epic') {
-      // Epic인데 부모가 있는 경우 (Epic은 최상위여야 함)
+    // 1. 고아 체크 (Epic 제외)
+    if (note.noteType !== 'Epic') {
       const hasParent = note.parentNoteIds && note.parentNoteIds.length > 0;
-      return hasParent;
-    }
-    if (note.noteType === 'Feature') {
-      // Feature인데 부모(Epic)가 없는 경우
-      const hasEpicParent = (note.parentNoteIds || []).some(pid => {
-        const p = allNotes.find(n => n.id === pid);
-        return p?.noteType === 'Epic';
+      if (!hasParent) return true;
+
+      // 적절한 타입의 부모가 하나라도 있는지 체크
+      const hasValidParent = (note.parentNoteIds || []).some(pid => {
+        return isValidRelationship(pid, note.id, allNotes);
       });
-      return !hasEpicParent;
+      if (!hasValidParent) return true;
     }
-    if (note.noteType === 'Task') {
-      // Task인데 부모(Feature)가 없는 경우
-      const hasFeatureParent = (note.parentNoteIds || []).some(pid => {
-        const p = allNotes.find(n => n.id === pid);
-        return p?.noteType === 'Feature';
+
+    // 2. 자식 타입 체크
+    if (note.childNoteIds && note.childNoteIds.length > 0) {
+      const hasInvalidChild = note.childNoteIds.some(cid => {
+        return !isValidRelationship(note.id, cid, allNotes);
       });
-      return !hasFeatureParent;
+      if (hasInvalidChild) return true;
     }
+
+    // 3. Epic이 부모를 가지는 경우
+    if (note.noteType === 'Epic' && note.parentNoteIds && note.parentNoteIds.length > 0) {
+      return true;
+    }
+
     return false;
   });
 };

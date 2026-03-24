@@ -77,117 +77,142 @@ export const useAIAnalysis = (
   };
 
   const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false) => {
-    const targetNotes = notesList || state.notes;
+    let targetNotes = notesList || state.notes;
     if (targetNotes.length === 0 || !userId || !currentProjectId) return;
 
-    const invalidNotes = findInvalidHierarchyNotes(targetNotes);
-    
-    if (invalidNotes.length === 0) {
-      if (!silentSuccess) {
-        showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
-      }
-      return;
-    }
+    let iteration = 0;
+    const maxIterations = 5;
+    let hasChanges = false;
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const signal = abortController.signal;
 
     setIsSyncing(true);
-    setProcessStatus({ message: `계층 구조 자동 보정 중 (${invalidNotes.length}개 노드)...` });
 
     try {
-      const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
-      
-      if (signal.aborted) return;
-
-      const newNotes: Note[] = [];
-      const updatedNotes: Note[] = [];
-      let currentAllNotes = [...targetNotes];
-
-      const newParentMap = new Map<string, string>();
-
-      for (const res of results) {
-        const orphanNote = invalidNotes.find(n => n.id === res.orphanNoteId);
-        if (!orphanNote) continue;
-
-        let parentId = res.parentId;
-
-        if (res.action === 'clear') {
-          const updatedOrphan = {
-            ...orphanNote,
-            parentNoteIds: []
-          };
-          updatedNotes.push(updatedOrphan);
-          continue;
-        }
-
-        if (res.action === 'create' && res.newNote) {
-          const parentTitle = res.newNote.title || 'New Parent';
-          if (newParentMap.has(parentTitle)) {
-            parentId = newParentMap.get(parentTitle);
-          } else {
-            const newParent: Note = {
-              ...res.newNote,
-              id: Math.random().toString(36).substr(2, 9),
-              childNoteIds: [orphanNote.id],
-            } as Note;
-            newNotes.push(newParent);
-            currentAllNotes.push(newParent);
-            parentId = newParent.id;
-            newParentMap.set(parentTitle, parentId!);
+      while (iteration < maxIterations) {
+        const invalidNotes = findInvalidHierarchyNotes(targetNotes);
+        
+        if (invalidNotes.length === 0) {
+          if (iteration === 0 && !silentSuccess) {
+            showAlert('알림', '모든 노드가 계층 구조 규칙을 잘 따르고 있습니다.', 'success');
           }
+          break;
         }
 
-        if (parentId) {
-          const updatedOrphan = {
-            ...orphanNote,
-            parentNoteIds: Array.from(new Set([...(orphanNote.parentNoteIds || []), parentId]))
-          };
-          updatedNotes.push(updatedOrphan);
-          
-          const existingParent = currentAllNotes.find(n => n.id === parentId);
-          if (existingParent) {
-            const updatedParent = {
-              ...existingParent,
-              childNoteIds: Array.from(new Set([...(existingParent.childNoteIds || []), orphanNote.id]))
+        iteration++;
+        setProcessStatus({ message: `계층 구조 자동 보정 중 (반복 ${iteration}/${maxIterations}, ${invalidNotes.length}개 노드)...` });
+
+        const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
+        
+        if (signal.aborted) return;
+
+        const newNotes: Note[] = [];
+        const updatedNotes: Note[] = [];
+        let currentAllNotes = [...targetNotes];
+
+        const newParentMap = new Map<string, string>();
+
+        for (const res of results) {
+          const orphanNote = invalidNotes.find(n => n.id === res.orphanNoteId);
+          if (!orphanNote) continue;
+
+          let parentId = res.parentId;
+
+          if (res.action === 'update' && res.updatedNote) {
+            const updatedOrphan = {
+              ...orphanNote,
+              ...res.updatedNote
             };
-            const existingInUpdated = updatedNotes.findIndex(un => un.id === parentId);
-            if (existingInUpdated !== -1) {
-              updatedNotes[existingInUpdated] = updatedParent;
+            updatedNotes.push(updatedOrphan);
+            continue;
+          }
+
+          if (res.action === 'clear') {
+            const updatedOrphan = {
+              ...orphanNote,
+              parentNoteIds: []
+            };
+            updatedNotes.push(updatedOrphan);
+            continue;
+          }
+
+          if (res.action === 'create' && res.newNote) {
+            const parentTitle = res.newNote.title || 'New Parent';
+            if (newParentMap.has(parentTitle)) {
+              parentId = newParentMap.get(parentTitle);
             } else {
-              const existingInNew = newNotes.findIndex(nn => nn.id === parentId);
-              if (existingInNew !== -1) {
-                newNotes[existingInNew] = updatedParent;
+              const newParent: Note = {
+                ...res.newNote,
+                id: Math.random().toString(36).substr(2, 9),
+                childNoteIds: [orphanNote.id],
+              } as Note;
+              newNotes.push(newParent);
+              currentAllNotes.push(newParent);
+              parentId = newParent.id;
+              newParentMap.set(parentTitle, parentId!);
+            }
+          }
+
+          if (parentId) {
+            const updatedOrphan = {
+              ...orphanNote,
+              parentNoteIds: Array.from(new Set([...(orphanNote.parentNoteIds || []), parentId]))
+            };
+            updatedNotes.push(updatedOrphan);
+            
+            const existingParent = currentAllNotes.find(n => n.id === parentId);
+            if (existingParent) {
+              const updatedParent = {
+                ...existingParent,
+                childNoteIds: Array.from(new Set([...(existingParent.childNoteIds || []), orphanNote.id]))
+              };
+              const existingInUpdated = updatedNotes.findIndex(un => un.id === parentId);
+              if (existingInUpdated !== -1) {
+                updatedNotes[existingInUpdated] = updatedParent;
               } else {
-                updatedNotes.push(updatedParent);
+                const existingInNew = newNotes.findIndex(nn => nn.id === parentId);
+                if (existingInNew !== -1) {
+                  newNotes[existingInNew] = updatedParent;
+                } else {
+                  updatedNotes.push(updatedParent);
+                }
               }
             }
           }
         }
+
+        if (newNotes.length > 0 || updatedNotes.length > 0) {
+          hasChanges = true;
+          if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
+          if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
+
+          const affectedMap = new Map<string, Note>();
+          const finalNotes = [...targetNotes, ...newNotes];
+
+          updatedNotes.forEach(un => {
+            const affected = syncNoteRelationships(un, finalNotes);
+            affected.forEach(an => affectedMap.set(an.id, an));
+            affectedMap.set(un.id, un);
+          });
+
+          const syncedNotes = finalNotes.map(note => affectedMap.get(note.id) || note);
+          const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
+
+          targetNotes = finalSanitizedNotes;
+          await saveNotesToFirestore(targetNotes);
+        } else {
+          // No more changes suggested by AI, but still invalid? Break to avoid infinite loop
+          break;
+        }
       }
 
-      if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
-      if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
-
-      const affectedMap = new Map<string, Note>();
-      const finalNotes = [...targetNotes, ...newNotes];
-
-      updatedNotes.forEach(un => {
-        const affected = syncNoteRelationships(un, finalNotes);
-        affected.forEach(an => affectedMap.set(an.id, an));
-        affectedMap.set(un.id, un);
-      });
-
-      const syncedNotes = finalNotes.map(note => affectedMap.get(note.id) || note);
-
-      const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
-
-      await saveNotesToFirestore(finalSanitizedNotes);
-      setState(prev => ({ ...prev, notes: finalSanitizedNotes }));
-      
-      if (!silentSuccess) {
-        showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
+      if (hasChanges) {
+        setState(prev => ({ ...prev, notes: targetNotes }));
+        if (!silentSuccess) {
+          showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
+        }
       }
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {

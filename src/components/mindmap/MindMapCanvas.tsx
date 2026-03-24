@@ -1,84 +1,61 @@
-import React from 'react';
-import { ViewportState } from '../../hooks/useViewport';
-import { MindMapNode } from '../../types/mindmap';
-import { MindMapNodeComponent } from '../MindMapNode';
-import { MindMapEdge } from '../MindMapEdge';
+import React, { useRef, useEffect } from 'react';
+import ForceGraph2D from 'react-force-graph-2d';
 
-interface MindMapCanvasProps {
-  viewport: ViewportState;
-  dimensions: { width: number; height: number };
-  nodes: MindMapNode[];
-  links: any[];
-  handleNodeClick: (node: MindMapNode) => void;
-  selectedNoteId: string | null;
-  darkMode: boolean;
-}
+export const MindMapCanvas = ({ nodes, links, handleNodeClick, selectedNoteId, darkMode, dimensions }) => {
+  const fgRef = useRef<any>(null);
 
-export const MindMapCanvas: React.FC<MindMapCanvasProps> = ({
-  viewport,
-  dimensions,
-  nodes,
-  links,
-  handleNodeClick,
-  selectedNoteId,
-  darkMode
-}) => {
+  useEffect(() => {
+    if (fgRef.current) {
+      fgRef.current.d3Force('charge').strength(-300);
+      fgRef.current.d3Force('link').distance(80);
+    }
+  }, [nodes]);
+
+  const nodeColor = (node: any) => {
+    if (node.type === 'domain') return darkMode ? '#3b82f6' : '#2563eb';
+    if (node.id === selectedNoteId) return '#6366f1';
+    switch (node.status) {
+      case 'Done': return '#10b981';
+      case 'Conflict': return '#ef4444';
+      case 'Planned': return '#eab308';
+      default: return '#94a3b8';
+    }
+  };
+
   return (
-    <div 
-      className="absolute inset-0 transition-transform duration-75 ease-out"
-      style={{ 
-        transform: `translate(${viewport.offset.x}px, ${viewport.offset.y}px) scale(${viewport.scale})`,
-        transformOrigin: '0 0'
+    <ForceGraph2D
+      ref={fgRef}
+      width={dimensions.width}
+      height={dimensions.height}
+      graphData={{ nodes, links }}
+      nodeColor={nodeColor}
+      nodeRelSize={6}
+      onNodeClick={handleNodeClick}
+      nodeCanvasObject={(node: any, ctx, globalScale) => {
+        const label = node.name;
+        const fontSize = 12 / globalScale;
+        ctx.font = `${node.type === 'domain' ? 'bold ' : ''}${fontSize}px Inter`;
+        
+        // 모양 그리기 (Epic: 큰 원, Feature: 중간, Task: 작은 원, Reference: 다이아몬드)
+        const r = node.val || 5;
+        ctx.beginPath();
+        if (node.noteType === 'Reference') {
+          ctx.moveTo(node.x, node.y - r);
+          ctx.lineTo(node.x + r, node.y);
+          ctx.lineTo(node.x, node.y + r);
+          ctx.lineTo(node.x - r, node.y);
+        } else {
+          ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+        }
+        ctx.fillStyle = nodeColor(node);
+        ctx.fill();
+
+        // 텍스트 라벨
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = darkMode ? '#cbd5e1' : '#475569';
+        ctx.fillText(label, node.x, node.y + r + 2);
       }}
-    >
-      {/* SVG Layer for Links */}
-      <svg
-        className="absolute inset-0 pointer-events-none overflow-visible"
-        width={dimensions.width}
-        height={dimensions.height}
-      >
-        <defs>
-          <marker
-            id="arrowhead"
-            markerWidth="10"
-            markerHeight="7"
-            refX="9"
-            refY="3.5"
-            orient="auto"
-          >
-            <polygon points="0 0, 10 3.5, 0 7" fill={darkMode ? "#475569" : "#cbd5e1"} />
-          </marker>
-        </defs>
-        {links.map((link, i) => {
-          const source = nodes.find((n) => n.id === link.source);
-          const target = nodes.find((n) => n.id === link.target);
-          if (!source || !target) return null;
-
-          return (
-            <MindMapEdge
-              key={`${link.source}-${link.target}-${i}`}
-              source={source}
-              target={target}
-              link={link}
-              darkMode={darkMode}
-            />
-          );
-        })}
-      </svg>
-
-      {/* Nodes Layer */}
-      <div className="absolute inset-0 pointer-events-none">
-        {nodes.map((node) => (
-          <div key={node.id} className="pointer-events-auto">
-            <MindMapNodeComponent
-              node={node}
-              onNodeClick={handleNodeClick}
-              isSelected={node.noteId === selectedNoteId}
-              darkMode={darkMode}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
+    />
   );
 };

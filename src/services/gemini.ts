@@ -95,6 +95,21 @@ const safeJsonParse = (text: string) => {
   }
 };
 
+const generateContentWithRetry = async (params: any, retries = 3, delay = 1000) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (error: any) {
+      if (error?.message === "Operation cancelled" || error === "Operation cancelled") {
+        throw error;
+      }
+      console.error(`Gemini API Error (Attempt ${i + 1}/${retries}):`, error);
+      if (i === retries - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+    }
+  }
+};
+
 const sanitizeNotes = (updatedNotes: any[], allNotes: Note[]): Note[] => {
   const allNotesMap = new Map(allNotes.map(n => [n.id, n]));
   const titleToIdMap = new Map(allNotes.map(n => [n.title, n.id]));
@@ -746,7 +761,7 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: prompt,
     config: {
@@ -838,7 +853,7 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: prompt,
     config: {

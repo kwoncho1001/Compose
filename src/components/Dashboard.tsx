@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './Sidebar';
 import { NoteEditor } from './NoteEditor';
-import { ExternalTransferSidebar } from './ExternalTransferSidebar';
 import { MindMap } from './MindMap';
 import { Dialog } from './common/Dialog';
 import { Note, GCM, AppState, ChatMessage, NoteType, NoteStatus } from '../types';
@@ -18,18 +17,13 @@ import {
   generateSubModules,
   updateCodeSnapshot,
   analyzeLogicUnitDeeply,
-  summarizeRepoFeatures,
-  transpileExternalLogic,
-  translateQueryForGithub,
-  refineSearchGoal,
-  summarizeReposShort,
   parseMetadata,
   chatWithNotes,
   generateParentNode,
   suggestOrCreateParent,
   suggestOrCreateParentsBatch
 } from '../services/gemini';
-import { fetchGithubFiles, fetchGithubFileContent, searchGithubRepos, fetchGithubRepoDetails, fetchLatestCommitSha } from '../services/github';
+import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { findOrphanNotes, wouldCreateCycle, findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
@@ -266,7 +260,6 @@ export const Dashboard: React.FC = () => {
   const [processStatus, setProcessStatus] = useState<{ message: string; current?: number; total?: number } | null>(null);
   
   const [nextStepSuggestion, setNextStepSuggestion] = useState<string | null>(null);
-  const [showExternalTransfer, setShowExternalTransfer] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
@@ -282,29 +275,9 @@ export const Dashboard: React.FC = () => {
     setIsSyncing(false);
     setIsRefactoring(false);
     setIsCheckingConsistency(false);
-    setIsSearchingExternal(false);
-    setIsAnalyzingRepo(false);
-    setIsTranspiling(false);
-    setIsRefiningGoals(false);
     setProcessStatus(null);
-    setAnalysisProgress(null);
   };
 
-  // External Reference Transfer State
-  const [externalSearchQuery, setExternalSearchQuery] = useState('');
-  const [externalRepos, setExternalRepos] = useState<{ full_name: string; html_url: string; description: string }[]>([]);
-  const [selectedExternalRepo, setSelectedExternalRepo] = useState<string | null>(null);
-  const [repoFeatures, setRepoFeatures] = useState<{ id: number; title: string; description: string; relatedFiles: string[] }[]>([]);
-  const [isSearchingExternal, setIsSearchingExternal] = useState(false);
-  const [isAnalyzingRepo, setIsAnalyzingRepo] = useState(false);
-  const [isTranspiling, setIsTranspiling] = useState(false);
-  const [refinedGoals, setRefinedGoals] = useState<string[]>([]);
-  const [isRefiningGoals, setIsRefiningGoals] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState<{ current: number; total: number; message: string } | null>(null);
-  const [transferStep, setTransferStep] = useState<1 | 2 | 3 | 4>(1);
-  const [repoSummaries, setRepoSummaries] = useState<Record<string, { nickname: string; summary: string; features: string }>>({});
-  const [selectedFeatures, setSelectedFeatures] = useState<any[]>([]);
-  const [selectedGoal, setSelectedGoal] = useState<string | null>(null);
   const [dialogConfig, setDialogConfig] = useState<{
     isOpen: boolean;
     title: string;
@@ -1802,230 +1775,6 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const handleSearchExternal = async (customQuery?: string) => {
-    const queryToSearch = customQuery || externalSearchQuery;
-    if (!queryToSearch.trim()) return;
-    
-    setIsSearchingExternal(true);
-    setSelectedGoal(queryToSearch);
-    
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    
-    try {
-      let allRepos: { full_name: string; html_url: string; description: string }[] = [];
-      const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(queryToSearch);
-      
-      if (isKorean) {
-        const { queries, suggestedRepos } = await translateQueryForGithub(queryToSearch, controller.signal);
-        
-        // 1. Fetch suggested repos directly
-        if (suggestedRepos && suggestedRepos.length > 0) {
-          const details = await Promise.all(
-            suggestedRepos.map(name => fetchGithubRepoDetails(name, state.githubToken, controller.signal))
-          );
-          allRepos = [...allRepos, ...details.filter((r): r is any => r !== null)];
-        }
-
-        // 2. Search using multiple queries until we have enough results
-        for (const q of queries) {
-          if (allRepos.length >= 5) break;
-          try {
-            const searchResults = await searchGithubRepos(q, state.githubToken, controller.signal);
-            // Avoid duplicates
-            const newResults = searchResults.filter(r => !allRepos.some(existing => existing.full_name === r.full_name));
-            allRepos = [...allRepos, ...newResults];
-          } catch (e) {
-            if (e?.message === "Operation cancelled" || e === "Operation cancelled") throw e;
-            console.error(`Search failed for query: ${q}`, e);
-          }
-        }
-      } else {
-        allRepos = await searchGithubRepos(queryToSearch, state.githubToken, controller.signal);
-      }
-
-      if (!state.githubToken) {
-        setProcessStatus({ message: 'Github 토큰이 설정되지 않아 검색 속도가 제한될 수 있습니다.' });
-        setTimeout(() => setProcessStatus(null), 3000);
-      }
-
-      const top3Repos = allRepos.slice(0, 3);
-      setExternalRepos(top3Repos);
-      
-      if (top3Repos.length > 0) {
-        setTransferStep(2);
-        const summaryResult = await summarizeReposShort(top3Repos, queryToSearch, controller.signal);
-        setRepoSummaries(summaryResult.summaries);
-      } else {
-        setProcessStatus({ message: '검색 결과가 없습니다. 다른 키워드로 시도해보세요.' });
-        setTimeout(() => setProcessStatus(null), 3000);
-      }
-    } catch (e) {
-      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
-        console.log('Search Github cancelled');
-      } else {
-        console.error(e);
-        setProcessStatus({ message: `Github 검색 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-        setTimeout(() => setProcessStatus(null), 3000);
-      }
-    } finally {
-      setIsSearchingExternal(false);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-    }
-  };
-
-  const handleRefineGoals = async () => {
-    if (!externalSearchQuery.trim()) return;
-    setIsRefiningGoals(true);
-    setExternalRepos([]);
-    setTransferStep(1);
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    try {
-      const goals = await refineSearchGoal(externalSearchQuery, controller.signal);
-      setRefinedGoals(goals);
-    } catch (e) {
-      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
-        console.log('Refine goals cancelled');
-      } else {
-        console.error(e);
-        setProcessStatus({ message: `키워드 정제 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-        setTimeout(() => setProcessStatus(null), 3000);
-      }
-    } finally {
-      setIsRefiningGoals(false);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-    }
-  };
-
-  const handleAnalyzeRepo = async (repoUrl: string) => {
-    setSelectedExternalRepo(repoUrl);
-    setIsAnalyzingRepo(true);
-    setTransferStep(3);
-    setAnalysisProgress({ current: 0, total: 100, message: '레포지토리 구조 및 README 분석 중...' });
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    try {
-      const fileTree = await fetchGithubFiles(repoUrl, state.githubToken, controller.signal);
-      let readme = '';
-      try {
-        readme = await fetchGithubFileContent(repoUrl, 'README.md', state.githubToken, controller.signal);
-      } catch (e) {
-        try {
-          readme = await fetchGithubFileContent(repoUrl, 'readme.md', state.githubToken, controller.signal);
-        } catch (e2) {}
-      }
-
-      const result = await summarizeRepoFeatures(repoUrl, fileTree.map(f => f.path), readme, selectedGoal || externalSearchQuery, controller.signal);
-      setRepoFeatures(result.features); // No longer slicing to 3
-    } catch (e) {
-      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
-        console.log('Analyze repo cancelled');
-      } else {
-        console.error(e);
-        showAlert('오류', `레포지토리 분석 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}`, 'error');
-      }
-    } finally {
-      setIsAnalyzingRepo(false);
-      setAnalysisProgress(null);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-    }
-  };
-
-  const handleTranspileFeature = async (featuresToTranspile: any[]) => {
-    if (featuresToTranspile.length === 0 || !selectedExternalRepo) return;
-    
-    setIsTranspiling(true);
-    setTransferStep(4);
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    
-    try {
-      // Collect all related files for all selected features
-      const allRelatedFiles = Array.from(new Set(featuresToTranspile.flatMap(f => f.relatedFiles)));
-      const totalFiles = allRelatedFiles.length;
-      
-      const validContents: { path: string; content: string }[] = [];
-      
-      for (let i = 0; i < allRelatedFiles.length; i++) {
-        const path = allRelatedFiles[i];
-        setAnalysisProgress({ 
-          current: i + 1, 
-          total: totalFiles, 
-          message: `파일 소스 추출 중: ${path} (${i + 1}/${totalFiles})` 
-        });
-        
-        try {
-          const content = await fetchGithubFileContent(selectedExternalRepo, path, state.githubToken, controller.signal);
-          validContents.push({ path, content });
-        } catch (e) {
-          if (e?.message === "Operation cancelled" || e === "Operation cancelled") throw e;
-          console.error(`Failed to fetch ${path}`, e);
-        }
-      }
-
-      setAnalysisProgress({ 
-        current: totalFiles, 
-        total: totalFiles, 
-        message: '도메인 맞춤형 로직 변환 및 GCM 매칭 중...' 
-      });
-      
-      const result = await transpileExternalLogic(
-        featuresToTranspile.map(f => f.title),
-        validContents,
-        state.gcm,
-        state.notes,
-        controller.signal
-      );
-
-      const newNotesWithIds = result.newNotes.map(n => ({
-        ...n,
-        id: Math.random().toString(36).substr(2, 9),
-        status: 'Planned' as const
-      }));
-
-      setState(prev => ({
-        ...prev,
-        notes: [...prev.notes, ...newNotesWithIds],
-        gcm: result.updatedGcm
-      }));
-
-      setProcessStatus({ message: '이식이 완료되었습니다!' });
-      setTimeout(() => setProcessStatus(null), 3000);
-      
-      // Reset transfer state after success
-      setTimeout(() => {
-        setTransferStep(1);
-        setSelectedExternalRepo(null);
-        setRepoFeatures([]);
-        setExternalRepos([]);
-        setRefinedGoals([]);
-        setSelectedFeatures([]);
-      }, 3500);
-
-    } catch (e) {
-      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
-        console.log('Transpile feature cancelled');
-      } else {
-        console.error(e);
-        setProcessStatus({ message: `이식 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}` });
-        setTimeout(() => setProcessStatus(null), 3000);
-        setTransferStep(3);
-      }
-    } finally {
-      setIsTranspiling(false);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-    }
-  };
-
   const handleCreateProject = async (name: string) => {
     if (!userId) return;
     const projectRef = doc(collection(db, 'users', userId, 'projects'));
@@ -2226,31 +1975,8 @@ export const Dashboard: React.FC = () => {
             <Auth />
             <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
-              onClick={() => setViewMode(viewMode === 'editor' ? 'mindmap' : 'editor')}
-              className={`p-2 rounded-md flex items-center gap-2 text-xs font-medium transition-colors ${viewMode === 'mindmap' ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-            >
-              <Layers className="w-4 h-4" />
-              {viewMode === 'mindmap' ? '에디터 보기' : '마인드맵 보기'}
-            </button>
-            <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
-            <button
-              onClick={() => {
-                setShowExternalTransfer(!showExternalTransfer);
-                if (!showExternalTransfer) {
-                  setRightSidebarOpen(false);
-                }
-              }}
-              className={`p-2 rounded-full transition-colors ${showExternalTransfer ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-              title="외부 레퍼런스 선별 이식"
-            >
-              <Github className="w-4 h-4" />
-            </button>
-            <button
               onClick={() => {
                 setRightSidebarOpen(!rightSidebarOpen);
-                if (!rightSidebarOpen) {
-                  setShowExternalTransfer(false);
-                }
               }}
               className={`p-2 rounded-full transition-colors ${rightSidebarOpen ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               title="도구함 열기"
@@ -2353,35 +2079,6 @@ export const Dashboard: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* External Reference Transfer Sidebar */}
-      {showExternalTransfer && (
-        <ExternalTransferSidebar 
-          externalSearchQuery={externalSearchQuery}
-          setExternalSearchQuery={setExternalSearchQuery}
-          externalRepos={externalRepos}
-          isSearchingExternal={isSearchingExternal}
-          handleSearchExternal={handleSearchExternal}
-          selectedExternalRepo={selectedExternalRepo}
-          setSelectedExternalRepo={setSelectedExternalRepo}
-          isAnalyzingRepo={isAnalyzingRepo}
-          repoFeatures={repoFeatures}
-          handleAnalyzeRepo={handleAnalyzeRepo}
-          isTranspiling={isTranspiling}
-          handleTranspileFeature={handleTranspileFeature}
-          setRepoFeatures={setRepoFeatures}
-          onClose={() => setShowExternalTransfer(false)}
-          refinedGoals={refinedGoals}
-          isRefiningGoals={isRefiningGoals}
-          handleRefineGoals={handleRefineGoals}
-          transferStep={transferStep}
-          setTransferStep={setTransferStep}
-          repoSummaries={repoSummaries}
-          selectedFeatures={selectedFeatures}
-          setSelectedFeatures={setSelectedFeatures}
-          analysisProgress={analysisProgress}
-        />
-      )}
 
       {/* 오른쪽 사이드바: 도구 및 제안 통합 */}
       {rightSidebarOpen && (

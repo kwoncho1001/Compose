@@ -69,6 +69,7 @@ export interface DashboardActions {
   // Chat Actions
   handleChat: () => Promise<void>;
   handleClearChat: () => void;
+  onInteractiveAction: (messageId: string, selected: string[]) => Promise<void>;
   syncProject: (data: Partial<AppState>) => void;
 }
 

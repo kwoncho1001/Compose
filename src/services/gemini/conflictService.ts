@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note } from "../../types";
 import { ai, MODEL_NAME, systemInstruction } from "./config";
-import { safeJsonParse } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const checkConflict = async (content: string, fileContent: string, signal?: AbortSignal): Promise<{ isMatch: boolean; reason: string }> => {
   const prompt = `

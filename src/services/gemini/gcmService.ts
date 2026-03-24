@@ -1,6 +1,7 @@
 import { Note, GCM, GCMEntity } from "../../types";
 import { MODEL_NAME, systemInstruction } from "./config";
-import { generateContentWithRetry, safeJsonParse } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const suggestGcmUpdates = async (
   notes: Note[],

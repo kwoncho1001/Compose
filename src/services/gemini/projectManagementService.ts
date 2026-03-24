@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note, GCM } from "../../types";
 import { MODEL_NAME, systemInstruction } from "./config";
-import { safeJsonParse, generateContentWithRetry } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const suggestNextSteps = async (
   notes: Note[],

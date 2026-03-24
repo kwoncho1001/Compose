@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note } from "../../types";
 import { ai, MODEL_NAME, systemInstruction } from "./config";
-import { safeJsonParse, generateContentWithRetry } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const chatWithNotes = async (
   query: string,

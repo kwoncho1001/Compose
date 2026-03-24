@@ -7,6 +7,7 @@ import { useNoteSync } from './useNoteSync';
 import { useGithubIntegration } from './useGithubIntegration';
 import { useAIAnalysis } from './useAIAnalysis';
 import { useChatSession } from './useChatSession';
+import { useKnowledgeSynthesis } from './useKnowledgeSynthesis';
 
 export const useDashboard = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -170,14 +171,7 @@ export const useDashboard = () => {
     handleEnforceHierarchy
   );
 
-  const {
-    chatInput,
-    setChatInput,
-    isChatting,
-    handleChat,
-    handleClearChat,
-    chatEndRef
-  } = useChatSession(
+  const chatSession = useChatSession(
     userId,
     currentProjectId,
     state,
@@ -185,6 +179,47 @@ export const useDashboard = () => {
     showAlert,
     abortControllerRef
   );
+
+  const knowledgeSynthesis = useKnowledgeSynthesis(
+    currentProjectId,
+    state,
+    setState,
+    chatSession.addChatMessage,
+    chatSession.updateChatMessage,
+    saveNotesToFirestore,
+    setProcessStatus,
+    showAlert
+  );
+
+  const handleInteractiveAction = useCallback(async (messageId: string, selected: string[]) => {
+    const msg = state.chatMessages?.find(m => m.id === messageId);
+    if (!msg || !msg.interactive) return;
+
+    if (msg.interactive.type === 'goals') {
+      await knowledgeSynthesis.handleGoalSelection(messageId, selected);
+    } else if (msg.interactive.type === 'repos') {
+      await knowledgeSynthesis.handleRepoSelection(messageId, selected);
+    } else if (msg.interactive.type === 'features') {
+      await knowledgeSynthesis.handleFeatureSelection(messageId, selected);
+    }
+  }, [state.chatMessages, knowledgeSynthesis]);
+
+  const handleChatSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    const input = chatSession.chatInput.trim();
+    if (!input) return;
+
+    // Heuristic for synthesis request
+    const synthesisKeywords = ['설계', '구현', '분석', '만들어줘', '어떻게', '방법', '프로젝트'];
+    const isSynthesisRequest = synthesisKeywords.some(k => input.includes(k));
+
+    if (isSynthesisRequest && state.notes.length === 0) {
+      chatSession.setChatInput('');
+      await knowledgeSynthesis.startSynthesis(input);
+    } else {
+      await chatSession.handleChat();
+    }
+  }, [chatSession, state.notes.length, knowledgeSynthesis]);
 
   const handleExport = useCallback(() => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -240,8 +275,8 @@ export const useDashboard = () => {
     rightSidebarOpen,
     viewMode,
     isInitialLoading,
-    chatInput,
-    isChatting
+    chatInput: chatSession.chatInput,
+    isChatting: chatSession.isChatting
   };
 
   const actions: DashboardActions = {
@@ -253,7 +288,7 @@ export const useDashboard = () => {
     setDarkMode,
     setViewMode,
     setRightSidebarOpen,
-    setChatInput,
+    setChatInput: chatSession.setChatInput,
     handleCancelProcess,
     showAlert,
     handleExport,
@@ -279,8 +314,9 @@ export const useDashboard = () => {
     handleAnalyzeNextSteps,
     handleSyncGithub,
     handleWipeSnapshots,
-    handleChat,
-    handleClearChat,
+    handleChat: (e?: React.FormEvent) => handleChatSubmit(e || { preventDefault: () => {} } as React.FormEvent),
+    handleClearChat: chatSession.handleClearChat,
+    onInteractiveAction: handleInteractiveAction,
     syncProject
   };
 
@@ -301,7 +337,7 @@ export const useDashboard = () => {
     refs: {
       fileInputRef,
       textFileInputRef,
-      chatEndRef
+      chatEndRef: chatSession.chatEndRef
     }
   };
 };

@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note, GCM } from "../../types";
 import { ai, MODEL_NAME, systemInstruction, noteSchema } from "./config";
-import { safeJsonParse } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const updateSingleNote = async (
   note: Note,

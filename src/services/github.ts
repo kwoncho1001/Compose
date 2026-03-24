@@ -202,3 +202,28 @@ export const fetchLatestCommitSha = async (
   }
 };
 
+export const getRepoReadme = async (
+  full_name: string,
+  token?: string,
+  signal?: AbortSignal
+): Promise<string> => {
+  const apiUrl = `https://api.github.com/repos/${full_name}/readme`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3.raw",
+  };
+  if (token) {
+    headers.Authorization = `token ${token}`;
+  }
+  try {
+    const response = await fetch(apiUrl, { headers, signal });
+    if (!response.ok) {
+      if (response.status === 404) return '';
+      await handleGithubError(response);
+    }
+    return await response.text();
+  } catch (error) {
+    console.error(`Failed to fetch readme for ${full_name}:`, error);
+    return '';
+  }
+};
+

@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note } from "../../types";
 import { MODEL_NAME, systemInstruction, noteSchema } from "./config";
-import { safeJsonParse, generateContentWithRetry, sanitizeNotes } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse, sanitizeNotes } from "./utils";
 
 export const analyzeLogicUnitDeeply = async (
   unitTitle: string,

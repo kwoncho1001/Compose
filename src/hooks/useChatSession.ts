@@ -113,12 +113,44 @@ export const useChatSession = (
     }
   };
 
+  const addChatMessage = async (msg: Omit<ChatMessage, 'id' | 'createdAt' | 'expiresAt'>) => {
+    if (!userId || !currentProjectId) return;
+    const now = new Date();
+    const expiryDate = new Date();
+    expiryDate.setDate(now.getDate() + 30);
+
+    const newMsg: ChatMessage = {
+      ...msg,
+      id: Math.random().toString(36).substring(2, 11),
+      createdAt: now.toISOString(),
+      expiresAt: expiryDate
+    };
+
+    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
+    await setDoc(doc(chatsRef, newMsg.id), newMsg);
+  };
+
+  const updateChatMessage = async (id: string, updates: Partial<ChatMessage>) => {
+    if (!userId || !currentProjectId) return;
+    const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
+    const msgRef = doc(chatsRef, id);
+    
+    // Merge updates
+    const existingMsg = state.chatMessages?.find(m => m.id === id);
+    if (!existingMsg) return;
+
+    const updatedMsg = { ...existingMsg, ...updates };
+    await setDoc(msgRef, updatedMsg);
+  };
+
   return {
     chatInput,
     setChatInput,
     isChatting,
     handleChat,
     handleClearChat,
+    addChatMessage,
+    updateChatMessage,
     chatEndRef
   };
 };

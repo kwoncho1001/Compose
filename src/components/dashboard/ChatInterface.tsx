@@ -10,6 +10,7 @@ interface ChatInterfaceProps {
   isChatting: boolean;
   onChatSubmit: (e: React.FormEvent) => void;
   onClearChat: () => void;
+  onInteractiveAction?: (messageId: string, selected: string[]) => void;
   chatEndRef: React.RefObject<HTMLDivElement>;
 }
 
@@ -20,6 +21,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   isChatting,
   onChatSubmit,
   onClearChat,
+  onInteractiveAction,
   chatEndRef
 }) => {
   return (
@@ -59,6 +61,49 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 ) : (
                   <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-neutral-800 prose-pre:text-neutral-100">
                     <Markdown>{msg.content}</Markdown>
+                    
+                    {msg.interactive && !msg.interactive.completed && (
+                      <div className="mt-4 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-600 space-y-3 not-prose">
+                        <p className="text-xs font-bold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">
+                          {msg.interactive.type === 'goals' ? '구현 목표 선택' : 
+                           msg.interactive.type === 'repos' ? '레포지토리 선택' : '기능 선택'}
+                        </p>
+                        <div className="space-y-2">
+                          {msg.interactive.options.map((opt: any, idx: number) => {
+                            const value = typeof opt === 'string' ? opt : opt.repoName || opt.full_name || opt.title;
+                            const label = typeof opt === 'string' ? opt : opt.nickname || opt.title || opt.full_name;
+                            const isSelected = msg.interactive?.selected.includes(value);
+
+                            return (
+                              <label key={idx} className="flex items-start gap-3 p-2 rounded-md hover:bg-neutral-50 dark:hover:bg-neutral-700/50 cursor-pointer transition-colors group">
+                                <input 
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const newSelected = e.target.checked 
+                                      ? [...(msg.interactive?.selected || []), value]
+                                      : (msg.interactive?.selected || []).filter(v => v !== value);
+                                    onInteractiveAction?.(msg.id, newSelected);
+                                  }}
+                                  className="mt-1 w-4 h-4 rounded border-neutral-300 text-primary focus:ring-primary"
+                                />
+                                <div className="flex-1">
+                                  <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200 group-hover:text-primary transition-colors">{label}</p>
+                                  {opt.summary && <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">{opt.summary}</p>}
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <button
+                          onClick={() => onInteractiveAction?.(msg.id, msg.interactive?.selected || [])}
+                          disabled={!msg.interactive.selected.length}
+                          className="w-full py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-all"
+                        >
+                          선택 완료 및 다음 단계 진행
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

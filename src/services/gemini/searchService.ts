@@ -10,10 +10,15 @@ export const refineSearchGoal = async (query: string, signal?: AbortSignal): Pro
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `입력 키워드 "${query}"를 바탕으로 GitHub 검색에 적합한 기능 중심 설명 3가지를 생성하십시오.`,
+      contents: `
+입력 키워드: "${query}"
+
+위 키워드를 바탕으로 GitHub에서 참고할 만한 오픈소스 프로젝트를 찾기 위한 구체적인 구현 목표 3가지를 생성하십시오.
+결과는 반드시 다음 JSON 문자열 배열 형식으로만 반환하십시오:
+["목표1", "목표2", "목표3"]
+`,
       config: {
         responseMimeType: "application/json",
-        // 기존 규격 복구: JSON Array 반환 강제
       }
     });
     if (signal?.aborted) throw new Error("Operation cancelled");
@@ -33,20 +38,37 @@ export const translateQueryForGithub = async (query: string, signal?: AbortSigna
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `요구사항 "${query}"에 대해 googleSearch 도구를 사용하여 최적의 검색 전략과 유명 레포지토리를 찾으십시오.`,
+      contents: `
+요구사항: "${query}"
+
+1. googleSearch 도구를 사용하여 위 요구사항을 구현한 유명한 GitHub 레포지토리들을 찾으십시오.
+2. 검색 결과를 바탕으로 최적의 GitHub 검색 쿼리 3개와 추천 레포지토리 목록을 작성하십시오.
+3. 결과를 반드시 다음 JSON 형식으로만 반환하십시오:
+{
+  "queries": ["query1", "query2", "query3"],
+  "suggestedRepos": [
+    { "full_name": "owner/repo", "description": "요약" }
+  ],
+  "rationale": "검색 전략 설명"
+}
+`,
       config: {
-        // [핵심] 도구 호출 권한 복구
-        tools: [{ googleSearch: {} }] 
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json"
       }
     });
     if (signal?.aborted) throw new Error("Operation cancelled");
     const parsed = safeJsonParse(response.text || "{}");
     
-    if (parsed) {
+    if (parsed && Array.isArray(parsed.queries)) {
       return parsed as SearchStrategy;
     }
     
-    throw new Error("Invalid JSON format from AI");
+    return { 
+      queries: [query], 
+      suggestedRepos: [],
+      rationale: "기본 검색 전략으로 전환되었습니다."
+    };
   } catch (error) {
     if (error instanceof Error && error.message === "Operation cancelled") throw error;
     console.error('Translation failed:', error);

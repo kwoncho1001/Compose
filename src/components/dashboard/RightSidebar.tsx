@@ -34,6 +34,7 @@ interface RightSidebarProps {
   handleChat: () => void;
   isChatting: boolean;
   chatEndRef: React.RefObject<HTMLDivElement>;
+  onInteractiveAction?: (messageId: string, selected: string[]) => void;
 }
 
 export const RightSidebar: React.FC<RightSidebarProps> = ({
@@ -63,7 +64,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   setChatInput,
   handleChat,
   isChatting,
-  chatEndRef
+  chatEndRef,
+  onInteractiveAction
 }) => {
   return (
     <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 h-full flex flex-col shadow-xl z-20 transition-colors duration-200">
@@ -298,6 +300,49 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   }`}>
                     <div className="prose prose-sm dark:prose-invert max-w-none">
                       <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</Markdown>
+                      
+                      {msg.interactive && !msg.interactive.completed && (
+                        <div className="mt-4 p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 space-y-3 not-prose">
+                          <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                            {msg.interactive.type === 'goals' ? '구현 목표 선택' : 
+                             msg.interactive.type === 'repos' ? '레포지토리 선택' : '기능 선택'}
+                          </p>
+                          <div className="space-y-2">
+                            {msg.interactive.options.map((opt: any, idx: number) => {
+                              const value = typeof opt === 'string' ? opt : opt.repoName || opt.full_name || opt.title;
+                              const label = typeof opt === 'string' ? opt : opt.nickname || opt.title || opt.full_name;
+                              const isSelected = msg.interactive?.selected.includes(value);
+
+                              return (
+                                <label key={idx} className="flex items-start gap-3 p-2 rounded-md hover:bg-white dark:hover:bg-slate-800 cursor-pointer transition-colors group border border-transparent hover:border-slate-200 dark:hover:border-slate-700">
+                                  <input 
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={(e) => {
+                                      const newSelected = e.target.checked 
+                                        ? [...(msg.interactive?.selected || []), value]
+                                        : (msg.interactive?.selected || []).filter(v => v !== value);
+                                      onInteractiveAction?.(msg.id, newSelected);
+                                    }}
+                                    className="mt-1 w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                  />
+                                  <div className="flex-1">
+                                    <p className="text-xs font-medium text-slate-700 dark:text-slate-200 group-hover:text-indigo-600 transition-colors">{label}</p>
+                                    {opt.summary && <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">{opt.summary}</p>}
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <button
+                            onClick={() => onInteractiveAction?.(msg.id, msg.interactive?.selected || [])}
+                            disabled={!msg.interactive.selected.length}
+                            className="w-full py-2 bg-indigo-600 text-white rounded-md text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 transition-all shadow-sm"
+                          >
+                            선택 완료 및 다음 단계 진행
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className={`text-[9px] mt-1 opacity-50 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

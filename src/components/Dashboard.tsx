@@ -99,6 +99,7 @@ export const Dashboard: React.FC = () => {
           nextStepSuggestion={nextStepSuggestion} chatInput={chatInput}
           setChatInput={setChatInput} handleChat={handleChat}
           isChatting={isChatting} chatEndRef={chatEndRef}
+          onInteractiveAction={(actions as any).onInteractiveAction}
         />
       )}
 

@@ -3,7 +3,7 @@ import { Note } from "../../types";
 /**
  * AI가 반환한 텍스트에서 JSON 블록을 안전하게 추출하고 파싱합니다.
  */
-export const safeJsonParse = (text: string): any => {
+export const safeJsonParse = (text: string, fallback: any = null): any => {
   try {
     // 1. 순수 JSON 파싱 시도
     return JSON.parse(text);
@@ -15,11 +15,11 @@ export const safeJsonParse = (text: string): any => {
         return JSON.parse(jsonMatch[0]);
       } catch (innerError) {
         console.error("Failed to parse extracted JSON:", innerError);
-        return null;
+        return fallback;
       }
     }
     console.error("No JSON found in text:", text);
-    return null;
+    return fallback;
   }
 };
 

@@ -1,6 +1,7 @@
 import { Note } from "../../types";
 import { MODEL_NAME, systemInstruction } from "./config";
-import { generateContentWithRetry, safeJsonParse } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const detectMissingLinks = async (
   notes: Note[]

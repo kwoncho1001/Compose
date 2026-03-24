@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note } from "../../types";
 import { ai, MODEL_NAME, systemInstruction, noteSchema } from "./config";
-import { safeJsonParse, generateContentWithRetry } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse } from "./utils";
 
 export const suggestOrCreateParentsBatch = async (
   childNotes: Note[],

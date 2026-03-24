@@ -76,6 +76,12 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   expiresAt: any; // Firebase Timestamp
+  interactive?: {
+    type: 'goals' | 'repos' | 'features';
+    options: string[] | any[];
+    selected: string[];
+    completed?: boolean;
+  };
 }
 
 export interface SearchStrategy {

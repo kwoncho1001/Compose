@@ -7,10 +7,14 @@ import { safeJsonParse } from "./utils";
  * 다수의 레포지토리를 사용자의 목표에 맞춰 분석하고 짧은 별명과 요약을 생성합니다.
  */
 export const summarizeReposShort = async (
-  repos: { full_name: string; description: string }[],
+  repoContexts: Record<string, string>,
   userGoal: string,
   signal?: AbortSignal
 ): Promise<RepoSummaries> => {
+  const repos = Object.entries(repoContexts).map(([name, readme]) => ({
+    full_name: name,
+    description: readme.slice(0, 500)
+  }));
   // 1. 프롬프트 구성 (과거 버전의 문구 100% 보존)
   const prompt = `
   사용자의 목표: "${userGoal}"
@@ -71,5 +75,46 @@ export const summarizeReposShort = async (
     if (err instanceof Error && err.message === "Operation cancelled") throw err;
     console.error('Summarize repos failed:', err);
     return {}; // 실패 시 빈 객체 반환으로 시스템 중단 방지
+  }
+};
+
+/**
+ * [로직 6] extractRepoFeatures
+ * 레포지토리의 README와 구조를 분석하여 독립적인 기능 단위(Features)를 추출합니다.
+ */
+export const extractRepoFeatures = async (
+  repoName: string,
+  readmeContent: string,
+  signal?: AbortSignal
+): Promise<string[]> => {
+  const prompt = `
+  레포지토리: "${repoName}"
+  
+  README 내용:
+  ${readmeContent.slice(0, 5000)}
+  
+  위 정보를 바탕으로 이 레포지토리에서 추출할 수 있는 독립적인 기능 단위(Features)를 5~10개 리스트업하십시오.
+  각 기능은 명확하고 간결한 한국어 명칭으로 작성하십시오.
+  
+  출력 형식 (JSON Array):
+  ["기능1", "기능2", ...]
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json"
+      }
+    });
+
+    if (signal?.aborted) throw new Error("Operation cancelled");
+
+    return safeJsonParse(response.text || "[]") || [];
+  } catch (err) {
+    if (err instanceof Error && err.message === "Operation cancelled") throw err;
+    console.error('Summarize features failed:', err);
+    return [];
   }
 };

@@ -1,7 +1,8 @@
 import { Type } from "@google/genai";
 import { Note, GCM, NoteType } from "../../types";
 import { ai, MODEL_NAME, systemInstruction, noteSchema } from "./config";
-import { safeJsonParse, sanitizeNotes } from "./core";
+import { generateContentWithRetry } from "./core";
+import { safeJsonParse, sanitizeNotes } from "./utils";
 
 export const decomposeFeature = async (
   featureRequest: string,

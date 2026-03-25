@@ -3,7 +3,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Note, AppState, NoteType } from '../types';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
-import { updateCodeSnapshot, analyzeLogicUnitDeeply, suggestLogicBoundaries } from '../services/gemini';
+import { updateCodeSnapshot, analyzeLogicUnitDeeply, suggestLogicBoundaries, designTaskFromReferences } from '../services/gemini';
 import { extractLogicUnits } from '../utils/codeParser';
 import { syncNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
@@ -40,6 +40,7 @@ export const useGithubIntegration = (
   setProcessStatus: any,
   showAlert: any,
   abortControllerRef: React.MutableRefObject<AbortController | null>,
+  isSyncing: boolean,
   setIsSyncing: React.Dispatch<React.SetStateAction<boolean>>,
   handleEnforceHierarchy: (notesList?: Note[], silentSuccess?: boolean) => Promise<void>
 ) => {
@@ -173,6 +174,7 @@ export const useGithubIntegration = (
   };
 
   const handleSyncGithub = async (forceUpdate: boolean = false) => {
+    if (isSyncing) return;
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
       return;
@@ -301,94 +303,207 @@ export const useGithubIntegration = (
       let currentNotes = [...state.notes];
       let updateCount = 0;
       let newCount = 0;
+      const touchedNotes: Note[] = [];
+      const allExtractedUnits: { unit: any; file: { path: string; sha: string } }[] = [];
+      const processedNoteIdsByFile = new Map<string, string[]>();
 
-      for (let i = 0; i < filesToProcess.length; i++) {
+      // Phase 1: Extraction & Mapping (All Files)
+      for (let i = 0; i < filesActuallyToProcess.length; i++) {
         if (signal.aborted) return;
-        const file = filesToProcess[i];
-        const isCached = currentLogs[file.path] === file.sha;
+        const file = filesActuallyToProcess[i];
         
-        // [Forced Atomization] 캐시 여부와 상관없이 파일 노드는 항상 확보/검증
         setProcessStatus({ 
-          message: `${file.path} 동기화 및 구조 검증 중 (${i + 1}/${filesToProcess.length})...`,
+          message: `${file.path} 분석 및 로직 추출 중 (${i + 1}/${filesActuallyToProcess.length})...`,
           current: i + 1,
-          total: filesToProcess.length
+          total: filesActuallyToProcess.length
         });
 
         try {
-          // 캐시 히트이고 강제 업데이트가 아니면 스킵
-          if (isCached && !forceUpdate) {
-            continue;
-          }
-
-          // 2. 파일 내용 가져오기 및 로직 추출
           const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken, signal);
           if (signal.aborted) return;
 
-          // [AI-Assisted Boundary Detection] AI에게 의미론적 경계 제안 요청
-          setProcessStatus((prev: any) => ({ ...prev!, message: `${file.path} 의미론적 경계 분석 중...` }));
-          const aiBoundaries = await suggestLogicBoundaries(file.path, content, signal);
-          
-          // 물리적 추출과 AI 제안 결합
           const physicalUnits = extractLogicUnits(content, file.path);
-          
-          // 3. 코드 스냅샷 업데이트 (AI 매핑)
           const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, physicalUnits, signal);
           if (signal.aborted) return;
+
+          allExtractedUnits.push(...logicUnits.map(u => ({ unit: u, file })));
+          currentLogs[file.path] = file.sha;
+        } catch (e: any) {
+          if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+            throw e; // Re-throw to be caught by the outer catch
+          }
+          console.error(`Failed to extract units from ${file.path}:`, e);
+        }
+      }
+
+      if (allExtractedUnits.length === 0) {
+        showAlert('알림', '분석된 로직 단위가 없습니다.', 'info');
+        setIsSyncing(false);
+        setProcessStatus(null);
+        return;
+      }
+
+      // Phase 2: Analysis Preparation
+      const unitsToAnalyze: any[] = [];
+      const unitsToSkip: any[] = [];
+      const seenLogicHashes = new Set<string>();
+      const suggestedTaskMap = new Map<string, string>();
+
+      for (const { unit, file } of allExtractedUnits) {
+        if (seenLogicHashes.has(unit.logicHash)) continue;
+        seenLogicHashes.add(unit.logicHash);
+
+        // 1. Find/Create Parent Task ID
+        let taskId = unit.matchedTaskId;
+        if (!taskId && unit.suggestedTask) {
+          const existingTask = currentNotes.find(n => 
+            n.title === unit.suggestedTask!.title && 
+            (n.noteType === 'Task' || n.noteType === 'Feature')
+          );
           
-          const touchedNotes: Note[] = [];
-          const processedNoteIds: string[] = [];
-          const suggestedTaskMap = new Map<string, string>();
-          const seenLogicHashes = new Set<string>();
-          const unitsToAnalyze: any[] = [];
-          const unitsToSkip: any[] = [];
+          if (existingTask) {
+            taskId = existingTask.id;
+          } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
+            taskId = suggestedTaskMap.get(unit.suggestedTask.title);
+          } else {
+            const newTaskId = Math.random().toString(36).substr(2, 9);
+            suggestedTaskMap.set(unit.suggestedTask.title, newTaskId);
+            taskId = newTaskId;
+          }
+        }
+
+        if (!taskId) continue;
+
+        const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
+        const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
+                            currentNotes.find(n => n.title === unit.title && n.githubLink && n.githubLink.startsWith(file.path));
+
+        const item = { unit, taskId, file, globallyExistingRef, existingRef };
+
+        if (!forceUpdate && globallyExistingRef) {
+          unitsToSkip.push({ ...item, analysis: { content: globallyExistingRef.content, summary: globallyExistingRef.summary, importance: globallyExistingRef.importance, tags: globallyExistingRef.tags } });
+        } else if (!forceUpdate && existingRef && existingRef.logicHash === unit.logicHash) {
+          unitsToSkip.push({ ...item, analysis: { content: existingRef.content, summary: existingRef.summary, importance: existingRef.importance, tags: existingRef.tags } });
+        } else {
+          unitsToAnalyze.push(item);
+        }
+      }
+
+      // Stage 1: Batch Analyze References (Batch 5)
+      const analyzedResults: any[] = [];
+      const chunkSize = 5;
+      for (let j = 0; j < unitsToAnalyze.length; j += chunkSize) {
+        if (signal.aborted) return;
+        const chunk = unitsToAnalyze.slice(j, j + chunkSize);
+        setProcessStatus({ message: `로직 심층 분석 중 (${j + 1}~${Math.min(j + chunkSize, unitsToAnalyze.length)}/${unitsToAnalyze.length})...` });
+        
+        const results = await Promise.all(chunk.map(async (item) => {
+          const taskNote = currentNotes.find(n => n.id === item.taskId) || 
+                           (item.unit.suggestedTask ? { title: item.unit.suggestedTask.title, content: item.unit.suggestedTask.content, summary: item.unit.suggestedTask.summary } : null);
+          if (!taskNote) return null;
+          try {
+            const analysis = await analyzeLogicUnitDeeply(item.unit.title, item.unit.codeSnippet, {
+              title: taskNote.title,
+              content: taskNote.content,
+              summary: taskNote.summary
+            }, signal);
+            return { ...item, analysis };
+          } catch (e) {
+            console.error(`Failed to analyze logic unit ${item.unit.title}:`, e);
+            return null;
+          }
+        }));
+        analyzedResults.push(...results.filter(r => r !== null));
+      }
+
+      const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
+
+      // Stage 2: Batch Design Tasks (Batch 5)
+      const taskGroups = new Map<string, { taskId: string; title: string; units: any[]; suggestedData?: any }>();
+      for (const item of allProcessedUnits) {
+        const key = item.taskId;
+        if (!taskGroups.has(key)) {
+          const existing = currentNotes.find(n => n.id === key);
+          taskGroups.set(key, { 
+            taskId: key, 
+            title: existing?.title || item.unit.suggestedTask?.title || "Unknown Task", 
+            units: [],
+            suggestedData: item.unit.suggestedTask
+          });
+        }
+        taskGroups.get(key)!.units.push(item);
+      }
+
+      const taskGroupsToDesign = Array.from(taskGroups.values());
+      for (let j = 0; j < taskGroupsToDesign.length; j += chunkSize) {
+        if (signal.aborted) return;
+        const chunk = taskGroupsToDesign.slice(j, j + chunkSize);
+        setProcessStatus({ message: `상위 설계(Task/Feature) 정밀 디자인 중 (${j + 1}~${Math.min(j + chunkSize, taskGroupsToDesign.length)}/${taskGroupsToDesign.length})...` });
+
+        await Promise.all(chunk.map(async (group) => {
+          const existingTask = currentNotes.find(n => n.id === group.taskId);
+          const hasNewAnalysis = group.units.some(u => !u.globallyExistingRef && !u.existingRef) || forceUpdate;
           
-          for (const unit of logicUnits) {
-            if (signal.aborted) return;
-            
-            if (seenLogicHashes.has(unit.logicHash)) continue;
-            seenLogicHashes.add(unit.logicHash);
-            
-            let taskId = unit.matchedTaskId;
-            if (!taskId && unit.suggestedTask) {
-              const existingTask = currentNotes.find(n => 
-                n.title === unit.suggestedTask!.title && 
-                (n.noteType === 'Task' || n.noteType === 'Feature')
+          if (!existingTask || hasNewAnalysis) {
+            try {
+              const design = await designTaskFromReferences(
+                group.title,
+                group.units.map(u => ({ title: u.unit.title, summary: u.analysis.summary, content: u.analysis.content })),
+                existingTask,
+                signal
               );
-              
+
               if (existingTask) {
-                taskId = existingTask.id;
-                if (existingTask.noteType === 'Task' && unit.suggestedTask!.noteType === 'Feature') {
-                  const promotedNote = { ...existingTask, noteType: 'Feature' as NoteType };
-                  const hierarchyFixes = normalizeHierarchy(promotedNote, currentNotes);
-                  currentNotes = currentNotes.map(n => n.id === promotedNote.id ? promotedNote : n);
-                  touchedNotes.push(promotedNote);
-                  hierarchyFixes.forEach(fix => {
-                    if (fix.id !== promotedNote.id) {
-                      currentNotes = currentNotes.map(n => n.id === fix.id ? fix : n);
-                      if (!touchedNotes.some(tn => tn.id === fix.id)) touchedNotes.push(fix);
-                    }
-                  });
-                }
-              } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
-                taskId = suggestedTaskMap.get(unit.suggestedTask.title);
+                const updatedTask = {
+                  ...existingTask,
+                  content: design.content,
+                  summary: design.summary,
+                  folder: design.folder,
+                  importance: design.importance,
+                  tags: Array.from(new Set([...(existingTask.tags || []), ...design.tags])),
+                  lastUpdated: new Date().toISOString()
+                };
+                currentNotes = currentNotes.map(n => n.id === updatedTask.id ? updatedTask : n);
+                if (!touchedNotes.some(tn => tn.id === updatedTask.id)) touchedNotes.push(updatedTask);
               } else {
-                const newTaskId = Math.random().toString(36).substr(2, 9);
-                suggestedTaskMap.set(unit.suggestedTask.title, newTaskId);
-                taskId = newTaskId;
-                
                 const newTask: Note = {
-                  id: newTaskId,
-                  title: unit.suggestedTask.title,
-                  folder: unit.suggestedTask.folder,
-                  content: unit.suggestedTask.content,
-                  summary: unit.suggestedTask.summary,
-                  noteType: (unit.suggestedTask.noteType as NoteType) || 'Task',
-                  status: (unit.suggestedTask.status as any) || 'Done',
+                  id: group.taskId,
+                  title: group.title,
+                  folder: design.folder,
+                  content: design.content,
+                  summary: design.summary,
+                  noteType: (group.suggestedData?.noteType as NoteType) || 'Task',
+                  status: 'Done',
+                  priority: 'C',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                  importance: design.importance,
+                  tags: design.tags,
+                  relatedNoteIds: [],
+                  childNoteIds: [],
+                  parentNoteIds: []
+                };
+                currentNotes.push(newTask);
+                touchedNotes.push(newTask);
+                newCount++;
+              }
+            } catch (e) {
+              console.error(`Failed to design task ${group.title}:`, e);
+              // Fallback for new tasks if design fails
+              if (!existingTask && group.suggestedData) {
+                const newTask: Note = {
+                  id: group.taskId,
+                  title: group.title,
+                  folder: group.suggestedData.folder,
+                  content: group.suggestedData.content,
+                  summary: group.suggestedData.summary,
+                  noteType: (group.suggestedData.noteType as NoteType) || 'Task',
+                  status: 'Done',
                   priority: 'C',
                   version: '1.0.0',
                   lastUpdated: new Date().toISOString(),
                   importance: 3,
-                  tags: unit.suggestedTask.tags || ['auto-generated', 'design-leading-code'],
+                  tags: group.suggestedData.tags || ['auto-generated'],
                   relatedNoteIds: [],
                   childNoteIds: [],
                   parentNoteIds: []
@@ -398,193 +513,132 @@ export const useGithubIntegration = (
                 newCount++;
               }
             }
+          }
+        }));
+      }
 
-            if (!taskId) continue;
+      // Final Phase: Create/Update Reference Notes and Link to Tasks
+      for (const item of allProcessedUnits) {
+        if (signal.aborted) return;
+        const { unit, taskId, analysis, globallyExistingRef, existingRef, file } = item;
+        const taskNoteIndex = currentNotes.findIndex(n => n.id === taskId);
+        if (taskNoteIndex === -1) continue;
+        const taskNote = { ...currentNotes[taskNoteIndex] };
 
-            const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
-            const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
-                                currentNotes.find(n => n.title === unit.title && n.githubLink && n.githubLink.startsWith(file.path));
+        let finalNote: Note;
+        const fileName = file.path.split('/').pop() || file.path;
+        const sourceUrl = `${state.githubRepo}/blob/main/${file.path}#${unit.title}`;
 
-            if (!forceUpdate && globallyExistingRef) {
-              unitsToSkip.push({ 
-                unit, 
-                taskId, 
-                analysis: { 
-                  content: globallyExistingRef.content, 
-                  summary: globallyExistingRef.summary, 
-                  importance: globallyExistingRef.importance, 
-                  tags: globallyExistingRef.tags 
-                }, 
-                globallyExistingRef, 
-                existingRef 
-              });
-            } else if (!forceUpdate && existingRef && existingRef.logicHash === unit.logicHash) {
-              unitsToSkip.push({ 
-                unit, 
-                taskId, 
-                analysis: { 
-                  content: existingRef.content, 
-                  summary: existingRef.summary, 
-                  importance: existingRef.importance, 
-                  tags: existingRef.tags 
-                }, 
-                globallyExistingRef, 
-                existingRef 
-              });
-            } else {
-              unitsToAnalyze.push({ unit, taskId, globallyExistingRef, existingRef });
+        if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
+          finalNote = {
+            ...globallyExistingRef,
+            parentNoteIds: [taskId],
+            relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
+            lastUpdated: new Date().toISOString()
+          };
+          currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+          updateCount++;
+        } else if (existingRef) {
+          finalNote = {
+            ...existingRef,
+            title: unit.title,
+            content: parseAIContent(analysis.content),
+            summary: analysis.summary,
+            importance: analysis.importance,
+            tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
+            lastUpdated: new Date().toISOString(),
+            parentNoteIds: [taskId],
+            folder: `시스템/소스/${file.path}`,
+            logicHash: unit.logicHash,
+            originPath: file.path,
+            fileName,
+            filePath: file.path,
+            sourceUrl,
+            githubLink: `${file.path}#${unit.title}`,
+            sha: file.sha
+          };
+          currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+          updateCount++;
+        } else {
+          finalNote = {
+            id: Math.random().toString(36).substr(2, 9),
+            title: unit.title,
+            folder: `시스템/소스/${file.path}`,
+            content: parseAIContent(analysis.content),
+            summary: analysis.summary,
+            version: '1.0.0',
+            lastUpdated: new Date().toISOString(),
+            importance: analysis.importance,
+            tags: analysis.tags,
+            status: 'Done',
+            priority: 'C',
+            childNoteIds: [],
+            parentNoteIds: [taskId],
+            noteType: 'Reference',
+            relatedNoteIds: [],
+            githubLink: `${file.path}#${unit.title}`,
+            originPath: file.path,
+            fileName,
+            filePath: file.path,
+            sourceUrl,
+            logicHash: unit.logicHash,
+            sha: file.sha
+          };
+          currentNotes.push(finalNote);
+          newCount++;
+        }
+
+        if (!taskNote.childNoteIds.includes(finalNote.id)) {
+          taskNote.childNoteIds = [...taskNote.childNoteIds, finalNote.id];
+          currentNotes[taskNoteIndex] = taskNote;
+          if (!touchedNotes.some(n => n.id === taskNote.id)) touchedNotes.push(taskNote);
+        }
+
+        touchedNotes.push(finalNote);
+        
+        // Track processed IDs per file for discarded notes logic
+        const fileProcessedIds = processedNoteIdsByFile.get(file.path) || [];
+        fileProcessedIds.push(finalNote.id);
+        processedNoteIdsByFile.set(file.path, fileProcessedIds);
+      }
+
+      // Handle Discarded Notes (Per File)
+      for (const [filePath, processedIds] of processedNoteIdsByFile.entries()) {
+        const oldNoteIds = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink && n.githubLink.startsWith(filePath)).map(n => n.id);
+        const discardedNoteIds = oldNoteIds.filter(id => !processedIds.includes(id));
+        for (const id of discardedNoteIds) {
+          const noteIndex = currentNotes.findIndex(n => n.id === id);
+          if (noteIndex !== -1) {
+            const discardedNote = { ...currentNotes[noteIndex] };
+            discardedNote.folder = '시스템/폐기된 소스';
+            discardedNote.parentNoteIds = [];
+            discardedNote.status = 'Deprecated';
+            if (!(discardedNote.tags || []).includes('discarded')) {
+              discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
             }
+            currentNotes[noteIndex] = discardedNote;
+            touchedNotes.push(discardedNote);
           }
-
-          const analyzedResults: any[] = [];
-          const chunkSize = 5;
-          for (let j = 0; j < unitsToAnalyze.length; j += chunkSize) {
-            if (signal.aborted) return;
-            const chunk = unitsToAnalyze.slice(j, j + chunkSize);
-            setProcessStatus((prev: any) => ({ ...prev!, message: `로직 심층 분석 중 (${j + 1}~${Math.min(j + chunkSize, unitsToAnalyze.length)}/${unitsToAnalyze.length})...` }));
-            const promises = chunk.map(async (item) => {
-              const taskNote = currentNotes.find(n => n.id === item.taskId);
-              if (!taskNote) return null;
-              try {
-                const analysis = await analyzeLogicUnitDeeply(item.unit.title, item.unit.codeSnippet, {
-                  title: taskNote.title,
-                  content: taskNote.content,
-                  summary: taskNote.summary
-                }, signal);
-                return { ...item, analysis };
-              } catch (e) {
-                console.error(`Failed to analyze logic unit ${item.unit.title}:`, e);
-                return null;
-              }
-            });
-            const results = await Promise.all(promises);
-            analyzedResults.push(...results.filter(r => r !== null));
-          }
-
-          if (signal.aborted) return;
-          const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
-          
-          for (const item of allProcessedUnits) {
-            if (signal.aborted) return;
-            const { unit, taskId, analysis, globallyExistingRef, existingRef } = item;
-            const taskNoteIndex = currentNotes.findIndex(n => n.id === taskId);
-            if (taskNoteIndex === -1) continue;
-            const taskNote = { ...currentNotes[taskNoteIndex] };
-
-            let finalNote: Note;
-            const fileName = file.path.split('/').pop() || file.path;
-            const sourceUrl = `${state.githubRepo}/blob/main/${file.path}#${unit.title}`;
-
-            if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
-              finalNote = {
-                ...globallyExistingRef,
-                parentNoteIds: [taskId],
-                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
-                lastUpdated: new Date().toISOString()
-              };
-              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
-              updateCount++;
-            } else if (existingRef) {
-              finalNote = {
-                ...existingRef,
-                title: unit.title,
-                content: parseAIContent(analysis.content),
-                summary: analysis.summary,
-                importance: analysis.importance,
-                tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
-                lastUpdated: new Date().toISOString(),
-                parentNoteIds: [taskId],
-                folder: `시스템/소스/${file.path}`,
-                logicHash: unit.logicHash,
-                originPath: file.path,
-                fileName,
-                filePath: file.path,
-                sourceUrl,
-                githubLink: `${file.path}#${unit.title}`,
-                sha: file.sha
-              };
-              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
-              updateCount++;
-            } else {
-              finalNote = {
-                id: Math.random().toString(36).substr(2, 9),
-                title: unit.title,
-                folder: `시스템/소스/${file.path}`,
-                content: parseAIContent(analysis.content),
-                summary: analysis.summary,
-                version: '1.0.0',
-                lastUpdated: new Date().toISOString(),
-                importance: analysis.importance,
-                tags: analysis.tags,
-                status: 'Done',
-                priority: 'C',
-                childNoteIds: [],
-                parentNoteIds: [taskId],
-                noteType: 'Reference',
-                relatedNoteIds: [],
-                githubLink: `${file.path}#${unit.title}`,
-                originPath: file.path,
-                fileName,
-                filePath: file.path,
-                sourceUrl,
-                logicHash: unit.logicHash,
-                sha: file.sha
-              };
-              currentNotes.push(finalNote);
-              touchedNotes.push(finalNote);
-              newCount++;
-            }
-
-            if (!taskNote.childNoteIds.includes(finalNote.id)) {
-              taskNote.childNoteIds = [...taskNote.childNoteIds, finalNote.id];
-              currentNotes[taskNoteIndex] = taskNote;
-              if (!touchedNotes.some(n => n.id === taskNote.id)) touchedNotes.push(taskNote);
-            }
-
-            touchedNotes.push(finalNote);
-            processedNoteIds.push(finalNote.id);
-          }
-
-          const oldNoteIds = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink && n.githubLink.startsWith(file.path)).map(n => n.id);
-          const discardedNoteIds = oldNoteIds.filter(id => !processedNoteIds.includes(id));
-          for (const id of discardedNoteIds) {
-            const noteIndex = currentNotes.findIndex(n => n.id === id);
-            if (noteIndex !== -1) {
-              const discardedNote = { ...currentNotes[noteIndex] };
-              discardedNote.folder = '시스템/폐기된 소스';
-              discardedNote.parentNoteIds = [];
-              discardedNote.status = 'Deprecated';
-              if (!(discardedNote.tags || []).includes('discarded')) {
-                discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
-              }
-              currentNotes[noteIndex] = discardedNote;
-              touchedNotes.push(discardedNote);
-            }
-          }
-
-          if (touchedNotes.length > 0) {
-            await saveNotesToFirestore(touchedNotes);
-          }
-          
-          currentLogs[file.path] = file.sha;
-          const now = new Date().toISOString();
-          if (userId && currentProjectId) {
-            await saveSyncLog(userId, currentProjectId, currentLogs);
-          }
-          await syncProject({ lastSyncedAt: now });
-
-          setState(prev => ({ 
-            ...prev, 
-            notes: currentNotes,
-            fileSyncLogs: { ...currentLogs },
-            lastSyncedAt: now
-          }));
-
-        } catch (e) {
-          if ((e as any)?.message === "Operation cancelled" || e === "Operation cancelled") return;
-          console.error(`Failed to process file ${file.path}:`, e);
         }
       }
+
+      if (touchedNotes.length > 0) {
+        await saveNotesToFirestore(touchedNotes);
+      }
+      
+      const now = new Date().toISOString();
+      if (userId && currentProjectId) {
+        await saveSyncLog(userId, currentProjectId, currentLogs);
+      }
+      await syncProject({ lastSyncedAt: now });
+
+      setState(prev => ({ 
+        ...prev, 
+        notes: currentNotes,
+        fileSyncLogs: { ...currentLogs },
+        lastSyncedAt: now
+      }));
+
 
       await syncProject({
         lastSyncedSha: latestSha

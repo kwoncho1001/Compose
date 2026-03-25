@@ -3,7 +3,7 @@ import { Note } from "../../types";
 import { MODEL_NAME, systemInstruction } from "./config";
 import { generateContentWithRetry } from "./core";
 import { safeJsonParse } from "./utils";
-import { extractLogicUnits, LogicUnit } from "../../utils/codeParser";
+import { extractLogicUnits, LogicUnit, generateHash } from "../../utils/codeParser";
 
 export const updateCodeSnapshot = async (
   fileName: string,
@@ -149,12 +149,17 @@ Return JSON:
         required: ["logicUnits"]
       }
     },
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text || "{}", { logicUnits: [] });
-  return {
-    logicUnits: result?.logicUnits || []
-  };
+  
+  // Ensure logicHash is content-based by recalculating it from the snippet
+  const logicUnits = (result?.logicUnits || []).map((unit: any) => ({
+    ...unit,
+    logicHash: generateHash(unit.codeSnippet)
+  }));
+
+  return { logicUnits };
 };

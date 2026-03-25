@@ -62,9 +62,10 @@ Return JSON:
           tags: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
         required: ["content", "summary", "importance", "tags"],
-      }
+      },
+      maxOutputTokens: 2048 // Limit output for individual logic analysis
     },
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -273,14 +274,90 @@ Return JSON:
           }
         },
         required: ["units"]
-      }
+      },
+      maxOutputTokens: 2048
     },
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
   const result = safeJsonParse(response.text || "{}", { units: [] });
   return {
     units: result?.units || []
+  };
+};
+
+export const designTaskFromReferences = async (
+  taskTitle: string,
+  references: { title: string; summary: string; content: string }[],
+  existingTask?: Note,
+  signal?: AbortSignal
+): Promise<{
+  content: string;
+  summary: string;
+  folder: string;
+  importance: number;
+  tags: string[];
+}> => {
+  // Use a more compact representation for references to save input tokens and focus the AI
+  const referenceDetails = references.map(r => `[부품: ${r.title}]\n요약: ${r.summary}\n핵심내용: ${r.content.slice(0, 300)}...`).join('\n\n');
+  
+  const prompt = `
+당신은 '시스템 아키텍처 및 상세 설계 전문가'입니다. 
+제공된 '구현 부품(Reference)'들을 분석하여, 이들을 포괄하는 상위 설계 노드(Task/Feature)의 **핵심 설계서**를 작성하십시오.
+
+[대상 노드]
+제목: ${taskTitle}
+기존 내용: ${existingTask?.content || '없음'}
+
+[포함된 부품 명세]
+${referenceDetails}
+
+[작업 지침]
+1. **역공학 설계**: 부품들의 기능을 종합하여, 이 노드가 담당하는 '추상적 역할'과 '구체적 명세'를 도출하십시오.
+2. **구조**: Context(배경), Specification(핵심 로직/데이터 흐름), Constraints(제약/예외), Impact(영향도) 순으로 작성하십시오.
+3. **핵심 요약**: 불필요한 수사여구를 배제하고, 기술적 사실과 설계 의도에 집중하여 명확하게 작성하십시오.
+4. 모든 텍스트는 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "content": "종합 설계 명세 (Markdown)",
+  "summary": "핵심 역할 요약 (1-2문장)",
+  "folder": "도메인/경로",
+  "importance": 1~5,
+  "tags": ["auto-generated", "design-leading-code", ...]
+}
+`;
+
+  const response = await generateContentWithRetry({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          content: { type: Type.STRING },
+          summary: { type: Type.STRING },
+          folder: { type: Type.STRING },
+          importance: { type: Type.NUMBER },
+          tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+        },
+        required: ["content", "summary", "folder", "importance", "tags"],
+      },
+      maxOutputTokens: 4096 // Limit output for design docs to prevent token limit errors
+    },
+  }, 3, 1000, signal);
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  const result = safeJsonParse(response.text || "{}", { content: "", summary: "", folder: "시스템/미분류", importance: 3, tags: [] });
+  return {
+    content: result?.content || "설계 실패",
+    summary: result?.summary || "설계 실패",
+    folder: result?.folder || "시스템/미분류",
+    importance: result?.importance || 3,
+    tags: result?.tags || []
   };
 };

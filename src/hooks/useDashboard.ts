@@ -184,6 +184,7 @@ export const useDashboard = () => {
     setProcessStatus,
     showAlert,
     abortControllerRef,
+    isSyncing,
     setIsSyncing,
     handleEnforceHierarchy
   );

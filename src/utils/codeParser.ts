@@ -109,12 +109,20 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
   return units;
 };
 
-const generateHash = (str: string): string => {
+export const generateHash = (str: string): string => {
+  // 1. 코드 스니펫의 공백을 제거하여 미세한 포맷팅 차이에도 대응할지, 
+  //    아니면 공백 하나까지 감지할지 결정합니다. (여기서는 정밀성을 위해 전체 문자열 사용)
+  const content = str.trim();
+  
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    // 31을 곱하는 방식은 Java 등에서 널리 쓰이는 해시 알고리즘입니다.
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+    hash = hash & hash; // 32비트 정수로 변환
   }
-  return Math.abs(hash).toString(16);
+  
+  // 2. 가독성을 위해 접두어를 붙이고, 실제 계산된 16진수 해시값을 연결합니다.
+  const hexHash = Math.abs(hash).toString(16).padStart(8, '0');
+  return `LOGIC_${hexHash}`; 
 };

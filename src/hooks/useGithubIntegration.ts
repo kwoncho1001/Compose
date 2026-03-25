@@ -453,7 +453,7 @@ export const useGithubIntegration = (
 
             const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
             const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
-                                currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
+                                currentNotes.find(n => n.title === unit.title && n.githubLink && n.githubLink.startsWith(file.path));
 
             if (!forceUpdate && globallyExistingRef) {
               unitsToSkip.push({ 
@@ -525,8 +525,8 @@ export const useGithubIntegration = (
             if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
               finalNote = {
                 ...globallyExistingRef,
-                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId, fileNote.id])),
-                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId, fileNote.id])),
+                parentNoteIds: [taskId],
+                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId])),
                 lastUpdated: new Date().toISOString()
               };
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
@@ -534,16 +534,18 @@ export const useGithubIntegration = (
             } else if (existingRef) {
               finalNote = {
                 ...existingRef,
+                title: unit.title,
                 content: parseAIContent(analysis.content),
                 summary: analysis.summary,
                 importance: analysis.importance,
                 tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
                 lastUpdated: new Date().toISOString(),
-                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId, fileNote.id])),
-                folder: taskNote.folder,
+                parentNoteIds: [taskId],
+                folder: `시스템/소스/${file.path}`,
                 logicHash: unit.logicHash,
                 originPath: file.path,
-                sha: file.sha // SHA 업데이트 강제
+                githubLink: `${file.path}#${unit.title}`,
+                sha: file.sha
               };
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
@@ -551,7 +553,7 @@ export const useGithubIntegration = (
               finalNote = {
                 id: Math.random().toString(36).substr(2, 9),
                 title: unit.title,
-                folder: taskNote.folder,
+                folder: `시스템/소스/${file.path}`,
                 content: parseAIContent(analysis.content),
                 summary: analysis.summary,
                 version: '1.0.0',
@@ -561,10 +563,10 @@ export const useGithubIntegration = (
                 status: 'Done',
                 priority: 'C',
                 childNoteIds: [],
-                parentNoteIds: [taskId, fileNote.id],
+                parentNoteIds: [taskId],
                 noteType: 'Reference',
-                relatedNoteIds: [taskId],
-                githubLink: file.path,
+                relatedNoteIds: [],
+                githubLink: `${file.path}#${unit.title}`,
                 originPath: file.path,
                 logicHash: unit.logicHash,
                 sha: file.sha
@@ -572,11 +574,6 @@ export const useGithubIntegration = (
               currentNotes.push(finalNote);
               touchedNotes.push(finalNote);
               newCount++;
-            }
-
-            if (fileNote && !fileNote.parentNoteIds.includes(taskId)) {
-              fileNote.parentNoteIds.push(taskId);
-              if (!touchedNotes.some(tn => tn.id === fileNote!.id)) touchedNotes.push(fileNote);
             }
 
             if (!taskNote.childNoteIds.includes(finalNote.id)) {
@@ -589,7 +586,7 @@ export const useGithubIntegration = (
             processedNoteIds.push(finalNote.id);
           }
 
-          const oldNoteIds = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink === file.path && n.id !== fileNote!.id).map(n => n.id);
+          const oldNoteIds = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink && n.githubLink.startsWith(file.path)).map(n => n.id);
           const discardedNoteIds = oldNoteIds.filter(id => !processedNoteIds.includes(id));
           for (const id of discardedNoteIds) {
             const noteIndex = currentNotes.findIndex(n => n.id === id);

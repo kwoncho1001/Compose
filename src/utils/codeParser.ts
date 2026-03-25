@@ -7,40 +7,32 @@ export interface LogicUnit {
 export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] => {
   const units: LogicUnit[] = [];
   const lines = code.split('\n');
-  
   let currentUnit: { title: string; lines: string[]; startLine: number } | null = null;
   let braceCount = 0;
 
   const isStartOfUnit = (line: string, isTopLevel: boolean) => {
     const trimmed = line.trim();
-    
-    // 1. 최상위 선언 (Class, Function, Interface 등)
-    if (isTopLevel && /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/.test(trimmed)) return true;
-    
-    // 2. 내부 핵심 로직 유닛 (강화됨)
-    // - React Hooks: useEffect, useMemo, useCallback 등
-    if (/^(useEffect|useMemo|useCallback|useLayoutEffect|useImperativeHandle|useInsertionEffect)\s*\(/.test(trimmed)) return true;
-    
-    // - API 호출/비즈니스 로직 핸들러: handleXxx, syncXxx, fetchXxx 등
-    if (/^(const|let|var|async\s+function|function)\s+(handle|sync|fetch|on|compute|validate|process|submit|update|delete|create|get|set)[a-zA-Z0-9_]*\s*(=|\()/.test(trimmed)) return true;
-    
-    // - 복잡한 조건부 렌더링 또는 변환 로직 (선택적)
-    if (trimmed.startsWith('const') && (trimmed.includes('render') || trimmed.includes('Component')) && trimmed.includes('=')) return true;
+    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*')) return false;
 
+    // 1. 모든 선언부 포착 (export 무관)
+    const declPattern = /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/;
+    if (declPattern.test(trimmed)) return true;
+    
+    // 2. 내부 핵심 로직 (Hook 등)
+    if (!isTopLevel) {
+      const hookPattern = /^(useEffect|useMemo|useCallback|useLayoutEffect|use[A-Z][a-zA-Z0-9_]+)\s*\(/;
+      if (hookPattern.test(trimmed)) return true;
+    }
     return false;
   };
 
   const getUnitTitle = (line: string) => {
     const trimmed = line.trim();
-    // Try to match standard declarations
-    const declMatch = trimmed.match(/^(?:export\s+)?(?:class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/);
-    if (declMatch) return declMatch[1];
-    
-    // Try to match hooks
-    const hookMatch = trimmed.match(/^(useEffect|useLayoutEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)/);
+    const match = trimmed.match(/(?:class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/);
+    if (match && match[1]) return match[1];
+    const hookMatch = trimmed.match(/^(useEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)/);
     if (hookMatch) return hookMatch[1];
-    
-    return 'Internal Logic';
+    return 'Anonymous_Logic';
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -48,39 +40,33 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
     const isTopLevel = braceCount === 0;
     
     if (!currentUnit && isStartOfUnit(line, isTopLevel)) {
-      currentUnit = {
-        title: getUnitTitle(line),
-        lines: [line],
-        startLine: i
-      };
+      currentUnit = { title: getUnitTitle(line), lines: [line], startLine: i };
       braceCount = (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+      if (braceCount <= 0 && line.includes(';')) {
+        pushUnit(currentUnit);
+        currentUnit = null;
+      }
     } else if (currentUnit) {
       currentUnit.lines.push(line);
       braceCount += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
-      
       if (braceCount <= 0) {
-        // End of unit
-        const snippet = currentUnit.lines.join('\n');
-        units.push({
-          title: currentUnit.title,
-          codeSnippet: snippet,
-          logicHash: generateHash(snippet)
-        });
+        pushUnit(currentUnit);
         currentUnit = null;
         braceCount = 0;
       }
     }
   }
 
-  // If the whole file is just one big script without clear blocks, or if no units were found
-  if (units.length === 0 && code.trim().length > 0) {
-    units.push({
-      title: filePath.split('/').pop() || 'File Content',
-      codeSnippet: code,
-      logicHash: generateHash(code)
-    });
+  function pushUnit(unit: { title: string; lines: string[] }) {
+    const snippet = unit.lines.join('\n');
+    if (snippet.trim().length > 0) {
+      units.push({
+        title: unit.title,
+        codeSnippet: snippet,
+        logicHash: generateHash(snippet)
+      });
+    }
   }
-
   return units;
 };
 
@@ -89,7 +75,7 @@ const generateHash = (str: string): string => {
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash).toString(16);
 };

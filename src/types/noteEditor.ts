@@ -25,11 +25,9 @@ export interface NoteSummarySectionProps {
 }
 
 export interface MetadataFieldGroupProps {
-  editData: any;
-  setEditData: React.Dispatch<React.SetStateAction<any>>;
-  syncChanges: (updatedData: any) => void;
-  isSnapshotNote: boolean;
-  note: Note;
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
 }
 
 export interface RelationshipFieldGroupProps {

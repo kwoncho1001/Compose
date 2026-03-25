@@ -172,7 +172,7 @@ export const useGithubIntegration = (
     return allNotes;
   };
 
-  const handleSyncGithub = async () => {
+  const handleSyncGithub = async (forceUpdate: boolean = false) => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
       return;
@@ -435,7 +435,7 @@ export const useGithubIntegration = (
             const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
                                 currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
 
-            if (globallyExistingRef) {
+            if (!forceUpdate && globallyExistingRef) {
               console.log(`Skipping deep-dive for ${unit.title} as logicHash matches globally.`);
               unitsToSkip.push({ 
                 unit, 
@@ -449,7 +449,7 @@ export const useGithubIntegration = (
                 globallyExistingRef, 
                 existingRef 
               });
-            } else if (existingRef && existingRef.logicHash === unit.logicHash) {
+            } else if (!forceUpdate && existingRef && existingRef.logicHash === unit.logicHash) {
               console.log(`Skipping deep-dive for ${unit.title} as logicHash matches locally.`);
               unitsToSkip.push({ 
                 unit, 
@@ -535,7 +535,8 @@ export const useGithubIntegration = (
                 parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId, fileNote.id])),
                 folder: taskNote.folder,
                 logicHash: unit.logicHash,
-                originPath: file.path
+                originPath: file.path,
+                sha: latestSha
               };
               currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
               updateCount++;
@@ -558,7 +559,8 @@ export const useGithubIntegration = (
                 relatedNoteIds: [taskId],
                 githubLink: file.path,
                 originPath: file.path,
-                logicHash: unit.logicHash
+                logicHash: unit.logicHash,
+                sha: latestSha
               };
               currentNotes.push(finalNote);
               touchedNotes.push(finalNote);

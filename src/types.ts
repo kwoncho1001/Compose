@@ -34,6 +34,7 @@ export interface Note {
   githubLink?: string;
   originPath?: string; // 소스 파일의 물리적 경로 (예: src/services/gemini.ts)
   logicHash?: string;  // 로직 단위의 지문 (코드 조각의 해시값)
+  sha?: string;        // 동기화 시점의 커밋 SHA
   isMainFeature?: boolean;
   conflictInfo?: {
     filePath: string;

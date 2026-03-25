@@ -11,19 +11,40 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
   let currentUnit: { title: string; lines: string[]; startLine: number } | null = null;
   let braceCount = 0;
 
-  const isStartOfUnit = (line: string) => {
-    return /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/.test(line.trim());
+  const isStartOfUnit = (line: string, isTopLevel: boolean) => {
+    const trimmed = line.trim();
+    // Top-level exports and declarations
+    if (isTopLevel && /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/.test(trimmed)) return true;
+    
+    // Internal logic units (Hooks, Handlers) - only if they look like significant blocks
+    if (!isTopLevel) {
+      // Hooks: useEffect, useMemo, useCallback, useCustomHook
+      if (/^(useEffect|useLayoutEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)\s*\(/.test(trimmed)) return true;
+      // Handlers/Internal functions: const handleX = ... or function handleX() ...
+      if (/^(const|let|var|function)\s+(handle|on|get|set|render|process)[A-Z][a-zA-Z0-9_]+\s*(=|\()/.test(trimmed)) return true;
+    }
+    
+    return false;
   };
 
   const getUnitTitle = (line: string) => {
-    const match = line.trim().match(/^(?:export\s+)?(?:class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/);
-    return match ? match[1] : 'Unknown';
+    const trimmed = line.trim();
+    // Try to match standard declarations
+    const declMatch = trimmed.match(/^(?:export\s+)?(?:class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/);
+    if (declMatch) return declMatch[1];
+    
+    // Try to match hooks
+    const hookMatch = trimmed.match(/^(useEffect|useLayoutEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)/);
+    if (hookMatch) return hookMatch[1];
+    
+    return 'Internal Logic';
   };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const isTopLevel = braceCount === 0;
     
-    if (!currentUnit && isStartOfUnit(line)) {
+    if (!currentUnit && isStartOfUnit(line, isTopLevel)) {
       currentUnit = {
         title: getUnitTitle(line),
         lines: [line],

@@ -60,7 +60,7 @@ export interface DashboardActions {
   handleAnalyzeNextSteps: () => Promise<void>;
   
   // Github Actions
-  handleSyncGithub: () => Promise<void>;
+  handleSyncGithub: (forceUpdate?: boolean) => Promise<void>;
   handleWipeSnapshots: () => Promise<void>;
   
   // Chat Actions

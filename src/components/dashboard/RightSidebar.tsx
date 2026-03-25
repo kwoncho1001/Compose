@@ -16,7 +16,7 @@ interface RightSidebarProps {
   state: AppState;
   setState: React.Dispatch<React.SetStateAction<AppState>>;
   syncProject: (data: Partial<AppState>) => void;
-  handleSyncGithub: () => void;
+  handleSyncGithub: (forceUpdate?: boolean) => void;
   isSyncing: boolean;
   handleWipeSnapshots: () => void;
   handleOptimizeBlueprint: () => void;
@@ -157,7 +157,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => handleSyncGithub()}
+                    onClick={() => handleSyncGithub(false)}
                     disabled={isSyncing}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
                     title="변경된 파일만 분석하여 코드 스냅샷을 업데이트합니다."
@@ -166,9 +166,18 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                     최신 코드 반영
                   </button>
                   <button
+                    onClick={() => handleSyncGithub(true)}
+                    disabled={isSyncing}
+                    className="bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                    title="모든 파일을 강제로 다시 분석하여 원자적 로직을 추출합니다."
+                  >
+                    {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    강제 재분석
+                  </button>
+                  <button
                     onClick={() => handleWipeSnapshots()}
                     disabled={isSyncing}
-                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+                    className="col-span-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 py-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
                     title="GitHub에서 가져온 모든 코드 스냅샷을 삭제합니다."
                   >
                     <Trash2 className="w-3 h-3" />

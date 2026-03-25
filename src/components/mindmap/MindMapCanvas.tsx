@@ -30,6 +30,28 @@ export const MindMapCanvas = ({ nodes, links, handleNodeClick, selectedNoteId, d
       graphData={{ nodes, links }}
       nodeColor={nodeColor}
       nodeRelSize={6}
+      linkColor={() => darkMode ? '#475569' : '#94a3b8'}
+      linkWidth={2}
+      linkDirectionalArrowLength={3.5}
+      linkDirectionalArrowRelPos={1}
+      linkDirectionalParticles={2}
+      linkDirectionalParticleSpeed={0.005}
+      linkDirectionalParticleWidth={2}
+      linkCanvasObject={(link: any, ctx) => {
+        const start = link.source;
+        const end = link.target;
+
+        if (typeof start !== 'object' || typeof end !== 'object') return;
+
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+
+        ctx.strokeStyle = darkMode ? '#475569' : '#94a3b8';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }}
+      linkCanvasObjectMode={() => 'before'}
       onNodeClick={handleNodeClick}
       nodeCanvasObject={(node: any, ctx, globalScale) => {
         const label = node.name;

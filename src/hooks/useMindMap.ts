@@ -48,7 +48,11 @@ export const useMindMap = (notes: Note[], onSelectNote: (id: string) => void) =>
       });
     });
 
-    return { nodes, links };
+    // 3. 유효한 링크만 필터링 (존재하는 노드 간의 연결만 유지)
+    const nodeIds = new Set(nodes.map(n => n.id));
+    const validLinks = links.filter(l => nodeIds.has(l.source) && nodeIds.has(l.target));
+
+    return { nodes, links: validLinks };
   }, [notes]);
 
   const toggleViewMode = useCallback(() => {

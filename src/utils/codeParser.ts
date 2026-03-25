@@ -13,17 +13,20 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
 
   const isStartOfUnit = (line: string, isTopLevel: boolean) => {
     const trimmed = line.trim();
-    // Top-level exports and declarations
+    
+    // 1. 최상위 선언 (Class, Function, Interface 등)
     if (isTopLevel && /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/.test(trimmed)) return true;
     
-    // Internal logic units (Hooks, Handlers) - only if they look like significant blocks
-    if (!isTopLevel) {
-      // Hooks: useEffect, useMemo, useCallback, useCustomHook
-      if (/^(useEffect|useLayoutEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)\s*\(/.test(trimmed)) return true;
-      // Handlers/Internal functions: const handleX = ... or function handleX() ...
-      if (/^(const|let|var|function)\s+(handle|on|get|set|render|process)[A-Z][a-zA-Z0-9_]+\s*(=|\()/.test(trimmed)) return true;
-    }
+    // 2. 내부 핵심 로직 유닛 (강화됨)
+    // - React Hooks: useEffect, useMemo, useCallback 등
+    if (/^(useEffect|useMemo|useCallback|useLayoutEffect|useImperativeHandle|useInsertionEffect)\s*\(/.test(trimmed)) return true;
     
+    // - API 호출/비즈니스 로직 핸들러: handleXxx, syncXxx, fetchXxx 등
+    if (/^(const|let|var|async\s+function|function)\s+(handle|sync|fetch|on|compute|validate|process|submit|update|delete|create|get|set)[a-zA-Z0-9_]*\s*(=|\()/.test(trimmed)) return true;
+    
+    // - 복잡한 조건부 렌더링 또는 변환 로직 (선택적)
+    if (trimmed.startsWith('const') && (trimmed.includes('render') || trimmed.includes('Component')) && trimmed.includes('=')) return true;
+
     return false;
   };
 

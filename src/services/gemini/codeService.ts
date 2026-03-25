@@ -217,3 +217,70 @@ Return JSON matching the Note schema (title, folder, content, summary, importanc
     };
   }
 };
+
+export const suggestLogicBoundaries = async (
+  fileName: string,
+  fileContent: string,
+  signal?: AbortSignal
+): Promise<{
+  units: { title: string; startLine: number; endLine: number; reason: string }[];
+}> => {
+  const prompt = `
+당신은 '코드 구조 분석 전문가'입니다. 제공된 소스 코드를 읽고, 의미론적으로 독립적인 '로직 단위'들의 경계를 제안하십시오.
+단순히 함수 단위가 아니라, 특정 기능을 수행하는 코드 블록(Hook, Handler, Complex Logic)을 찾아내야 합니다.
+
+[분석 대상]
+파일 이름: ${fileName}
+소스 코드:
+${fileContent.slice(0, 15000)}
+
+[작업 지침]
+1. 코드의 시작부터 끝까지 훑으며, 논리적으로 하나의 단위로 묶일 수 있는 구간을 정의하십시오.
+2. 각 단위에 대해 적절한 제목(title), 시작 라인(startLine), 끝 라인(endLine), 그리고 왜 이 구간을 단위로 설정했는지에 대한 이유(reason)를 작성하십시오.
+3. 라인 번호는 0부터 시작하는 인덱스 기준입니다.
+4. 모든 텍스트는 한국어로 작성하십시오.
+
+Return JSON:
+{
+  "units": [
+    { "title": "단위 제목", "startLine": 0, "endLine": 10, "reason": "이 구간은 ...를 처리하는 핵심 로직입니다." },
+    ...
+  ]
+}
+`;
+
+  const response = await generateContentWithRetry({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          units: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                startLine: { type: Type.NUMBER },
+                endLine: { type: Type.NUMBER },
+                reason: { type: Type.STRING }
+              },
+              required: ["title", "startLine", "endLine", "reason"]
+            }
+          }
+        },
+        required: ["units"]
+      }
+    },
+  });
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
+
+  const result = safeJsonParse(response.text || "{}", { units: [] });
+  return {
+    units: result?.units || []
+  };
+};

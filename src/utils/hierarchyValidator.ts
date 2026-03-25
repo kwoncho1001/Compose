@@ -131,3 +131,48 @@ export const getAllDescendants = (noteId: string, allNotes: Note[]): string[] =>
 
   return descendants;
 };
+
+/**
+ * 계층 구조 정상화 (Sibling Promotion)
+ * Feature로 승격되었는데 부모도 Feature인 경우, 부모의 부모(Epic)에게 직접 붙입니다.
+ */
+export const normalizeHierarchy = (promotedNote: Note, allNotes: Note[]): Note[] => {
+  const touchedNotes: Note[] = [];
+  
+  // 1. Feature로 승격되었는데 부모도 Feature인 경우 (규칙 위반)
+  if (promotedNote.noteType === 'Feature') {
+    const parentIds = [...(promotedNote.parentNoteIds || [])];
+    let hierarchyChanged = false;
+
+    parentIds.forEach(parentId => {
+      const parentNote = allNotes.find(n => n.id === parentId);
+      if (parentNote && parentNote.noteType === 'Feature') {
+        // 2. 부모 Feature의 부모(Epic)를 찾음
+        const grandParentEpic = allNotes.find(n => 
+          (parentNote.parentNoteIds || []).includes(n.id) && n.noteType === 'Epic'
+        );
+
+        if (grandParentEpic) {
+          // 3. 재배치: 부모의 부모(Epic)에게 직접 붙임
+          promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+          promotedNote.parentNoteIds.push(grandParentEpic.id);
+          
+          // 4. 기존 부모와의 관계는 '연관됨'으로 유지
+          promotedNote.relatedNoteIds = Array.from(new Set([...(promotedNote.relatedNoteIds || []), parentId]));
+          
+          hierarchyChanged = true;
+        } else {
+          // 만약 조부모 Epic이 없다면? 이 Feature는 최상위 Feature로서 독립시킴 (부모 연결 해제)
+          promotedNote.parentNoteIds = (promotedNote.parentNoteIds || []).filter(id => id !== parentId);
+          hierarchyChanged = true;
+        }
+      }
+    });
+
+    if (hierarchyChanged) {
+      touchedNotes.push(promotedNote);
+    }
+  }
+  
+  return touchedNotes;
+};

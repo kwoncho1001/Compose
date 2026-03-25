@@ -105,7 +105,7 @@ export const useGithubIntegration = (
             childNoteIds: [],
             relatedNoteIds: [],
             parentNoteIds: [],
-            noteType: 'Reference'
+            noteType: 'Task'
           };
           
           await saveNotesToFirestore([newLogNote]);
@@ -278,7 +278,7 @@ export const useGithubIntegration = (
               childNoteIds: [],
               relatedNoteIds: [],
               parentNoteIds: [],
-              noteType: 'Reference'
+              noteType: 'Task'
             };
             currentNotes.push(newLogNote);
             await saveNotesToFirestore([newLogNote]);
@@ -315,58 +315,8 @@ export const useGithubIntegration = (
         });
 
         try {
-          // 1. 파일 레퍼런스 노드(부모) 확보
-          let fileNote = currentNotes.find(n => n.noteType === 'Reference' && n.githubLink === file.path);
-          const nowStr = new Date().toISOString();
-          
-          if (!fileNote) {
-            const newFileNoteId = Math.random().toString(36).substr(2, 9);
-            fileNote = {
-              id: newFileNoteId,
-              title: file.path.split('/').pop() || file.path,
-              folder: `시스템/파일/${file.path.split('/').slice(0, -1).join('/') || 'Root'}`,
-              content: `# ${file.path}\n\n이 파일은 GitHub에서 동기화되었습니다.`,
-              summary: `${file.path} 파일의 전체 구조 및 로직 요약`,
-              status: 'Done',
-              version: '1.0.0',
-              lastUpdated: nowStr,
-              importance: 3,
-              priority: 'B',
-              tags: ['github-sync', 'file-reference'],
-              noteType: 'Reference',
-              githubLink: file.path,
-              parentNoteIds: [], 
-              childNoteIds: [],
-              relatedNoteIds: []
-            };
-            currentNotes.push(fileNote);
-            await saveNotesToFirestore([fileNote]);
-          } else {
-            fileNote = { ...fileNote, lastUpdated: nowStr };
-            currentNotes = currentNotes.map(n => n.id === fileNote!.id ? fileNote! : n);
-          }
-
-          // 캐시 히트이고 강제 업데이트가 아니면 구조만 검증하고 스킵
+          // 캐시 히트이고 강제 업데이트가 아니면 스킵
           if (isCached && !forceUpdate) {
-            // 기존에 연결된 Reference 노드들의 부모 관계 재검증
-            const existingRefs = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink === file.path && n.id !== fileNote!.id);
-            const touchedRefs: Note[] = [];
-            
-            for (const ref of existingRefs) {
-              let refChanged = false;
-              if (!ref.parentNoteIds.includes(fileNote!.id)) {
-                ref.parentNoteIds = Array.from(new Set([...ref.parentNoteIds, fileNote!.id]));
-                refChanged = true;
-              }
-              if (refChanged) {
-                touchedRefs.push(ref);
-                currentNotes = currentNotes.map(n => n.id === ref.id ? ref : n);
-              }
-            }
-            
-            if (touchedRefs.length > 0) {
-              await saveNotesToFirestore(touchedRefs);
-            }
             continue;
           }
 
@@ -522,6 +472,9 @@ export const useGithubIntegration = (
             const taskNote = { ...currentNotes[taskNoteIndex] };
 
             let finalNote: Note;
+            const fileName = file.path.split('/').pop() || file.path;
+            const sourceUrl = `${state.githubRepo}/blob/main/${file.path}#${unit.title}`;
+
             if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
               finalNote = {
                 ...globallyExistingRef,
@@ -544,6 +497,9 @@ export const useGithubIntegration = (
                 folder: `시스템/소스/${file.path}`,
                 logicHash: unit.logicHash,
                 originPath: file.path,
+                fileName,
+                filePath: file.path,
+                sourceUrl,
                 githubLink: `${file.path}#${unit.title}`,
                 sha: file.sha
               };
@@ -568,6 +524,9 @@ export const useGithubIntegration = (
                 relatedNoteIds: [],
                 githubLink: `${file.path}#${unit.title}`,
                 originPath: file.path,
+                fileName,
+                filePath: file.path,
+                sourceUrl,
                 logicHash: unit.logicHash,
                 sha: file.sha
               };

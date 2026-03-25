@@ -55,7 +55,7 @@ export interface DashboardActions {
   // AI Actions
   handleOptimizeBlueprint: () => Promise<void>;
   handleCheckConsistency: () => Promise<void>;
-  handleEnforceHierarchy: () => Promise<void>;
+  handleEnforceHierarchy: (notesList?: Note[], silentSuccess?: boolean, skipSave?: boolean) => Promise<Note[]>;
   handleGenerateSubModules: (note: Note) => Promise<void>;
   handleAnalyzeNextSteps: () => Promise<void>;
   

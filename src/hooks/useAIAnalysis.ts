@@ -76,9 +76,9 @@ export const useAIAnalysis = (
     }
   };
 
-  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false) => {
+  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false, skipSave = false) => {
     let targetNotes = notesList || state.notes;
-    if (targetNotes.length === 0 || !userId || !currentProjectId) return;
+    if (targetNotes.length === 0 || !userId || !currentProjectId) return targetNotes;
 
     let iteration = 0;
     const maxIterations = 5;
@@ -106,7 +106,7 @@ export const useAIAnalysis = (
 
         const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
         
-        if (signal.aborted) return;
+        if (signal.aborted) return targetNotes;
 
         const newNotes: Note[] = [];
         const updatedNotes: Note[] = [];
@@ -185,9 +185,7 @@ export const useAIAnalysis = (
 
         if (newNotes.length > 0 || updatedNotes.length > 0) {
           hasChanges = true;
-          if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
-          if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
-
+          
           const affectedMap = new Map<string, Note>();
           const finalNotes = [...targetNotes, ...newNotes];
 
@@ -201,19 +199,20 @@ export const useAIAnalysis = (
           const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
 
           targetNotes = finalSanitizedNotes;
-          await saveNotesToFirestore(targetNotes);
         } else {
-          // No more changes suggested by AI, but still invalid? Break to avoid infinite loop
           break;
         }
       }
 
-      if (hasChanges) {
+      if (hasChanges && !skipSave) {
+        // Only save once at the end if not skipping
+        await saveNotesToFirestore(targetNotes);
         setState(prev => ({ ...prev, notes: targetNotes }));
         if (!silentSuccess) {
           showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
         }
       }
+      return targetNotes;
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Hierarchy optimization cancelled');
@@ -221,6 +220,7 @@ export const useAIAnalysis = (
         console.error('Hierarchy optimization failed', error);
         showAlert('오류', '최적화 중 오류가 발생했습니다.', 'error');
       }
+      return targetNotes;
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);

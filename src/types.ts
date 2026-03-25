@@ -1,6 +1,7 @@
 export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required' | 'Temporary Merge';
 export type NoteType = 'Epic' | 'Feature' | 'Task' | 'Reference';
 export type NotePriority = 'S' | 'A' | 'B' | 'C' | 'Done'; // S(최고), A, B, C, Done
+export type SyncSource = 'USER' | 'AI' | 'SYSTEM' | 'REMOTE';
 
 export interface Note {
   // --- 구획 1: 요약 ---

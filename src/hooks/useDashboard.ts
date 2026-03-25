@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Note, AppState, NoteType, NoteStatus } from '../types';
 import { DashboardUIState, DashboardActions, DashboardData } from '../types/dashboard';
 
@@ -278,9 +278,9 @@ export const useDashboard = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [saveNotesToFirestore, syncProject, setState, showAlert]);
 
-  const selectedNote = state.notes.find(n => n.id === selectedNoteId);
+  const selectedNote = useMemo(() => state.notes.find(n => n.id === selectedNoteId), [state.notes, selectedNoteId]);
 
-  const uiState: DashboardUIState = {
+  const uiState: DashboardUIState = useMemo(() => ({
     isSidebarOpen,
     isMobileMenuOpen,
     activeSidebarTab,
@@ -298,9 +298,14 @@ export const useDashboard = () => {
     isInitialLoading,
     chatInput: chatSession.chatInput,
     isChatting: chatSession.isChatting
-  };
+  }), [
+    isSidebarOpen, isMobileMenuOpen, activeSidebarTab, selectedNoteId, darkMode,
+    isDecomposing, isSyncing, isRefactoring, isCheckingConsistency, processStatus,
+    nextStepSuggestion, leftSidebarOpen, rightSidebarOpen, viewMode, isInitialLoading,
+    chatSession.chatInput, chatSession.isChatting
+  ]);
 
-  const actions: DashboardActions = {
+  const actions: DashboardActions = useMemo(() => ({
     setIsSidebarOpen,
     setIsMobileMenuOpen,
     setActiveSidebarTab,
@@ -339,9 +344,20 @@ export const useDashboard = () => {
     startSynthesis: knowledgeSynthesis.startSynthesis,
     isSynthesizing: knowledgeSynthesis.isSynthesizing,
     syncProject
-  };
+  }), [
+    setIsSidebarOpen, setIsMobileMenuOpen, setActiveSidebarTab, setSelectedNoteId,
+    setDarkMode, setViewMode, setRightSidebarOpen, chatSession.setChatInput,
+    handleCancelProcess, showAlert, handleExport, handleImport, setCurrentProjectId,
+    handleCreateProject, handleRenameProject, handleDeleteProject, handleUpdateNote,
+    handleDeleteNote, handleDeleteFolder, handleDeleteMultiple, handleSanitizeIntegrity,
+    handleTargetedUpdate, handleAddNote, handleAddChildNote, handleTextFileUpload,
+    handleOptimizeBlueprint, handleCheckConsistency, handleEnforceHierarchy,
+    handleGenerateSubModules, handleAnalyzeNextSteps, handleSyncGithub, handleWipeSnapshots,
+    handleChatSubmit, chatSession.handleClearChat, handleInteractiveAction,
+    knowledgeSynthesis.startSynthesis, knowledgeSynthesis.isSynthesizing, syncProject
+  ]);
 
-  const data: DashboardData = {
+  const data: DashboardData = useMemo(() => ({
     state,
     setState,
     projects,
@@ -350,16 +366,18 @@ export const useDashboard = () => {
     selectedNote,
     dialogConfig,
     setDialogConfig
-  };
+  }), [state, setState, projects, currentProjectId, userId, selectedNote, dialogConfig, setDialogConfig]);
+
+  const refs = useMemo(() => ({
+    fileInputRef,
+    textFileInputRef,
+    chatEndRef: chatSession.chatEndRef
+  }), [fileInputRef, textFileInputRef, chatSession.chatEndRef]);
 
   return {
     uiState,
     actions,
     data,
-    refs: {
-      fileInputRef,
-      textFileInputRef,
-      chatEndRef: chatSession.chatEndRef
-    }
+    refs
   };
 };

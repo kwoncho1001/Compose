@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { Note, AppState, NoteType } from '../types';
@@ -23,6 +23,7 @@ export const useNoteSync = (
   syncProject: (updates: Partial<AppState>) => Promise<void>,
   abortControllerRef: React.MutableRefObject<AbortController | null>
 ) => {
+  const isRemoteUpdate = useRef(false);
 
   useEffect(() => {
     if (!userId || !currentProjectId) return;
@@ -37,8 +38,14 @@ export const useNoteSync = (
       
       notesList.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
+      isRemoteUpdate.current = true;
       setState(prev => ({ ...prev, notes: notesList }));
       setIsInitialLoading(false);
+      
+      // Reset the flag after the state update has likely propagated
+      setTimeout(() => {
+        isRemoteUpdate.current = false;
+      }, 1000);
     }, (e) => handleFirestoreError(e, OperationType.GET, notesRef.path));
 
     return () => {
@@ -393,6 +400,12 @@ export const useNoteSync = (
 
   const handleSanitizeIntegrity = async (silent = false) => {
     if (state.notes.length === 0 || !userId || !currentProjectId) return;
+    
+    // Skip automatic integrity check if the last update was from remote to prevent loops
+    if (silent && isRemoteUpdate.current) {
+      console.log('[useNoteSync] Skipping silent integrity check due to remote update flag');
+      return;
+    }
 
     const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
 
@@ -549,6 +562,7 @@ export const useNoteSync = (
     handleTargetedUpdate,
     handleAddNote,
     handleAddChildNote,
-    handleTextFileUpload
+    handleTextFileUpload,
+    isRemoteUpdate
   };
 };

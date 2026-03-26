@@ -110,11 +110,14 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
 };
 
 export const generateHash = (str: string): string => {
-  // Normalize: remove comments and collapse whitespace to avoid unnecessary AI calls
+  // Normalize: remove comments, collapse whitespace, and remove non-essential characters
+  // to ensure that only actual logic changes affect the hash.
   const normalized = str
     .replace(/\/\/.*$/gm, '') // remove single line comments
     .replace(/\/\*[\s\S]*?\*\//g, '') // remove multi-line comments
-    .replace(/\s+/g, ' ') // collapse whitespace
+    .replace(/\s+/g, '') // remove ALL whitespace for maximum stability against formatting
+    .replace(/['"`]/g, '"') // normalize all quotes to double quotes
+    .replace(/;+$/g, '') // remove trailing semicolons
     .trim();
   
   let hash = 0;

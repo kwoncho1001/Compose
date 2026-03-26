@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { Note, AppState } from '../types';
+import { generateTaskDeterministicId } from '../utils/idGenerator';
 import { optimizeBlueprint, checkConsistency, generateSubModules, suggestNextSteps } from '../services/gemini';
 import { findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
 import { suggestOrCreateParentsBatch } from '../services/gemini';
@@ -26,7 +27,7 @@ export const useAIAnalysis = (
   githubReadme: string
 ) => {
 
-  const handleOptimizeBlueprint = useCallback(async () => {
+  const handleOptimizeBlueprint = async () => {
     if (state.notes.length === 0) return;
 
     const abortController = new AbortController();
@@ -74,9 +75,9 @@ export const useAIAnalysis = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  }, [state.notes, state.gcm, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, deleteNoteFromFirestore, syncProject, setState, setNextStepSuggestion, setRightSidebarOpen, showAlert]);
+  };
 
-  const handleEnforceHierarchy = useCallback(async (notesList?: Note[], silentSuccess = false) => {
+  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false) => {
     let targetNotes = notesList || state.notes;
     if (targetNotes.length === 0 || !userId || !currentProjectId) return;
 
@@ -225,9 +226,9 @@ export const useAIAnalysis = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  }, [state.notes, userId, currentProjectId, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, setState, showAlert]);
+  };
 
-  const handleCheckConsistency = useCallback(async () => {
+  const handleCheckConsistency = async () => {
     if (state.notes.length === 0) return;
 
     const abortController = new AbortController();
@@ -279,9 +280,9 @@ export const useAIAnalysis = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  }, [state.notes, state.gcm, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, setState, setNextStepSuggestion, setRightSidebarOpen, showAlert]);
+  };
 
-  const handleGenerateSubModules = useCallback(async (mainNote: Note) => {
+  const handleGenerateSubModules = async (mainNote: Note) => {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const signal = abortController.signal;
@@ -301,7 +302,7 @@ export const useAIAnalysis = (
 
       const newNotesWithIds = result.newNotes.map((n) => ({
         ...n,
-        id: Math.random().toString(36).substr(2, 9),
+        id: generateTaskDeterministicId(currentProjectId, n.title || "Untitled Child Note"),
         status: 'Planned' as const,
         priority: 'C' as const,
       }));
@@ -341,9 +342,9 @@ export const useAIAnalysis = (
       setIsDecomposing(false);
       setProcessStatus(null);
     }
-  }, [state.githubRepo, state.gcm, state.notes, githubFiles, githubReadme, abortControllerRef, setIsDecomposing, setProcessStatus, saveNotesToFirestore, syncProject, setState, showAlert]);
+  };
 
-  const handleAnalyzeNextSteps = useCallback(async () => {
+  const handleAnalyzeNextSteps = async () => {
     setProcessStatus({ message: '다음 단계 분석 중...' });
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -378,8 +379,7 @@ export const useAIAnalysis = (
       }
       setProcessStatus(null);
     }
-  }, [state.notes, state.gcm, abortControllerRef, setProcessStatus, setNextStepSuggestion, saveNotesToFirestore, setState, setRightSidebarOpen, showAlert]);
-
+  };
 
   return {
     handleOptimizeBlueprint,

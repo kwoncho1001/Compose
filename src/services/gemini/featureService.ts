@@ -1,10 +1,12 @@
 import { Type } from "@google/genai";
 import { Note, GCM, NoteType } from "../../types";
+import { generateTaskDeterministicId } from "../../utils/idGenerator";
 import { ai, MODEL_NAME, systemInstruction, noteSchema } from "./config";
 import { generateContentWithRetry } from "./core";
 import { safeJsonParse, sanitizeNotes } from "./utils";
 
 export const decomposeFeature = async (
+  projectId: string,
   featureRequest: string,
   currentGcm: GCM,
   existingNotes: Note[],
@@ -29,7 +31,7 @@ export const decomposeFeature = async (
   const mainFeature = safeJsonParse(step1Response.text);
 
   // --- [🔥 핵심 변경: 부모 ID 및 계급 강제 설정] ---
-  const mainNoteId = Math.random().toString(36).substr(2, 9);
+  const mainNoteId = generateTaskDeterministicId(projectId, mainFeature.title || "Untitled Note");
   const isSystemRequest = featureRequest && typeof featureRequest === 'string' && (featureRequest.includes('시스템') || featureRequest.includes('인프라') || featureRequest.includes('아키텍처'));
   const parentType = (mainFeature.noteType === 'Epic' || isSystemRequest) ? 'Epic' : 'Feature';
   const childType = parentType === 'Epic' ? 'Feature' : 'Task';
@@ -85,7 +87,7 @@ export const decomposeFeature = async (
     tags: n.tags || [],
     childNoteIds: [],
     ...n,
-    id: Math.random().toString(36).substr(2, 9),
+    id: generateTaskDeterministicId(projectId, n.title || "Untitled Child Note"),
     parentNoteIds: [mainNoteId], // 부모 ID와 강제 연결
     noteType: childType,      // 부모가 E면 F, 부모가 F면 T 강제 할당
     status: 'Planned'

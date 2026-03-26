@@ -2,7 +2,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { Note, SyncRegistry, SyncEntry, NoteType } from '../types';
 import { fetchGithubFileContent } from './github';
-import { updateCodeSnapshot, analyzeLogicUnitDeeply, designTaskFromReferences, analyzeAndMapUnit } from './gemini';
+import { updateCodeSnapshot, analyzeLogicUnitDeeply, designTaskFromReferences, analyzeAndMapBatch } from './gemini';
 import { extractLogicUnits } from '../utils/codeParser';
 import { generateDeterministicId, generateTaskDeterministicId } from '../utils/idGenerator';
 
@@ -36,6 +36,7 @@ export interface AnalysisItem {
   globallyExistingRef?: Note;
   existingRef?: Note;
   analysis?: any;
+  suggestedTask?: any;
 }
 
 export interface TaskGroup {
@@ -134,23 +135,46 @@ export const saveNotesBatchWithRegistry = async (
   entries: Record<string, SyncEntry>,
   cleanObject: (obj: any) => any
 ) => {
-  const batch = writeBatch(db);
+  const CHUNK_SIZE = 450; // Firestore limit is 500, using 450 for safety
   const registryRef = doc(db, 'users', userId, 'projects', projectId, 'sync', SYNC_REGISTRY_ID);
 
-  notes.forEach(note => {
-    const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', note.id);
-    batch.set(noteRef, cleanObject(note));
-  });
+  // Split notes into chunks
+  for (let i = 0; i < notes.length; i += CHUNK_SIZE) {
+    const chunk = notes.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
 
-  batch.set(registryRef, {
-    entries: entries,
-    lastSyncedAt: new Date().toISOString()
-  }, { merge: true });
+    chunk.forEach(note => {
+      const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', note.id);
+      batch.set(noteRef, cleanObject(note));
+    });
 
-  try {
-    await batch.commit();
-  } catch (e) {
-    handleFirestoreError(e, OperationType.WRITE, 'save-notes-batch-with-registry');
+    // Only save registry in the last batch or if it's the only batch
+    if (i + CHUNK_SIZE >= notes.length) {
+      batch.set(registryRef, {
+        entries: entries,
+        lastSyncedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+
+    try {
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, `save-notes-batch-chunk-${i}`);
+    }
+  }
+
+  // If no notes were provided, still update the registry
+  if (notes.length === 0) {
+    const batch = writeBatch(db);
+    batch.set(registryRef, {
+      entries: entries,
+      lastSyncedAt: new Date().toISOString()
+    }, { merge: true });
+    try {
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'save-registry-only');
+    }
   }
 };
 
@@ -160,21 +184,40 @@ export const deleteNotesWithRegistry = async (
   noteIds: string[],
   registry: SyncRegistry
 ) => {
-  const batch = writeBatch(db);
+  const CHUNK_SIZE = 450;
   const registryRef = doc(db, 'users', userId, 'projects', projectId, 'sync', SYNC_REGISTRY_ID);
 
-  noteIds.forEach(id => {
-    const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', id);
-    batch.delete(noteRef);
-    delete registry.entries[id];
-  });
+  for (let i = 0; i < noteIds.length; i += CHUNK_SIZE) {
+    const chunk = noteIds.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
 
-  batch.set(registryRef, registry);
+    chunk.forEach(id => {
+      const noteRef = doc(db, 'users', userId, 'projects', projectId, 'notes', id);
+      batch.delete(noteRef);
+      delete registry.entries[id];
+    });
 
-  try {
-    await batch.commit();
-  } catch (e) {
-    handleFirestoreError(e, OperationType.DELETE, 'delete-notes-with-registry');
+    // Save registry in the last batch
+    if (i + CHUNK_SIZE >= noteIds.length) {
+      batch.set(registryRef, registry, { merge: true });
+    }
+
+    try {
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `delete-notes-batch-chunk-${i}`);
+    }
+  }
+
+  // If no noteIds provided, still update the registry
+  if (noteIds.length === 0) {
+    const batch = writeBatch(db);
+    batch.set(registryRef, registry, { merge: true });
+    try {
+      await batch.commit();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'delete-registry-only');
+    }
   }
 };
 
@@ -235,12 +278,6 @@ export const extractPhase = async (
     if (signal?.aborted) throw new Error("Operation cancelled");
     const file = files[i];
     
-    setProcessStatus({ 
-      message: `${file.path} 로직 추출 중 (${i + 1}/${files.length})...`,
-      current: i + 1,
-      total: files.length
-    });
-
     try {
       const content = await fetchGithubFileContent(githubRepo, file.path, githubToken, signal);
       const physicalUnits = extractLogicUnits(content, file.path);
@@ -308,19 +345,35 @@ export const analyzeReferencesPhase = async (
     if (signal?.aborted) throw new Error("Operation cancelled");
     const chunk = unitsToAnalyze.slice(j, j + chunkSize);
     
-    const results = await Promise.allSettled(chunk.map(async (item) => {
-      // 1. Integrated Mapping & Analysis (AI)
-      const result = await analyzeAndMapUnit({
+    // 1. Integrated Batch Mapping & Analysis (AI)
+    const batchResult = await analyzeAndMapBatch(
+      chunk.map(item => ({
         title: item.unit.title,
         codeSnippet: item.unit.codeSnippet
-      }, existingTasks, signal);
+      })), 
+      existingTasks, 
+      signal
+    );
+
+    const batchNotes: Note[] = [];
+    
+    for (let k = 0; k < chunk.length; k++) {
+      const item = chunk[k];
+      const result = batchResult.results[k];
+      if (!result) continue;
 
       let taskId = result.matchedTaskId;
       let suggestedTask = result.suggestedTask;
       const analysis = result.analysis;
 
-      if (!taskId && suggestedTask) {
-        const existingTask = workingNotes.find(n => n.title === suggestedTask!.title);
+      // Skip if analysis is missing (AI failure)
+      if (!analysis) {
+        console.warn(`Skipping unit ${item.unit.title} due to missing AI analysis.`);
+        continue;
+      }
+
+      if (!taskId && suggestedTask && suggestedTask.title) {
+        const existingTask = workingNotes.find(n => n.title === suggestedTask.title);
         if (existingTask) {
           taskId = existingTask.id;
         } else if (suggestedTaskMap.has(suggestedTask.title)) {
@@ -334,15 +387,8 @@ export const analyzeReferencesPhase = async (
 
       if (!taskId) taskId = 'unmapped_task';
 
-      return { ...item, analysis, taskId, suggestedTask };
-    }));
-
-    const batchNotes: Note[] = [];
-    for (const res of results) {
-      if (res.status !== 'fulfilled' || !res.value) continue;
-      const { unit, taskId, analysis, existingRef, file, suggestedTask } = res.value;
-      
-      const analyzedItem: AnalysisItem = { ...res.value };
+      const { unit, existingRef, file } = item;
+      const analyzedItem: AnalysisItem = { ...item, analysis, taskId, suggestedTask };
       analyzedItems.push(analyzedItem);
 
       const fileName = file.path.split('/').pop() || file.path;
@@ -398,9 +444,6 @@ export const analyzeReferencesPhase = async (
       }
       producedReferences.push(finalNote);
       batchNotes.push(finalNote);
-
-      // If suggestedTask exists and taskId was newly generated, we need to handle it in Phase 4
-      // For now, we just ensure taskId is consistent
     }
 
     if (batchNotes.length > 0) {
@@ -457,6 +500,8 @@ export const designTasksPhase = async (
   const taskGroups = new Map<string, TaskGroup>();
   for (const item of allProcessedUnits) {
     const key = item.taskId;
+    if (key === 'unmapped_task') continue; // Skip unmapped units for task design
+
     const producedNote = producedReferences.find(n => n.logicHash === item.unit.logicHash);
     if (!producedNote) continue;
 
@@ -464,9 +509,9 @@ export const designTasksPhase = async (
       const existing = workingNotes.find(n => n.id === key);
       taskGroups.set(key, { 
         taskId: key, 
-        title: existing?.title || item.unit.suggestedTask?.title || "Unknown Task", 
+        title: existing?.title || item.suggestedTask?.title || "Unknown Task", 
         references: [],
-        suggestedData: item.unit.suggestedTask
+        suggestedData: item.suggestedTask
       });
     }
     taskGroups.get(key)!.references.push(producedNote);
@@ -484,9 +529,12 @@ export const designTasksPhase = async (
 
     const results = await Promise.allSettled(chunk.map(async (group) => {
       const existingTask = workingNotes.find(n => n.id === group.taskId);
-      // Only redesign if it's a new task or if any of its references were newly analyzed
       const hasNewAnalysis = forceUpdate || !existingTask; 
       
+      const currentChildIds = existingTask?.childNoteIds || [];
+      const newChildIds = Array.from(new Set([...currentChildIds, ...group.references.map(r => r.id)]));
+      const childIdsChanged = JSON.stringify([...currentChildIds].sort()) !== JSON.stringify([...newChildIds].sort());
+
       if (!existingTask || hasNewAnalysis) {
         const design = await designTaskFromReferences(
           group.title,
@@ -494,45 +542,58 @@ export const designTasksPhase = async (
           existingTask,
           signal
         );
-        return { group, design, existingTask };
+        return { group, design, existingTask, newChildIds };
       }
+      
+      if (childIdsChanged) {
+        return { group, existingTask, skip: false, onlyUpdateChildren: true, newChildIds };
+      }
+
       return { group, existingTask, skip: true };
     }));
 
     const batchTasks: Note[] = [];
     for (const res of results) {
       if (res.status !== 'fulfilled' || !res.value || res.value.skip) continue;
-      const { group, design, existingTask } = res.value;
+      const { group, design, existingTask, onlyUpdateChildren, newChildIds } = res.value;
       
       let finalTask: Note;
       if (existingTask) {
-        finalTask = {
-          ...existingTask,
-          content: design.content,
-          summary: design.summary,
-          folder: design.folder,
-          importance: design.importance,
-          tags: Array.from(new Set([...(existingTask.tags || []), ...design.tags])),
-          lastUpdated: new Date().toISOString(),
-          childNoteIds: Array.from(new Set([...(existingTask.childNoteIds || []), ...group.references.map(r => r.id)]))
-        };
+        if (onlyUpdateChildren) {
+          finalTask = {
+            ...existingTask,
+            lastUpdated: new Date().toISOString(),
+            childNoteIds: newChildIds
+          };
+        } else {
+          finalTask = {
+            ...existingTask,
+            content: design!.content,
+            summary: design!.summary,
+            folder: design!.folder,
+            importance: design!.importance,
+            tags: Array.from(new Set([...(existingTask.tags || []), ...(design!.tags || [])])),
+            lastUpdated: new Date().toISOString(),
+            childNoteIds: newChildIds
+          };
+        }
         workingNotes = workingNotes.map(n => n.id === finalTask.id ? finalTask : n);
       } else {
         finalTask = {
           id: group.taskId,
           title: group.title,
-          folder: design.folder,
-          content: design.content,
-          summary: design.summary,
+          folder: design!.folder,
+          content: design!.content,
+          summary: design!.summary,
           noteType: (group.suggestedData?.noteType as NoteType) || 'Task',
           status: 'Done',
           priority: 'C',
           version: '1.0.0',
           lastUpdated: new Date().toISOString(),
-          importance: design.importance,
-          tags: design.tags,
+          importance: design!.importance,
+          tags: design!.tags,
           relatedNoteIds: [],
-          childNoteIds: group.references.map(r => r.id),
+          childNoteIds: newChildIds,
           parentNoteIds: []
         };
         workingNotes.push(finalTask);

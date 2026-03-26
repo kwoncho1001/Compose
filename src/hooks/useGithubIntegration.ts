@@ -170,6 +170,9 @@ export const useGithubIntegration = (
       return;
     }
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const signal = abortController.signal;
@@ -420,7 +423,7 @@ export const useGithubIntegration = (
         'success'
       );
 
-      await handleEnforceHierarchy(currentNotes, true);
+      await handleEnforceHierarchy(workingNotes, true);
 
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {

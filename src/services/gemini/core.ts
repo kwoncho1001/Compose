@@ -13,7 +13,7 @@ export const parseMetadata = (yaml: string): Record<string, string> => {
   return result;
 };
 
-export const generateContentWithRetry = async (params: any, retries = 3, delay = 1000, signal?: AbortSignal) => {
+export const generateContentWithRetry = async (params: any, retries = 5, delay = 1000, signal?: AbortSignal) => {
   // Ensure we have a config object
   if (!params.config) params.config = {};
   // Set a default maxOutputTokens if not provided to prevent "generation exceeded max tokens limit"
@@ -35,11 +35,11 @@ export const generateContentWithRetry = async (params: any, retries = 3, delay =
         console.error("Gemini API Token Limit Exceeded:", error);
         throw error; 
       }
-      console.error(`Gemini API Error (Attempt ${i + 1}/${retries}):`, error);
+      console.error(`Gemini API Error (Attempt ${i + 1}/${retries}):`, JSON.stringify(error, null, 2));
       if (i === retries - 1) throw error;
       
-      // Wait with backoff, but check signal
-      const waitTime = delay * (i + 1);
+      // Wait with exponential backoff, but check signal
+      const waitTime = delay * Math.pow(2, i);
       const start = Date.now();
       while (Date.now() - start < waitTime) {
         if (signal?.aborted) throw new Error("Operation cancelled");

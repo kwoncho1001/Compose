@@ -5,14 +5,14 @@ import { Note } from '../types';
  * 상태 업데이트 시 이 함수들을 사용하여 변경이 필요한 모든 노트를 계산합니다.
  */
 
-export const syncNoteRelationships = (
-  updatedNote: Note,
-  allNotes: Note[]
-): Note[] => {
+export const syncNoteRelationships = <T extends { id: string; title: string; parentNoteIds?: string[]; childNoteIds?: string[]; relatedNoteIds?: string[] }>(
+  updatedNote: T,
+  allNotes: T[]
+): T[] => {
   const oldNote = allNotes.find(n => n.id === updatedNote.id);
   if (!oldNote) return [updatedNote];
 
-  const affectedNotesMap = new Map<string, Note>();
+  const affectedNotesMap = new Map<string, T>();
   affectedNotesMap.set(updatedNote.id, updatedNote);
 
   // 1. 부모-자식 관계 동기화 (Hierarchy)
@@ -34,11 +34,11 @@ export const incrementVersion = (version: string): string => {
   return parts.join('.');
 };
 
-export const syncHierarchy = (
-  oldNote: Note,
-  newNote: Note,
-  allNotes: Note[],
-  affectedNotes: Map<string, Note>
+export const syncHierarchy = <T extends { id: string; title: string; parentNoteIds?: string[]; childNoteIds?: string[]; relatedNoteIds?: string[] }>(
+  oldNote: T,
+  newNote: T,
+  allNotes: T[],
+  affectedNotes: Map<string, T>
 ) => {
   // Case A: parentNoteIds 변경
   const addedParents = (newNote.parentNoteIds || []).filter(id => !(oldNote.parentNoteIds || []).includes(id));
@@ -91,11 +91,11 @@ export const syncHierarchy = (
   });
 };
 
-const syncRelated = (
-  oldNote: Note,
-  newNote: Note,
-  allNotes: Note[],
-  affectedNotes: Map<string, Note>
+const syncRelated = <T extends { id: string; title: string; parentNoteIds?: string[]; childNoteIds?: string[]; relatedNoteIds?: string[] }>(
+  oldNote: T,
+  newNote: T,
+  allNotes: T[],
+  affectedNotes: Map<string, T>
 ) => {
   const addedRelated = (newNote.relatedNoteIds || []).filter(id => !(oldNote.relatedNoteIds || []).includes(id));
   const removedRelated = (oldNote.relatedNoteIds || []).filter(id => !(newNote.relatedNoteIds || []).includes(id));
@@ -121,11 +121,11 @@ const syncRelated = (
   });
 };
 
-export const cleanupNoteRelationships = (
+export const cleanupNoteRelationships = <T extends { id: string; title: string; parentNoteIds?: string[]; childNoteIds?: string[]; relatedNoteIds?: string[] }>(
   deletedNoteId: string,
-  allNotes: Note[]
-): Note[] => {
-  const affectedNotesMap = new Map<string, Note>();
+  allNotes: T[]
+): T[] => {
+  const affectedNotesMap = new Map<string, T>();
 
   allNotes.forEach(note => {
     let changed = false;

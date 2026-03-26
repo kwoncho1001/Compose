@@ -7,7 +7,7 @@ import { Note } from '../types';
  * @param allNotes All notes in the system.
  * @returns true if a cycle would be created, false otherwise.
  */
-export const wouldCreateCycle = (noteId: string, newParentId: string, allNotes: Note[]): boolean => {
+export const wouldCreateCycle = <T extends { id: string; parentNoteIds?: string[] }>(noteId: string, newParentId: string, allNotes: T[]): boolean => {
   if (noteId === newParentId) return true;
 
   const notesMap = new Map(allNotes.map(n => [n.id, n]));
@@ -32,7 +32,7 @@ export const wouldCreateCycle = (noteId: string, newParentId: string, allNotes: 
  * 타입 기반 부모 허용 여부 체크
  * Epic > Feature > Task > Reference 계층 구조를 강제합니다.
  */
-export const isValidRelationship = (parentId: string, childId: string, allNotes: Note[]): boolean => {
+export const isValidRelationship = <T extends { id: string; noteType: string }>(parentId: string, childId: string, allNotes: T[]): boolean => {
   const parent = allNotes.find(n => n.id === parentId);
   const child = allNotes.find(n => n.id === childId);
 
@@ -70,7 +70,7 @@ export const isValidRelationship = (parentId: string, childId: string, allNotes:
  * 3. Task: 오직 Reference만 자식으로 가질 수 있음.
  * 4. 공통: Epic이 아닌 모든 노드는 반드시 적절한 상위 부모가 있어야 함 (고아 금지).
  */
-export const findInvalidHierarchyNotes = (allNotes: Note[]): Note[] => {
+export const findInvalidHierarchyNotes = <T extends { id: string; noteType: string; parentNoteIds?: string[]; childNoteIds?: string[] }>(allNotes: T[]): T[] => {
   return allNotes.filter(note => {
     // 1. 고아 체크 (Epic 제외)
     if (note.noteType !== 'Epic') {
@@ -104,13 +104,13 @@ export const findInvalidHierarchyNotes = (allNotes: Note[]): Note[] => {
 /**
  * Finds notes that have no parents.
  */
-export const findOrphanNotes = (allNotes: Note[]): Note[] => {
+export const findOrphanNotes = <T extends { parentNoteIds?: string[] }>(allNotes: T[]): T[] => {
   return allNotes.filter(n => !n.parentNoteIds || n.parentNoteIds.length === 0);
 };
 /**
  * Gets all descendants of a note.
  */
-export const getAllDescendants = (noteId: string, allNotes: Note[]): string[] => {
+export const getAllDescendants = <T extends { id: string; parentNoteIds?: string[] }>(noteId: string, allNotes: T[]): string[] => {
   const descendants: string[] = [];
   const queue = [noteId];
   const visited = new Set<string>();
@@ -136,8 +136,8 @@ export const getAllDescendants = (noteId: string, allNotes: Note[]): string[] =>
  * 계층 구조 정상화 (Sibling Promotion)
  * Feature로 승격되었는데 부모도 Feature인 경우, 부모의 부모(Epic)에게 직접 붙입니다.
  */
-export const normalizeHierarchy = (targetNote: Note, allNotes: Note[]): Note[] => {
-  const touchedNotes: Note[] = [];
+export const normalizeHierarchy = <T extends { id: string; title: string; noteType: string; parentNoteIds?: string[]; relatedNoteIds?: string[] }>(targetNote: T, allNotes: T[]): T[] => {
+  const touchedNotes: T[] = [];
   let hierarchyChanged = false;
 
   // Policy 1: Reference Parent Restriction

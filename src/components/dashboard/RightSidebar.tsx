@@ -193,35 +193,35 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={handleOptimizeBlueprint}
-                  disabled={isSyncing || state.notes.length === 0}
+                  disabled={isSyncing || state.noteMetadata.length === 0}
                   className="col-span-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 py-2.5 rounded-md text-[10px] font-bold border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-center gap-1 shadow-sm"
                 >
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} 설계도 최적화
                 </button>
                 <button
                   onClick={handleCheckConsistency}
-                  disabled={isSyncing || state.notes.length === 0}
+                  disabled={isSyncing || state.noteMetadata.length === 0}
                   className="col-span-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 py-2.5 rounded-md text-[10px] font-bold border border-emerald-100 dark:border-emerald-800/50 flex items-center justify-center gap-1 shadow-sm"
                 >
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldAlert className="w-3 h-3" />} 일관성 검증
                 </button>
                 <button
                   onClick={() => handleEnforceHierarchy()}
-                  disabled={isSyncing || state.notes.length === 0}
+                  disabled={isSyncing || state.noteMetadata.length === 0}
                   className="col-span-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 py-2.5 rounded-md text-[10px] font-bold border border-amber-100 dark:border-amber-800/50 flex items-center justify-center gap-1.5 shadow-sm"
                 >
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Layers className="w-3 h-3" />} 계층 구조 자동 보정 (고아 노트 해결)
                 </button>
                 <button
                   onClick={() => handleSanitizeIntegrity(false)}
-                  disabled={isSyncing || state.notes.length === 0}
+                  disabled={isSyncing || state.noteMetadata.length === 0}
                   className="col-span-2 bg-slate-50 dark:bg-slate-900/40 text-slate-700 dark:text-slate-300 py-2.5 rounded-md text-[10px] font-bold border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-1.5 shadow-sm"
                 >
                   {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 text-emerald-500" />} 데이터 무결성 최적화 (관계 복구)
                 </button>
                 <button
                   onClick={handleAnalyzeNextSteps}
-                  disabled={state.notes.length === 0}
+                  disabled={state.noteMetadata.length === 0}
                   className="col-span-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 py-2 rounded-md text-[10px] font-medium hover:bg-slate-50 flex items-center justify-center gap-1.5"
                 >
                   <Lightbulb className="w-3 h-3 text-amber-500" /> 다음 단계 분석 (5개 추천)

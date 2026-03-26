@@ -8,12 +8,12 @@ import { Note } from '../types';
  * 규칙 3 (연관 관계): A가 B와 연관되어 있다면, B도 A와 연관되어 있어야 함.
  * 규칙 4 (죽은 링크 제거): 참조하고 있는 ID의 실제 노트가 존재하지 않는 경우 해당 ID 삭제.
  */
-export const sanitizeNoteIntegrity = (notes: Note[]): { 
-  fixedNotes: Note[], 
+export const sanitizeNoteIntegrity = <T extends { id: string; title: string; parentNoteIds?: string[]; childNoteIds?: string[]; relatedNoteIds?: string[] }>(notes: T[]): { 
+  fixedNotes: T[], 
   fixCount: number,
   logs: string[]
 } => {
-  const notesMap = new Map<string, Note>();
+  const notesMap = new Map<string, T>();
   // 깊은 복사를 통해 원본 데이터 보호 (필요한 필드만 복사하거나 전체 복사)
   notes.forEach(note => {
     notesMap.set(note.id, JSON.parse(JSON.stringify(note)));
@@ -109,5 +109,4 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
     fixCount,
     logs
   };
-};
 };

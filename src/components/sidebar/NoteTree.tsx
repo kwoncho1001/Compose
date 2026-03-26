@@ -84,7 +84,7 @@ export const NoteTree: React.FC<NoteTreeProps> = ({
           collectNotes(ti);
           
           if (allNotes.length === 0) return 'Other';
-          if (allNotes.some(n => n.status === 'Conflict' || (n as Note).consistencyConflict)) return 'Conflict';
+          if (allNotes.some(n => n.status === 'Conflict' || n.consistencyConflict)) return 'Conflict';
           if (allNotes.some(n => n.status === 'Planned')) return 'Planned';
           if (allNotes.every(n => n.status === 'Done')) return 'Done';
           return 'Other';

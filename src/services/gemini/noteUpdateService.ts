@@ -8,11 +8,11 @@ export const updateSingleNote = async (
   note: Note,
   command: string,
   gcm: GCM,
-  allNotes: Note[],
+  allNotes: NoteMetadata[],
   signal?: AbortSignal
 ): Promise<{ updatedNote: Note; updatedGcm: GCM; affectedNoteIds: string[] }> => {
   const relevantNotes = allNotes.filter(n => 
-    n.id !== note.id && (n.folder === note.folder || n.importance >= 4)
+    n.id !== note.id && (n.folder === note.folder || n.priority === 'A')
   );
 
   const prompt = `
@@ -33,7 +33,7 @@ Current GCM:
 ${JSON.stringify(gcm, null, 2)}
 
 Relevant Other Notes (for impact analysis):
-${JSON.stringify(relevantNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder, summary: n.summary })), null, 2)}
+${JSON.stringify(relevantNotes.map(n => ({ id: n.id, title: n.title, folder: n.folder })), null, 2)}
 
 Return JSON:
 {

@@ -71,6 +71,7 @@ export interface NoteMetadata {
   noteType: NoteType;
   parentNoteIds: string[];
   childNoteIds: string[];
+  relatedNoteIds: string[];
   lastUpdated: string;
   status: NoteStatus;
   priority: NotePriority;
@@ -78,6 +79,7 @@ export interface NoteMetadata {
     description: string;
     suggestion: string;
   };
+  sha?: string;
 }
 
 export interface AppState {

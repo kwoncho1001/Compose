@@ -72,10 +72,12 @@ export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = []
   const filteredNotes = useMemo(() => {
     if (!searchTerm.trim()) return displayData;
     const lowerTerm = searchTerm.toLowerCase();
-    return displayData.filter(n => 
-      n.title.toLowerCase().includes(lowerTerm)
-    );
-  }, [displayData, searchTerm]);
+    return displayData.filter(n => {
+      const fullNote = noteMap.get(n.id) as Note;
+      const contentMatch = fullNote && fullNote.content ? fullNote.content.toLowerCase().includes(lowerTerm) : false;
+      return n.title.toLowerCase().includes(lowerTerm) || contentMatch;
+    });
+  }, [displayData, searchTerm, noteMap]);
 
   const rootItems = useMemo(() => {
     const roots: TreeItem[] = [];

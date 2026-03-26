@@ -1,14 +1,32 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Note, AppState, NoteType } from '../types';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { fetchGithubFiles, fetchGithubFileContent, fetchLatestCommitSha } from '../services/github';
-import { 
-  extractUnitsPhase, 
-  analyzeReferencesPhase, 
-  designTasksPhase, 
-  reconcileMetadataPhase 
-} from '../services/github/syncService';
+import { updateCodeSnapshot, analyzeLogicUnitDeeply } from '../services/gemini';
+import { extractLogicUnits } from '../utils/codeParser';
+import { syncNoteRelationships } from '../utils/noteMirroring';
+import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
+import { normalizeHierarchy } from '../utils/hierarchyValidator';
+
+/**
+ * AI가 생성한 콘텐츠에서 JSON 마크다운 블록이나 불필요한 따옴표를 제거하고 순수 텍스트만 추출합니다.
+ */
+const parseAIContent = (rawContent: string): string => {
+  if (!rawContent) return '';
+  try {
+    // 만약 내용 전체가 JSON 문자열로 감싸져 있다면 파싱 시도
+    const parsed = JSON.parse(rawContent);
+    // JSON 객체 내부에 content 필드가 있다면 그것을 반환, 없으면 문자열화하여 반환
+    return typeof parsed === 'object' ? (parsed.content || JSON.stringify(parsed, null, 2)) : String(parsed);
+  } catch (e) {
+    // JSON이 아니면 마크다운 코드 블록(```json ... ```) 제거 및 정리
+    return rawContent
+      .replace(/```json\s?|```/g, '') // 마크다운 태그 제거
+      .replace(/^"|"$/g, '')         // 불필요한 앞뒤 따옴표 제거
+      .trim();
+  }
+};
 
 export const useGithubIntegration = (
   userId: string | undefined,
@@ -22,9 +40,8 @@ export const useGithubIntegration = (
   setProcessStatus: any,
   showAlert: any,
   abortControllerRef: React.MutableRefObject<AbortController | null>,
-  isSyncing: boolean,
   setIsSyncing: React.Dispatch<React.SetStateAction<boolean>>,
-  handleEnforceHierarchy: (notesList?: Note[], silentSuccess?: boolean, skipSave?: boolean) => Promise<Note[]>
+  handleEnforceHierarchy: (notesList?: Note[], silentSuccess?: boolean) => Promise<void>
 ) => {
   const [githubFiles, setGithubFiles] = useState<{ path: string; sha: string }[]>([]);
   const [githubReadme, setGithubReadme] = useState<string>('');
@@ -41,7 +58,7 @@ export const useGithubIntegration = (
     };
   }, [userId, currentProjectId, setState]);
 
-  const handleWipeSnapshots = async () => {
+  const handleWipeSnapshots = useCallback(async () => {
     setDialogConfig({
       isOpen: true,
       title: '스냅샷 초기화',
@@ -88,7 +105,7 @@ export const useGithubIntegration = (
             childNoteIds: [],
             relatedNoteIds: [],
             parentNoteIds: [],
-            noteType: 'Task'
+            noteType: 'Reference'
           };
           
           await saveNotesToFirestore([newLogNote]);
@@ -111,9 +128,9 @@ export const useGithubIntegration = (
       },
       onCancel: () => setDialogConfig(null)
     });
-  };
+  }, [userId, currentProjectId, state.notes, setDialogConfig, setProcessStatus, syncProject, deleteNotesFromFirestore, saveNotesToFirestore, setState, showAlert]);
 
-  const reconcileNoteRelationships = (allNotes: Note[]): Note[] => {
+  const reconcileNoteRelationships = useCallback(async (allNotes: Note[]): Promise<Note[]> => {
     const notesMap = new Map(allNotes.map(n => [n.id, { ...n }]));
     let changed = false;
 
@@ -143,11 +160,19 @@ export const useGithubIntegration = (
       }
     }
 
-    return Array.from(notesMap.values());
-  };
+    if (changed) {
+      const updatedNotes = Array.from(notesMap.values());
+      await saveNotesToFirestore(updatedNotes);
+      setState(prev => ({
+        ...prev,
+        notes: updatedNotes
+      }));
+      return updatedNotes;
+    }
+    return allNotes;
+  }, [saveNotesToFirestore, setState]);
 
-  const handleSyncGithub = async (forceUpdate: boolean = false) => {
-    if (isSyncing) return;
+  const handleSyncGithub = useCallback(async (forceUpdate: boolean = false) => {
     if (!state.githubRepo) {
       showAlert('알림', 'Github 저장소 URL을 입력해주세요.', 'warning');
       return;
@@ -253,7 +278,7 @@ export const useGithubIntegration = (
               childNoteIds: [],
               relatedNoteIds: [],
               parentNoteIds: [],
-              noteType: 'Task'
+              noteType: 'Reference'
             };
             currentNotes.push(newLogNote);
             await saveNotesToFirestore([newLogNote]);
@@ -274,107 +299,363 @@ export const useGithubIntegration = (
       }
 
       let currentNotes = [...state.notes];
-      // currentLogs is already declared at line 199
+      let updateCount = 0;
+      let newCount = 0;
 
-      // Phase 1: Extraction & Mapping
-      const { allExtractedUnits, updatedLogs } = await extractUnitsPhase(
-        filesActuallyToProcess,
-        {
-          githubRepo: state.githubRepo,
-          githubToken: state.githubToken,
-          notes: currentNotes,
-          signal
-        },
-        currentLogs,
-        (message, current, total) => setProcessStatus({ message, current, total })
-      );
-      currentLogs = updatedLogs;
+      for (let i = 0; i < filesActuallyToProcess.length; i++) {
+        if (signal.aborted) return;
+        const file = filesActuallyToProcess[i];
+        setProcessStatus({ 
+          message: `${file.path} 분석 및 코드 스냅샷 생성 중 (${i + 1}/${filesActuallyToProcess.length})...`,
+          current: i + 1,
+          total: filesActuallyToProcess.length
+        });
 
-      // Phase 2: Analysis Preparation & Execution
-      const allProcessedUnits = await analyzeReferencesPhase(
-        allExtractedUnits,
-        {
-          githubRepo: state.githubRepo,
-          githubToken: state.githubToken,
-          notes: currentNotes,
-          signal
-        },
-        forceUpdate,
-        (message) => setProcessStatus({ message })
-      );
+        try {
+          const content = await fetchGithubFileContent(state.githubRepo, file.path, state.githubToken, signal);
+          if (signal.aborted) return;
+          const snapshotNotes = currentNotes.filter(n => n.noteType === 'Reference');
+          
+          const existingFileNotes = snapshotNotes.filter(n => n.githubLink === file.path || n.originPath === file.path);
+          const oldNoteIds = existingFileNotes.map(n => n.id);
 
-      // Phase 3: Task/Feature Design
-      const { updatedNotes: designedNotes, newCount: designedNewCount } = await designTasksPhase(
-        allProcessedUnits,
-        {
-          githubRepo: state.githubRepo,
-          githubToken: state.githubToken,
-          notes: currentNotes,
-          signal
-        },
-        forceUpdate,
-        (message) => setProcessStatus({ message })
-      );
-      currentNotes = designedNotes;
-
-      // Phase 4: Metadata & Relationship Reconciliation
-      const { finalNotes: metaNotes, updateCount, newCount } = reconcileMetadataPhase(
-        allProcessedUnits,
-        currentNotes,
-        state.githubRepo
-      );
-      currentNotes = metaNotes;
-
-      // Handle Discarded Notes (Per File)
-      const processedNoteIdsByFile = new Map<string, string[]>();
-      allProcessedUnits.forEach(item => {
-        const fileProcessedIds = processedNoteIdsByFile.get(item.file.path) || [];
-        fileProcessedIds.push(item.globallyExistingRef?.id || item.existingRef?.id || ''); // This is a bit simplified
-      });
-      // Re-calculating processedNoteIdsByFile more accurately
-      processedNoteIdsByFile.clear();
-      allProcessedUnits.forEach(item => {
-        const path = item.file.path;
-        const note = currentNotes.find(n => n.noteType === 'Reference' && n.githubLink === `${path}#${item.unit.title}`);
-        if (note) {
-          const ids = processedNoteIdsByFile.get(path) || [];
-          ids.push(note.id);
-          processedNoteIdsByFile.set(path, ids);
-        }
-      });
-
-      for (const [filePath, processedIds] of processedNoteIdsByFile.entries()) {
-        const oldNoteIds = currentNotes.filter(n => n.noteType === 'Reference' && n.githubLink && n.githubLink.startsWith(filePath)).map(n => n.id);
-        const discardedNoteIds = oldNoteIds.filter(id => !processedIds.includes(id));
-        for (const id of discardedNoteIds) {
-          const noteIndex = currentNotes.findIndex(n => n.id === id);
-          if (noteIndex !== -1) {
-            const discardedNote = { ...currentNotes[noteIndex] };
-            discardedNote.folder = '시스템/폐기된 소스';
-            discardedNote.parentNoteIds = [];
-            discardedNote.status = 'Deprecated';
-            if (!(discardedNote.tags || []).includes('discarded')) {
-              discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
-            }
-            currentNotes[noteIndex] = discardedNote;
+          const physicalUnits = extractLogicUnits(content, file.path);
+          const { logicUnits } = await updateCodeSnapshot(file.path, content, currentNotes, file.sha, physicalUnits, signal);
+          if (signal.aborted) return;
+          const touchedNotes: Note[] = [];
+          const processedNoteIds: string[] = [];
+          
+          // 1. 파일 레퍼런스 노드 생성/확보 (Atomic Units의 부모 역할)
+          let fileNote = currentNotes.find(n => n.noteType === 'Reference' && n.githubLink === file.path);
+          const nowStr = new Date().toISOString();
+          if (!fileNote) {
+            const newFileNoteId = Math.random().toString(36).substr(2, 9);
+            fileNote = {
+              id: newFileNoteId,
+              title: file.path.split('/').pop() || file.path,
+              folder: `시스템/파일/${file.path.split('/').slice(0, -1).join('/') || 'Root'}`,
+              content: `# ${file.path}\n\n이 파일은 GitHub에서 동기화되었습니다.`,
+              summary: `${file.path} 파일의 전체 구조 및 로직 요약`,
+              status: 'Done',
+              version: '1.0.0',
+              lastUpdated: nowStr,
+              importance: 3,
+              priority: 'B',
+              tags: ['github-sync', 'file-reference'],
+              noteType: 'Reference',
+              githubLink: file.path,
+              parentNoteIds: [], 
+              childNoteIds: [],
+              relatedNoteIds: []
+            };
+            currentNotes.push(fileNote);
+            touchedNotes.push(fileNote);
+          } else {
+            fileNote = { ...fileNote, lastUpdated: nowStr };
+            currentNotes = currentNotes.map(n => n.id === fileNote!.id ? fileNote! : n);
+            if (!touchedNotes.some(tn => tn.id === fileNote!.id)) touchedNotes.push(fileNote);
           }
+
+          const suggestedTaskMap = new Map<string, string>();
+          const seenLogicHashes = new Set<string>();
+          const unitsToAnalyze: any[] = [];
+          const unitsToSkip: any[] = [];
+          
+          for (const unit of logicUnits) {
+            if (signal.aborted) return;
+            
+            if (seenLogicHashes.has(unit.logicHash)) {
+              console.log(`Skipping duplicate logicHash ${unit.logicHash} in same file.`);
+              continue;
+            }
+            seenLogicHashes.add(unit.logicHash);
+            
+            let taskId = unit.matchedTaskId;
+            if (!taskId && unit.suggestedTask) {
+              const existingTask = currentNotes.find(n => 
+                n.title === unit.suggestedTask!.title && 
+                (n.noteType === 'Task' || n.noteType === 'Feature')
+              );
+              
+              if (existingTask) {
+                taskId = existingTask.id;
+                
+                // AI가 Feature를 제안했는데 기존이 Task라면 승격 처리
+                if (existingTask.noteType === 'Task' && unit.suggestedTask!.noteType === 'Feature') {
+                  const promotedNote = { ...existingTask, noteType: 'Feature' as NoteType };
+                  
+                  // 계층 정상화 로직 적용
+                  const hierarchyFixes = normalizeHierarchy(promotedNote, currentNotes);
+                  
+                  currentNotes = currentNotes.map(n => n.id === promotedNote.id ? promotedNote : n);
+                  touchedNotes.push(promotedNote);
+                  
+                  // 정상화 과정에서 수정된 다른 노트들도 반영
+                  hierarchyFixes.forEach(fix => {
+                    if (fix.id !== promotedNote.id) {
+                      currentNotes = currentNotes.map(n => n.id === fix.id ? fix : n);
+                      if (!touchedNotes.some(tn => tn.id === fix.id)) touchedNotes.push(fix);
+                    }
+                  });
+                }
+              } else if (suggestedTaskMap.has(unit.suggestedTask.title)) {
+                taskId = suggestedTaskMap.get(unit.suggestedTask.title);
+              } else {
+                const newTaskId = Math.random().toString(36).substr(2, 9);
+                suggestedTaskMap.set(unit.suggestedTask.title, newTaskId);
+                taskId = newTaskId;
+                
+                const newTask: Note = {
+                  id: newTaskId,
+                  title: unit.suggestedTask.title,
+                  folder: unit.suggestedTask.folder,
+                  content: unit.suggestedTask.content,
+                  summary: unit.suggestedTask.summary,
+                  // AI가 제안한 noteType을 반영 (없으면 기본값 'Task')
+                  noteType: (unit.suggestedTask.noteType as NoteType) || 'Task',
+                  status: (unit.suggestedTask.status as any) || 'Done',
+                  priority: 'C',
+                  version: '1.0.0',
+                  lastUpdated: new Date().toISOString(),
+                  importance: 3,
+                  tags: unit.suggestedTask.tags || ['auto-generated', 'design-leading-code'],
+                  relatedNoteIds: [],
+                  childNoteIds: [],
+                  parentNoteIds: []
+                };
+                currentNotes.push(newTask);
+                touchedNotes.push(newTask);
+                newCount++;
+              }
+            }
+
+            if (!taskId) continue;
+
+            const globallyExistingRef = currentNotes.find(n => n.noteType === 'Reference' && n.logicHash === unit.logicHash);
+            const existingRef = currentNotes.find(n => n.id === unit.matchedReferenceId) || 
+                                 currentNotes.find(n => n.title === unit.title && (n.githubLink === file.path || n.originPath === file.path));
+
+            if (!forceUpdate && globallyExistingRef) {
+              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches globally.`);
+              unitsToSkip.push({ 
+                unit, 
+                taskId, 
+                analysis: { 
+                  content: globallyExistingRef.content, 
+                  summary: globallyExistingRef.summary, 
+                  importance: globallyExistingRef.importance, 
+                  tags: globallyExistingRef.tags 
+                }, 
+                globallyExistingRef, 
+                existingRef 
+              });
+            } else if (!forceUpdate && existingRef && existingRef.logicHash === unit.logicHash) {
+              console.log(`Skipping deep-dive for ${unit.title} as logicHash matches locally.`);
+              unitsToSkip.push({ 
+                unit, 
+                taskId, 
+                analysis: { 
+                  content: existingRef.content, 
+                  summary: existingRef.summary, 
+                  importance: existingRef.importance, 
+                  tags: existingRef.tags 
+                }, 
+                globallyExistingRef, 
+                existingRef 
+              });
+            } else {
+              unitsToAnalyze.push({ unit, taskId, globallyExistingRef, existingRef });
+            }
+          }
+
+          const analyzedResults: any[] = [];
+          const chunkSize = 5;
+          
+          for (let j = 0; j < unitsToAnalyze.length; j += chunkSize) {
+            if (signal.aborted) return;
+            const chunk = unitsToAnalyze.slice(j, j + chunkSize);
+            
+            setProcessStatus((prev: any) => ({ 
+              ...prev!, 
+              message: `로직 심층 분석 중 (${j + 1}~${Math.min(j + chunkSize, unitsToAnalyze.length)}/${unitsToAnalyze.length})...` 
+            }));
+            
+            const promises = chunk.map(async (item) => {
+              const taskNote = currentNotes.find(n => n.id === item.taskId);
+              if (!taskNote) return null;
+              
+              try {
+                const analysis = await analyzeLogicUnitDeeply(item.unit.title, item.unit.codeSnippet, {
+                  title: taskNote.title,
+                  content: taskNote.content,
+                  summary: taskNote.summary
+                }, signal);
+                return { ...item, analysis };
+              } catch (e) {
+                console.error(`Failed to analyze logic unit ${item.unit.title}:`, e);
+                return null;
+              }
+            });
+            
+            const results = await Promise.all(promises);
+            analyzedResults.push(...results.filter(r => r !== null));
+          }
+
+          if (signal.aborted) return;
+
+          const allProcessedUnits = [...unitsToSkip, ...analyzedResults];
+          
+          for (const item of allProcessedUnits) {
+            if (signal.aborted) return;
+            const { unit, taskId, analysis, globallyExistingRef, existingRef } = item;
+            
+            // [개선 1] 부모 Task를 currentNotes에서 즉시 확보
+            const taskNoteIndex = currentNotes.findIndex(n => n.id === taskId);
+            if (taskNoteIndex === -1) continue;
+            const taskNote = { ...currentNotes[taskNoteIndex] };
+
+            let finalNote: Note;
+            if (globallyExistingRef && globallyExistingRef.originPath !== file.path) {
+              finalNote = {
+                ...globallyExistingRef,
+                parentNoteIds: Array.from(new Set([...(globallyExistingRef.parentNoteIds || []), taskId, fileNote.id])),
+                relatedNoteIds: Array.from(new Set([...(globallyExistingRef.relatedNoteIds || []), taskId, fileNote.id])),
+                lastUpdated: new Date().toISOString()
+              };
+              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+              updateCount++;
+            } else if (existingRef) {
+              finalNote = {
+                ...existingRef,
+                content: parseAIContent(analysis.content),
+                summary: analysis.summary,
+                importance: analysis.importance,
+                tags: Array.from(new Set([...(existingRef.tags || []), ...analysis.tags])),
+                lastUpdated: new Date().toISOString(),
+                parentNoteIds: Array.from(new Set([...(existingRef.parentNoteIds || []), taskId, fileNote.id])),
+                folder: taskNote.folder,
+                logicHash: unit.logicHash,
+                originPath: file.path,
+                sha: latestSha
+              };
+              currentNotes = currentNotes.map(n => n.id === finalNote.id ? finalNote : n);
+              updateCount++;
+            } else {
+              finalNote = {
+                id: Math.random().toString(36).substr(2, 9),
+                title: unit.title,
+                folder: taskNote.folder,
+                content: parseAIContent(analysis.content),
+                summary: analysis.summary,
+                version: '1.0.0',
+                lastUpdated: new Date().toISOString(),
+                importance: analysis.importance,
+                tags: analysis.tags,
+                status: 'Done',
+                priority: 'C',
+                childNoteIds: [],
+                parentNoteIds: [taskId, fileNote.id],
+                noteType: 'Reference',
+                relatedNoteIds: [taskId],
+                githubLink: file.path,
+                originPath: file.path,
+                logicHash: unit.logicHash,
+                sha: latestSha
+              };
+              currentNotes.push(finalNote);
+              touchedNotes.push(finalNote);
+              newCount++;
+            }
+
+            // 파일 노드를 해당 Task의 자식으로도 연결 (계층 구조 강화)
+            if (fileNote && !fileNote.parentNoteIds.includes(taskId)) {
+              fileNote.parentNoteIds.push(taskId);
+              if (!touchedNotes.some(tn => tn.id === fileNote!.id)) touchedNotes.push(fileNote);
+            }
+
+            // [개선 2] 루프 내에서 즉각적인 양방향 링크 (Bi-directional Link)
+            if (!taskNote.childNoteIds.includes(finalNote.id)) {
+              taskNote.childNoteIds = [...taskNote.childNoteIds, finalNote.id];
+              currentNotes[taskNoteIndex] = taskNote; // currentNotes 배열 업데이트
+              
+              // 부모 Task도 변경되었으므로 DB 저장 대상에 포함
+              if (!touchedNotes.some(n => n.id === taskNote.id)) {
+                touchedNotes.push(taskNote);
+              }
+            }
+
+            touchedNotes.push(finalNote);
+            processedNoteIds.push(finalNote.id);
+          }
+
+          const discardedNoteIds = oldNoteIds.filter(id => !processedNoteIds.includes(id));
+          for (const id of discardedNoteIds) {
+            const noteIndex = currentNotes.findIndex(n => n.id === id);
+            if (noteIndex !== -1) {
+              const discardedNote = { ...currentNotes[noteIndex] };
+              discardedNote.folder = '시스템/폐기된 소스';
+              discardedNote.parentNoteIds = [];
+              discardedNote.status = 'Deprecated';
+              if (!(discardedNote.tags || []).includes('discarded')) {
+                discardedNote.tags = [...(discardedNote.tags || []), 'discarded'];
+              }
+              currentNotes[noteIndex] = discardedNote;
+              touchedNotes.push(discardedNote);
+            }
+          }
+
+          if (touchedNotes.length > 0) {
+            await saveNotesToFirestore(touchedNotes);
+          }
+          
+          currentLogs[file.path] = file.sha;
+          const now = new Date().toISOString();
+          if (userId && currentProjectId) {
+            await saveSyncLog(userId, currentProjectId, currentLogs);
+          }
+          await syncProject({ 
+            lastSyncedAt: now
+          });
+
+          setState(prev => ({ 
+            ...prev, 
+            notes: currentNotes,
+            fileSyncLogs: { ...currentLogs },
+            lastSyncedAt: now
+          }));
+
+        } catch (e) {
+          if ((e as any)?.message === "Operation cancelled" || e === "Operation cancelled") {
+            console.log(`Processing file ${file.path} cancelled`);
+            return;
+          }
+          console.error(`Failed to process file ${file.path}:`, e);
         }
       }
 
-      // Final Relationship Reconciliation (Pure)
-      setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
-      currentNotes = reconcileNoteRelationships(currentNotes);
+      await syncProject({
+        lastSyncedSha: latestSha
+      });
 
-      // SHA Log Note Update
+      setState(prev => ({ 
+        ...prev, 
+        lastSyncedSha: latestSha
+      }));
+
+      setProcessStatus({ message: '노트 간 연관 관계(부모-자식) 자동 동기화 중...' });
+      currentNotes = await reconcileNoteRelationships(currentNotes);
+      if (signal.aborted) return;
+
       const logTitle = '[로그] SHA 동기화 장부';
       const logFolder = '시스템/동기화 로그';
-      const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
-      const now = new Date().toISOString();
-
       let logNote = currentNotes.find(n => n.title === logTitle && n.folder === logFolder);
+      
+      const logContent = `**최종 동기화 시각:** ${new Date().toLocaleString()}\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n${Object.entries(currentLogs).sort((a, b) => a[0].localeCompare(b[0])).map(([path, sha]) => `| ${path} | ${sha} |`).join('\n')}`;
+      
       if (logNote) {
-        logNote = { ...logNote, content: logContent, lastUpdated: now };
+        logNote = { ...logNote, content: logContent, lastUpdated: new Date().toISOString() };
         currentNotes = currentNotes.map(n => n.id === logNote!.id ? logNote! : n);
+        await saveNotesToFirestore([logNote]);
       } else {
         const newLogNote: Note = {
           id: Math.random().toString(36).substr(2, 9),
@@ -384,7 +665,7 @@ export const useGithubIntegration = (
           summary: 'GitHub 파일의 현재 동기화된 SHA 정보를 담고 있는 시스템 장부입니다.',
           status: 'Done',
           priority: 'C',
-          lastUpdated: now,
+          lastUpdated: new Date().toISOString(),
           version: '1.0.0',
           importance: 1,
           tags: ['system-log'],
@@ -394,38 +675,18 @@ export const useGithubIntegration = (
           parentNoteIds: []
         };
         currentNotes.push(newLogNote);
+        await saveNotesToFirestore([newLogNote]);
       }
-
-      // Hierarchy Enforcement (Silent, In-memory)
-      setProcessStatus({ message: '계층 구조 자동 보정 중...' });
-      currentNotes = await handleEnforceHierarchy(currentNotes, true, true);
-
-      // ATOMIC PERSISTENCE
-      setProcessStatus({ message: '최종 결과 저장 중...' });
-      await saveNotesToFirestore(currentNotes);
       
-      if (userId && currentProjectId) {
-        await saveSyncLog(userId, currentProjectId, currentLogs);
-      }
-      await syncProject({ 
-        lastSyncedAt: now,
-        lastSyncedSha: latestSha,
-        fileSyncLogs: currentLogs
-      });
-
-      setState(prev => ({ 
-        ...prev, 
-        notes: currentNotes,
-        fileSyncLogs: currentLogs,
-        lastSyncedAt: now,
-        lastSyncedSha: latestSha
-      }));
+      setState(prev => ({ ...prev, notes: currentNotes }));
 
       showAlert(
         'GitHub 최신 코드 반영 완료', 
-        `분석 완료: ${updateCount}개 스냅샷 업데이트, ${newCount + designedNewCount}개 새 노트 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
+        `분석 완료: ${updateCount}개 스냅샷 업데이트, ${newCount}개 새 스냅샷 생성. (분석된 파일: ${filesActuallyToProcess.length}개)`, 
         'success'
       );
+
+      await handleEnforceHierarchy(currentNotes, true);
 
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {
@@ -438,7 +699,7 @@ export const useGithubIntegration = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  };
+  }, [state.githubRepo, state.githubToken, state.fileSyncLogs, state.notes, state.lastSyncedSha, userId, currentProjectId, abortControllerRef, setIsSyncing, setProcessStatus, setState, syncProject, saveNotesToFirestore, showAlert, reconcileNoteRelationships, handleEnforceHierarchy]);
 
   return {
     githubFiles,

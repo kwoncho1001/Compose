@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Note } from '../types';
+import { Note, NoteMetadata } from '../types';
 
 export interface TreeItem {
   id: string;
@@ -7,11 +7,11 @@ export interface TreeItem {
   type: 'folder' | 'note';
   name: string;
   path: string;
-  note?: Note;
+  note?: Note | NoteMetadata;
   children?: TreeItem[];
 }
 
-export const useSidebarLogic = (notes: Note[]) => {
+export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = []) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
@@ -55,16 +55,27 @@ export const useSidebarLogic = (notes: Note[]) => {
     setSelectedNotes(newSet);
   };
 
-  const noteMap = useMemo(() => new Map(notes.map(n => [n.id, n])), [notes]);
+  const noteMap = useMemo(() => {
+    const map = new Map<string, Note | NoteMetadata>();
+    // 메타데이터 우선
+    noteMetadata.forEach(m => map.set(m.id, m));
+    // 실제 노트 데이터가 있으면 덮어쓰기 (본문 포함)
+    notes.forEach(n => map.set(n.id, n));
+    return map;
+  }, [notes, noteMetadata]);
+
+  const displayData = useMemo(() => {
+    // 메타데이터가 있으면 메타데이터 사용, 없으면 notes 사용
+    return noteMetadata.length > 0 ? noteMetadata : notes;
+  }, [notes, noteMetadata]);
 
   const filteredNotes = useMemo(() => {
-    if (!searchTerm.trim()) return notes;
+    if (!searchTerm.trim()) return displayData;
     const lowerTerm = searchTerm.toLowerCase();
-    return notes.filter(n => 
-      n.title.toLowerCase().includes(lowerTerm) || 
-      (n.tags || []).some(t => t.toLowerCase().includes(lowerTerm))
+    return displayData.filter(n => 
+      n.title.toLowerCase().includes(lowerTerm)
     );
-  }, [notes, searchTerm]);
+  }, [displayData, searchTerm]);
 
   const rootItems = useMemo(() => {
     const roots: TreeItem[] = [];

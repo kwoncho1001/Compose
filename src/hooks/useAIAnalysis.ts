@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Note, AppState } from '../types';
 import { optimizeBlueprint, checkConsistency, generateSubModules, suggestNextSteps } from '../services/gemini';
 import { findInvalidHierarchyNotes } from '../utils/hierarchyValidator';
@@ -26,7 +26,7 @@ export const useAIAnalysis = (
   githubReadme: string
 ) => {
 
-  const handleOptimizeBlueprint = async () => {
+  const handleOptimizeBlueprint = useCallback(async () => {
     if (state.notes.length === 0) return;
 
     const abortController = new AbortController();
@@ -74,11 +74,11 @@ export const useAIAnalysis = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  };
+  }, [state.notes, state.gcm, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, deleteNoteFromFirestore, syncProject, setState, setNextStepSuggestion, setRightSidebarOpen, showAlert]);
 
-  const handleEnforceHierarchy = async (notesList?: Note[], silentSuccess = false, skipSave = false) => {
+  const handleEnforceHierarchy = useCallback(async (notesList?: Note[], silentSuccess = false) => {
     let targetNotes = notesList || state.notes;
-    if (targetNotes.length === 0 || !userId || !currentProjectId) return targetNotes;
+    if (targetNotes.length === 0 || !userId || !currentProjectId) return;
 
     let iteration = 0;
     const maxIterations = 5;
@@ -106,7 +106,7 @@ export const useAIAnalysis = (
 
         const { results } = await suggestOrCreateParentsBatch(invalidNotes, targetNotes, signal);
         
-        if (signal.aborted) return targetNotes;
+        if (signal.aborted) return;
 
         const newNotes: Note[] = [];
         const updatedNotes: Note[] = [];
@@ -185,7 +185,9 @@ export const useAIAnalysis = (
 
         if (newNotes.length > 0 || updatedNotes.length > 0) {
           hasChanges = true;
-          
+          if (newNotes.length > 0) await saveNotesToFirestore(newNotes);
+          if (updatedNotes.length > 0) await saveNotesToFirestore(updatedNotes);
+
           const affectedMap = new Map<string, Note>();
           const finalNotes = [...targetNotes, ...newNotes];
 
@@ -199,20 +201,19 @@ export const useAIAnalysis = (
           const { fixedNotes: finalSanitizedNotes } = sanitizeNoteIntegrity(syncedNotes);
 
           targetNotes = finalSanitizedNotes;
+          await saveNotesToFirestore(targetNotes);
         } else {
+          // No more changes suggested by AI, but still invalid? Break to avoid infinite loop
           break;
         }
       }
 
-      if (hasChanges && !skipSave) {
-        // Only save once at the end if not skipping
-        await saveNotesToFirestore(targetNotes);
+      if (hasChanges) {
         setState(prev => ({ ...prev, notes: targetNotes }));
         if (!silentSuccess) {
           showAlert('성공', '계층 구조 자동 보정이 완료되었습니다.', 'success');
         }
       }
-      return targetNotes;
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {
         console.log('Hierarchy optimization cancelled');
@@ -220,14 +221,13 @@ export const useAIAnalysis = (
         console.error('Hierarchy optimization failed', error);
         showAlert('오류', '최적화 중 오류가 발생했습니다.', 'error');
       }
-      return targetNotes;
     } finally {
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  };
+  }, [state.notes, userId, currentProjectId, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, setState, showAlert]);
 
-  const handleCheckConsistency = async () => {
+  const handleCheckConsistency = useCallback(async () => {
     if (state.notes.length === 0) return;
 
     const abortController = new AbortController();
@@ -279,9 +279,9 @@ export const useAIAnalysis = (
       setIsSyncing(false);
       setProcessStatus(null);
     }
-  };
+  }, [state.notes, state.gcm, abortControllerRef, setIsSyncing, setProcessStatus, saveNotesToFirestore, setState, setNextStepSuggestion, setRightSidebarOpen, showAlert]);
 
-  const handleGenerateSubModules = async (mainNote: Note) => {
+  const handleGenerateSubModules = useCallback(async (mainNote: Note) => {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const signal = abortController.signal;
@@ -341,9 +341,9 @@ export const useAIAnalysis = (
       setIsDecomposing(false);
       setProcessStatus(null);
     }
-  };
+  }, [state.githubRepo, state.gcm, state.notes, githubFiles, githubReadme, abortControllerRef, setIsDecomposing, setProcessStatus, saveNotesToFirestore, syncProject, setState, showAlert]);
 
-  const handleAnalyzeNextSteps = async () => {
+  const handleAnalyzeNextSteps = useCallback(async () => {
     setProcessStatus({ message: '다음 단계 분석 중...' });
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -378,7 +378,8 @@ export const useAIAnalysis = (
       }
       setProcessStatus(null);
     }
-  };
+  }, [state.notes, state.gcm, abortControllerRef, setProcessStatus, setNextStepSuggestion, saveNotesToFirestore, setState, setRightSidebarOpen, showAlert]);
+
 
   return {
     handleOptimizeBlueprint,

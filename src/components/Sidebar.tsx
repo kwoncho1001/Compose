@@ -1,5 +1,5 @@
 import React from 'react';
-import { Note } from '../types';
+import { Note, NoteMetadata } from '../types';
 import { useSidebarLogic } from '../hooks/useSidebarLogic';
 import { useProjectActions } from '../hooks/useProjectActions';
 import { SidebarHeader } from './sidebar/SidebarHeader';
@@ -11,6 +11,7 @@ import { Plus } from 'lucide-react';
 
 interface SidebarProps {
   notes: Note[];
+  noteMetadata?: NoteMetadata[];
   title?: string;
   projects: { id: string; name: string }[];
   currentProjectId: string;
@@ -32,6 +33,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({
   notes = [],
+  noteMetadata = [],
   title = 'Vibe-Architect',
   projects = [],
   currentProjectId,
@@ -61,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSearchTerm,
     rootItems,
     noteMap
-  } = useSidebarLogic(notes);
+  } = useSidebarLogic(notes, noteMetadata);
 
   const {
     isCreatingProject,

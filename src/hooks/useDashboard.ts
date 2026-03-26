@@ -116,7 +116,8 @@ export const useDashboard = () => {
     handleTargetedUpdate,
     handleAddNote,
     handleAddChildNote,
-    handleTextFileUpload
+    handleTextFileUpload,
+    handleRefreshNotes
   } = useNoteSync(
     userId,
     currentProjectId,
@@ -327,6 +328,7 @@ export const useDashboard = () => {
     handleDeleteFolder,
     handleDeleteMultiple,
     handleSanitizeIntegrity,
+    handleRefreshNotes,
     handleTargetedUpdate,
     handleAddNote,
     handleAddChildNote,
@@ -349,7 +351,7 @@ export const useDashboard = () => {
     setDarkMode, setViewMode, setRightSidebarOpen, chatSession.setChatInput,
     handleCancelProcess, showAlert, handleExport, handleImport, setCurrentProjectId,
     handleCreateProject, handleRenameProject, handleDeleteProject, handleUpdateNote,
-    handleDeleteNote, handleDeleteFolder, handleDeleteMultiple, handleSanitizeIntegrity,
+    handleDeleteNote, handleDeleteFolder, handleDeleteMultiple, handleSanitizeIntegrity, handleRefreshNotes,
     handleTargetedUpdate, handleAddNote, handleAddChildNote, handleTextFileUpload,
     handleOptimizeBlueprint, handleCheckConsistency, handleEnforceHierarchy,
     handleGenerateSubModules, handleAnalyzeNextSteps, handleSyncGithub, handleWipeSnapshots,

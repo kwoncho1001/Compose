@@ -48,6 +48,7 @@ export const Dashboard: React.FC = () => {
 
       <Sidebar
         notes={state.notes}
+        noteMetadata={state.noteMetadata}
         projects={projects}
         currentProjectId={currentProjectId}
         onSelectProject={setCurrentProjectId}
@@ -71,6 +72,7 @@ export const Dashboard: React.FC = () => {
           setIsMobileMenuOpen={setIsMobileMenuOpen} rightSidebarOpen={rightSidebarOpen}
           setRightSidebarOpen={setRightSidebarOpen} handleExport={handleExport}
           fileInputRef={fileInputRef} handleImport={handleImport}
+          handleRefreshNotes={actions.handleRefreshNotes}
         />
 
         <ProcessBanner processStatus={processStatus} handleCancelProcess={handleCancelProcess} />

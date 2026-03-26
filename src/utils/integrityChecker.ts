@@ -22,8 +22,11 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
   let fixCount = 0;
   const logs: string[] = [];
 
-  const addLog = (message: string) => {
+  const changedNoteIds = new Set<string>();
+
+  const addLog = (noteId: string, message: string) => {
     logs.push(`[${new Date().toISOString()}] ${message}`);
+    changedNoteIds.add(noteId);
     fixCount++;
   };
 
@@ -32,32 +35,32 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
   notesMap.forEach((note) => {
     // 1. 죽은 링크 제거 (Dead Link Removal)
     const originalParentCount = note.parentNoteIds?.length || 0;
-    note.parentNoteIds = (note.parentNoteIds || []).filter(id => {
-      if (notesMap.has(id)) return true;
-      addLog(`노트 '${note.title}'(${note.id})에서 존재하지 않는 부모 ID '${id}' 제거`);
-      return false;
-    });
+    const filteredParents = (note.parentNoteIds || []).filter(id => notesMap.has(id));
+    if (filteredParents.length !== originalParentCount) {
+      note.parentNoteIds = filteredParents;
+      addLog(note.id, `노트 '${note.title}'(${note.id})에서 존재하지 않는 부모 ID 제거`);
+    }
 
     const originalChildCount = note.childNoteIds?.length || 0;
-    note.childNoteIds = (note.childNoteIds || []).filter(id => {
-      if (notesMap.has(id)) return true;
-      addLog(`노트 '${note.title}'(${note.id})에서 존재하지 않는 자식 ID '${id}' 제거`);
-      return false;
-    });
+    const filteredChildren = (note.childNoteIds || []).filter(id => notesMap.has(id));
+    if (filteredChildren.length !== originalChildCount) {
+      note.childNoteIds = filteredChildren;
+      addLog(note.id, `노트 '${note.title}'(${note.id})에서 존재하지 않는 자식 ID 제거`);
+    }
 
     const originalRelatedCount = note.relatedNoteIds?.length || 0;
-    note.relatedNoteIds = (note.relatedNoteIds || []).filter(id => {
-      if (notesMap.has(id)) return true;
-      addLog(`노트 '${note.title}'(${note.id})에서 존재하지 않는 연관 ID '${id}' 제거`);
-      return false;
-    });
+    const filteredRelated = (note.relatedNoteIds || []).filter(id => notesMap.has(id));
+    if (filteredRelated.length !== originalRelatedCount) {
+      note.relatedNoteIds = filteredRelated;
+      addLog(note.id, `노트 '${note.title}'(${note.id})에서 존재하지 않는 연관 ID 제거`);
+    }
 
     // 2. 부모 -> 자식 역참조 확인 및 복구 (규칙 1)
     note.childNoteIds.forEach(childId => {
       const child = notesMap.get(childId);
       if (child && !(child.parentNoteIds || []).includes(note.id)) {
         child.parentNoteIds = Array.from(new Set([...(child.parentNoteIds || []), note.id]));
-        addLog(`자식 노드 '${child.title}'(${child.id})의 부모 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
+        addLog(child.id, `자식 노드 '${child.title}'(${child.id})의 부모 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
       }
     });
 
@@ -66,7 +69,7 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
       const parent = notesMap.get(parentId);
       if (parent && !(parent.childNoteIds || []).includes(note.id)) {
         parent.childNoteIds = Array.from(new Set([...(parent.childNoteIds || []), note.id]));
-        addLog(`부모 노드 '${parent.title}'(${parent.id})의 자식 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
+        addLog(parent.id, `부모 노드 '${parent.title}'(${parent.id})의 자식 목록에 '${note.title}'(${note.id}) 추가 (역참조 복구)`);
       }
     });
 
@@ -75,7 +78,7 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
       const related = notesMap.get(relatedId);
       if (related && !(related.relatedNoteIds || []).includes(note.id)) {
         related.relatedNoteIds = Array.from(new Set([...(related.relatedNoteIds || []), note.id]));
-        addLog(`연관 노드 '${related.title}'(${related.id})의 연관 목록에 '${note.title}'(${note.id}) 추가 (대칭성 복구)`);
+        addLog(related.id, `연관 노드 '${related.title}'(${related.id})의 연관 목록에 '${note.title}'(${note.id}) 추가 (대칭성 복구)`);
       }
     });
   });
@@ -85,25 +88,26 @@ export const sanitizeNoteIntegrity = (notes: Note[]): {
     const pSet = new Set(note.parentNoteIds);
     if (pSet.size !== note.parentNoteIds.length) {
       note.parentNoteIds = Array.from(pSet);
-      addLog(`노트 '${note.title}'의 중복된 부모 ID 제거`);
+      addLog(note.id, `노트 '${note.title}'의 중복된 부모 ID 제거`);
     }
     
     const cSet = new Set(note.childNoteIds);
     if (cSet.size !== note.childNoteIds.length) {
       note.childNoteIds = Array.from(cSet);
-      addLog(`노트 '${note.title}'의 중복된 자식 ID 제거`);
+      addLog(note.id, `노트 '${note.title}'의 중복된 자식 ID 제거`);
     }
 
     const rSet = new Set(note.relatedNoteIds);
     if (rSet.size !== note.relatedNoteIds.length) {
       note.relatedNoteIds = Array.from(rSet);
-      addLog(`노트 '${note.title}'의 중복된 연관 ID 제거`);
+      addLog(note.id, `노트 '${note.title}'의 중복된 연관 ID 제거`);
     }
   });
 
   return { 
-    fixedNotes: Array.from(notesMap.values()), 
+    fixedNotes: Array.from(changedNoteIds).map(id => notesMap.get(id)!), 
     fixCount,
     logs
   };
+};
 };

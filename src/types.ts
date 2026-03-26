@@ -64,8 +64,25 @@ export interface GCM {
   variables: Record<string, string>;
 }
 
+export interface NoteMetadata {
+  id: string;
+  title: string;
+  folder: string;
+  noteType: NoteType;
+  parentNoteIds: string[];
+  childNoteIds: string[];
+  lastUpdated: string;
+  status: NoteStatus;
+  priority: NotePriority;
+  consistencyConflict?: {
+    description: string;
+    suggestion: string;
+  };
+}
+
 export interface AppState {
   notes: Note[];
+  noteMetadata: NoteMetadata[];
   gcm: GCM;
   githubRepo: string;
   githubToken: string;

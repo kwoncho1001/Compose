@@ -47,6 +47,7 @@ export interface DashboardActions {
   handleDeleteFolder: (folder: string) => void;
   handleDeleteMultiple: (ids: string[]) => void;
   handleSanitizeIntegrity: (silent?: boolean) => void;
+  handleRefreshNotes: () => Promise<void>;
   handleTargetedUpdate: (noteId: string, instruction: string) => Promise<void>;
   handleAddNote: (type?: NoteType, folder?: string) => void;
   handleAddChildNote: (parentId: string, type?: NoteType) => void;

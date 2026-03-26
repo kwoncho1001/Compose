@@ -1,6 +1,6 @@
 import React from 'react';
 import { Folder, CheckCircle, Circle, Clock, AlertTriangle, ShieldAlert, X, Merge, ChevronRight, ChevronDown, Check, Plus, Trash2 } from 'lucide-react';
-import { Note } from '../../types';
+import { Note, NoteMetadata } from '../../types';
 import { TreeItem } from '../../hooks/useSidebarLogic';
 
 interface NoteTreeProps {
@@ -17,10 +17,10 @@ interface NoteTreeProps {
   onAddChildNote: (parentId: string) => void;
   onDeleteNote: (id: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
-  noteMap: Map<string, Note>;
+  noteMap: Map<string, Note | NoteMetadata>;
 }
 
-const StatusIcon = ({ status }: { status: Note['status'] }) => {
+const StatusIcon = ({ status }: { status: Note['status'] | NoteMetadata['status'] }) => {
   switch (status) {
     case 'Done': return <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />;
     case 'In-Progress': return <Clock className="w-3.5 h-3.5 text-amber-500" />;
@@ -76,7 +76,7 @@ export const NoteTree: React.FC<NoteTreeProps> = ({
         const hasChildren = children.length > 0;
 
         const getFolderStatus = (ti: TreeItem): 'Conflict' | 'Planned' | 'Done' | 'Other' => {
-          const allNotes: Note[] = [];
+          const allNotes: (Note | NoteMetadata)[] = [];
           const collectNotes = (target: any) => {
             if (target.note) allNotes.push(target.note);
             if (target.children) target.children.forEach(collectNotes);
@@ -84,7 +84,7 @@ export const NoteTree: React.FC<NoteTreeProps> = ({
           collectNotes(ti);
           
           if (allNotes.length === 0) return 'Other';
-          if (allNotes.some(n => n.status === 'Conflict' || !!n.consistencyConflict)) return 'Conflict';
+          if (allNotes.some(n => n.status === 'Conflict' || (n as Note).consistencyConflict)) return 'Conflict';
           if (allNotes.some(n => n.status === 'Planned')) return 'Planned';
           if (allNotes.every(n => n.status === 'Done')) return 'Done';
           return 'Other';
@@ -93,7 +93,7 @@ export const NoteTree: React.FC<NoteTreeProps> = ({
         const folderStatus = item.type === 'folder' ? getFolderStatus(item) : 'Other';
         const folderColorClass = {
           'Conflict': 'text-red-500',
-          'Planned': 'text-yellow-500',
+          'Planned': 'text-amber-500',
           'Done': 'text-emerald-500',
           'Other': isExpanded ? 'text-indigo-400' : 'text-slate-500'
         }[folderStatus];

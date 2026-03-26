@@ -1,5 +1,5 @@
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { db, getDocWithCacheFallback } from '../firebase';
 
 export interface SyncLog {
   [path: string]: string; // path -> sha
@@ -8,7 +8,7 @@ export interface SyncLog {
 export const getSyncLog = async (userId: string, projectId: string): Promise<SyncLog> => {
   try {
     const logRef = doc(db, 'users', userId, 'projects', projectId, 'syncLogs', 'main');
-    const logSnap = await getDoc(logRef);
+    const logSnap = await getDocWithCacheFallback(logRef);
     if (logSnap.exists()) {
       return logSnap.data().logs || {};
     }
@@ -37,12 +37,6 @@ export const clearSyncLog = async (userId: string, projectId: string): Promise<v
 };
 
 export const subscribeSyncLog = (userId: string, projectId: string, callback: (logs: SyncLog) => void) => {
-  const logRef = doc(db, 'users', userId, 'projects', projectId, 'syncLogs', 'main');
-  return onSnapshot(logRef, (docSnap) => {
-    if (docSnap.exists()) {
-      callback(docSnap.data().logs || {});
-    } else {
-      callback({});
-    }
-  });
+  getSyncLog(userId, projectId).then(callback);
+  return () => {}; // No-op unsubscribe
 };

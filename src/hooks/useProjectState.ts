@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
-import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, updateDoc, writeBatch, getDocs } from 'firebase/firestore';
-import { AppState, Note, GCM, ChatMessage } from '../types';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { db, auth, handleFirestoreError, OperationType, getDocsWithCacheFallback, getDocWithCacheFallback } from '../firebase';
+import { doc, collection, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { AppState, Note, GCM, ChatMessage, NoteMetadata } from '../types';
 
 export const useProjectState = (
   setDialogConfig: any,
@@ -9,6 +9,7 @@ export const useProjectState = (
   showAlert: any
 ) => {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [noteMetadata, setNoteMetadata] = useState<NoteMetadata[]>([]);
   const [gcm, setGcm] = useState<GCM>({ entities: {}, variables: {} });
   const [githubConfig, setGithubConfig] = useState({
     repo: '',
@@ -28,6 +29,7 @@ export const useProjectState = (
   // Combined state for backward compatibility where needed, but hooks should prefer granular access
   const state: AppState = useMemo(() => ({
     notes,
+    noteMetadata,
     gcm,
     githubRepo: githubConfig.repo,
     githubToken: githubConfig.token,
@@ -41,6 +43,7 @@ export const useProjectState = (
     if (typeof update === 'function') {
       const next = update(state);
       if (next.notes !== notes) setNotes(next.notes);
+      if (next.noteMetadata !== noteMetadata) setNoteMetadata(next.noteMetadata || []);
       if (next.gcm !== gcm) setGcm(next.gcm);
       if (next.githubRepo !== githubConfig.repo || 
           next.githubToken !== githubConfig.token || 
@@ -58,6 +61,7 @@ export const useProjectState = (
       if (next.chatMessages !== chatMessages) setChatMessages(next.chatMessages || []);
     } else {
       if (update.notes !== notes) setNotes(update.notes);
+      if (update.noteMetadata !== noteMetadata) setNoteMetadata(update.noteMetadata || []);
       if (update.gcm !== gcm) setGcm(update.gcm);
       setGithubConfig({
         repo: update.githubRepo,
@@ -71,27 +75,33 @@ export const useProjectState = (
   };
 
   // Fetch projects list
-  useEffect(() => {
+  const fetchProjects = useCallback(async () => {
     if (!userId) return;
     const projectsRef = collection(db, 'users', userId, 'projects');
-    const unsubscribe = onSnapshot(projectsRef, (querySnap) => {
+    try {
+      const querySnap = await getDocsWithCacheFallback(projectsRef);
       const projectsList: { id: string; name: string }[] = [];
       querySnap.forEach((doc) => {
         projectsList.push({ id: doc.id, name: doc.data().name || doc.id });
       });
       setProjects(projectsList);
-    }, (e) => handleFirestoreError(e, OperationType.GET, projectsRef.path));
-
-    return () => unsubscribe();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, projectsRef.path);
+    }
   }, [userId]);
 
-  // Firebase Sync for current project
   useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
+
+  // Firebase Sync for current project
+  const fetchCurrentProject = useCallback(async () => {
     if (!userId || !currentProjectId) return;
 
     const projectRef = doc(db, 'users', userId, 'projects', currentProjectId);
-
-    const unsubscribeProject = onSnapshot(projectRef, (docSnap) => {
+    
+    try {
+      const docSnap = await getDocWithCacheFallback(projectRef);
       if (docSnap.exists()) {
         const data = docSnap.data();
         setGcm(data.gcm || { entities: {}, variables: {} });
@@ -113,20 +123,22 @@ export const useProjectState = (
             lastSyncedSha: '',
             fileSyncLogs: {}
           });
-          setDoc(projectRef, {
+          await setDoc(projectRef, {
             id: currentProjectId,
             name: 'Default Project',
             gcm: { entities: {}, variables: {} },
             lastUpdated: new Date().toISOString()
-          }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
+          });
         }
       }
-    }, (e) => handleFirestoreError(e, OperationType.GET, projectRef.path));
-
-    return () => {
-      unsubscribeProject();
-    };
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, projectRef.path);
+    }
   }, [userId, currentProjectId]);
+
+  useEffect(() => {
+    fetchCurrentProject();
+  }, [fetchCurrentProject]);
 
   const cleanObject = (obj: any) => {
     const newObj = { ...obj };
@@ -200,12 +212,12 @@ export const useProjectState = (
           
           // 1. 해당 프로젝트의 모든 노트 조회 및 삭제 예약
           const notesRef = collection(db, 'users', userId, 'projects', id, 'notes');
-          const notesSnap = await getDocs(notesRef);
+          const notesSnap = await getDocsWithCacheFallback(notesRef);
           notesSnap.forEach((doc) => batch.delete(doc.ref));
 
           // 2. 해당 프로젝트의 모든 채팅 내역 조회 및 삭제 예약
           const chatsRef = collection(db, 'users', userId, 'projects', id, 'chats');
-          const chatsSnap = await getDocs(chatsRef);
+          const chatsSnap = await getDocsWithCacheFallback(chatsRef);
           chatsSnap.forEach((doc) => batch.delete(doc.ref));
 
           // 3. 프로젝트 문서 자체 삭제 예약

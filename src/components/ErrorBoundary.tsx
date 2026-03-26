@@ -34,7 +34,11 @@ export class ErrorBoundary extends Component<Props, State> {
           const parsed = JSON.parse(this.state.error.message);
           if (parsed.error && parsed.operationType) {
             isFirestoreError = true;
-            errorMessage = `데이터베이스 오류 (${parsed.operationType}): ${parsed.error}`;
+            if (parsed.error.includes('resource-exhausted') || parsed.error.includes('Quota limit exceeded')) {
+              errorMessage = '데이터베이스 사용량이 일일 무료 한도를 초과했습니다. 내일(태평양 표준시 기준 자정) 할당량이 초기화된 후 다시 이용하실 수 있습니다.';
+            } else {
+              errorMessage = `데이터베이스 오류 (${parsed.operationType}): ${parsed.error}`;
+            }
           }
         }
       } catch (e) {

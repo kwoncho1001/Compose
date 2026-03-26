@@ -1,5 +1,5 @@
 import React from 'react';
-import { PanelLeft, PanelRight, Download, Upload } from 'lucide-react';
+import { PanelLeft, PanelRight, Download, Upload, RefreshCw } from 'lucide-react';
 import { Auth } from '../Auth';
 
 interface DashboardHeaderProps {
@@ -11,6 +11,7 @@ interface DashboardHeaderProps {
   handleExport: () => void;
   fileInputRef: React.RefObject<HTMLInputElement>;
   handleImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  handleRefreshNotes: () => void;
 }
 
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
@@ -21,7 +22,8 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   setRightSidebarOpen,
   handleExport,
   fileInputRef,
-  handleImport
+  handleImport,
+  handleRefreshNotes
 }) => {
   return (
     <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-3 shadow-sm z-10 flex items-center justify-between transition-colors duration-200">
@@ -59,6 +61,13 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           <PanelRight className="w-4 h-4" />
         </button>
         <div className="flex items-center gap-2 ml-2">
+          <button
+            onClick={handleRefreshNotes}
+            className="text-slate-500 hover:text-indigo-600 p-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            title="새로고침"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
           <button
             onClick={handleExport}
             className="text-slate-500 hover:text-slate-900 p-2 rounded-md hover:bg-slate-100 transition-colors"

@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
-import { Note, AppState, NoteType } from '../types';
+import { useEffect, useRef, useCallback, useState } from 'react';
+import { db, handleFirestoreError, OperationType, getDocsWithCacheFallback, getDocWithCacheFallback } from '../firebase';
+import { doc, collection, setDoc, deleteDoc, writeBatch, getDoc } from 'firebase/firestore';
+import { Note, AppState, NoteType, NoteMetadata } from '../types';
 import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
 import { wouldCreateCycle, normalizeHierarchy } from '../utils/hierarchyValidator';
@@ -24,34 +24,117 @@ export const useNoteSync = (
   abortControllerRef: React.MutableRefObject<AbortController | null>
 ) => {
   const isRemoteUpdate = useRef(false);
+  const isFetched = useRef(false);
+  const integrityCheckTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  const updateMetadata = useCallback(async (notes: Note[]) => {
+    if (!userId || !currentProjectId) return;
+    const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
+    
+    const metadata: NoteMetadata[] = notes.map(n => ({
+      id: n.id,
+      title: n.title,
+      folder: n.folder,
+      noteType: n.noteType,
+      parentNoteIds: n.parentNoteIds || [],
+      childNoteIds: n.childNoteIds || [],
+      lastUpdated: n.lastUpdated,
+      status: n.status,
+      priority: n.priority
+    }));
+
+    try {
+      await setDoc(metadataRef, { notes: metadata });
+      setState(prev => ({ ...prev, noteMetadata: metadata }));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, metadataRef.path);
+    }
+  }, [userId, currentProjectId, setState]);
+
+  const fetchNotes = useCallback(async () => {
+    if (!userId || !currentProjectId) return;
+    
+    setIsInitialLoading(true);
+    const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
+    
+    try {
+      // 1. 메타데이터 먼저 가져오기 (1회 읽기)
+      const metaSnap = await getDocWithCacheFallback(metadataRef);
+      if (metaSnap.exists()) {
+        const metadata = (metaSnap.data() as { notes: NoteMetadata[] }).notes || [];
+        setState(prev => ({ ...prev, noteMetadata: metadata }));
+      } else {
+        // 메타데이터가 없으면 전체 노트를 읽어서 메타데이터 생성 (초기 1회)
+        const notesRef = collection(db, 'users', userId, 'projects', currentProjectId, 'notes');
+        const querySnap = await getDocsWithCacheFallback(notesRef);
+        const notesList: Note[] = [];
+        querySnap.forEach((doc) => {
+          notesList.push(doc.data() as Note);
+        });
+        
+        const metadata: NoteMetadata[] = notesList.map(n => ({
+          id: n.id,
+          title: n.title,
+          folder: n.folder,
+          noteType: n.noteType,
+          parentNoteIds: n.parentNoteIds || [],
+          childNoteIds: n.childNoteIds || [],
+          lastUpdated: n.lastUpdated,
+          status: n.status,
+          priority: n.priority,
+          consistencyConflict: n.consistencyConflict
+        }));
+        
+        await setDoc(metadataRef, { notes: metadata });
+        setState(prev => ({ ...prev, notes: notesList, noteMetadata: metadata }));
+      }
+      isFetched.current = true;
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, metadataRef.path);
+    } finally {
+      setIsInitialLoading(false);
+    }
+  }, [userId, currentProjectId, setState, setIsInitialLoading]);
+
+  const fetchNoteContent = useCallback(async (noteId: string) => {
+    if (!userId || !currentProjectId || !noteId) return;
+    
+    // 이미 본문이 로드되어 있는지 확인
+    const existingNote = state.notes.find(n => n.id === noteId);
+    if (existingNote && existingNote.content) return;
+
+    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', noteId);
+    try {
+      const docSnap = await getDocWithCacheFallback(noteRef);
+      if (docSnap.exists()) {
+        const fullNote = docSnap.data() as Note;
+        setState(prev => {
+          const newNotes = [...prev.notes];
+          const idx = newNotes.findIndex(n => n.id === noteId);
+          if (idx !== -1) {
+            newNotes[idx] = fullNote;
+          } else {
+            newNotes.push(fullNote);
+          }
+          return { ...prev, notes: newNotes };
+        });
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, noteRef.path);
+    }
+  }, [userId, currentProjectId, state.notes, setState]);
 
   useEffect(() => {
-    if (!userId || !currentProjectId) return;
+    if (selectedNoteId) {
+      fetchNoteContent(selectedNoteId);
+    }
+  }, [selectedNoteId, fetchNoteContent]);
 
-    const notesRef = collection(db, 'users', userId, 'projects', currentProjectId, 'notes');
-
-    const unsubscribeNotes = onSnapshot(notesRef, (querySnap) => {
-      const notesList: Note[] = [];
-      querySnap.forEach((doc) => {
-        notesList.push(doc.data() as Note);
-      });
-      
-      notesList.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-
-      isRemoteUpdate.current = true;
-      setState(prev => ({ ...prev, notes: notesList }));
-      setIsInitialLoading(false);
-      
-      // Reset the flag after the state update has likely propagated
-      setTimeout(() => {
-        isRemoteUpdate.current = false;
-      }, 1000);
-    }, (e) => handleFirestoreError(e, OperationType.GET, notesRef.path));
-
-    return () => {
-      unsubscribeNotes();
-    };
-  }, [userId, currentProjectId, setState, setIsInitialLoading]);
+  useEffect(() => {
+    if (userId && currentProjectId) {
+      fetchNotes();
+    }
+  }, [userId, currentProjectId, fetchNotes]);
 
   const syncNote = async (note: Note) => {
     if (!userId || !currentProjectId) return;
@@ -90,6 +173,37 @@ export const useNoteSync = (
         handleFirestoreError(e, OperationType.WRITE, 'batch-notes');
       }
     }
+
+    // 메타데이터 업데이트 (전체 상태 기반)
+    // 이 부분은 최적화 여지가 있으나, 현재는 전체 노트를 기반으로 메타데이터를 갱신함
+    // 실제로는 state.notes와 chunk를 병합하여 업데이트해야 함
+    setState(prev => {
+      const updatedNotes = [...prev.notes];
+      notes.forEach(n => {
+        const idx = updatedNotes.findIndex(un => un.id === n.id);
+        if (idx !== -1) updatedNotes[idx] = n;
+        else updatedNotes.push(n);
+      });
+      
+      // 비동기로 메타데이터 저장
+      const metadata: NoteMetadata[] = updatedNotes.map(n => ({
+        id: n.id,
+        title: n.title,
+        folder: n.folder,
+        noteType: n.noteType,
+        parentNoteIds: n.parentNoteIds || [],
+        childNoteIds: n.childNoteIds || [],
+        lastUpdated: n.lastUpdated,
+        status: n.status,
+        priority: n.priority,
+        consistencyConflict: n.consistencyConflict
+      }));
+      
+      const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
+      setDoc(metadataRef, { notes: metadata }).catch(e => console.error('Metadata update failed', e));
+      
+      return { ...prev, notes: updatedNotes, noteMetadata: metadata };
+    });
   };
 
   const deleteNotesFromFirestore = async (noteIds: string[]) => {
@@ -401,46 +515,80 @@ export const useNoteSync = (
   const handleSanitizeIntegrity = async (silent = false) => {
     if (state.notes.length === 0 || !userId || !currentProjectId) return;
     
-    // Skip automatic integrity check if the last update was from remote to prevent loops
-    if (silent && isRemoteUpdate.current) {
-      console.log('[useNoteSync] Skipping silent integrity check due to remote update flag');
-      return;
+    // 디바운스 처리: 너무 자주 실행되지 않도록 함
+    if (integrityCheckTimeout.current) {
+      clearTimeout(integrityCheckTimeout.current);
     }
 
-    const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
-
-    if (fixCount > 0) {
-      if (!silent) {
-        setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
+    integrityCheckTimeout.current = setTimeout(async () => {
+      // Skip automatic integrity check if the last update was from remote to prevent loops
+      if (silent && isRemoteUpdate.current) {
+        console.log('[useNoteSync] Skipping silent integrity check due to remote update flag');
+        return;
       }
-      
-      try {
-        const batch = writeBatch(db);
-        fixedNotes.forEach(note => {
-          const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-          batch.set(noteRef, cleanObject(note));
-        });
-        await batch.commit();
+
+      const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
+
+      if (fixCount > 0) {
+        if (!silent) {
+          setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
+        }
         
-        logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
+        try {
+          const batch = writeBatch(db);
+          fixedNotes.forEach(note => {
+            const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
+            batch.set(noteRef, cleanObject(note));
+          });
+          
+          // 메타데이터도 함께 업데이트
+          const updatedNotes = [...state.notes];
+          fixedNotes.forEach(fn => {
+            const idx = updatedNotes.findIndex(n => n.id === fn.id);
+            if (idx !== -1) updatedNotes[idx] = fn;
+          });
+          
+          const metadata: NoteMetadata[] = updatedNotes.map(n => ({
+            id: n.id,
+            title: n.title,
+            folder: n.folder,
+            noteType: n.noteType,
+            parentNoteIds: n.parentNoteIds || [],
+            childNoteIds: n.childNoteIds || [],
+            lastUpdated: n.lastUpdated,
+            status: n.status,
+            priority: n.priority,
+            consistencyConflict: n.consistencyConflict
+          }));
+          
+          const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
+          batch.set(metadataRef, { notes: metadata });
+          
+          await batch.commit();
+          
+          // 로컬 상태 업데이트
+          setState(prev => ({ ...prev, notes: updatedNotes, noteMetadata: metadata }));
 
-        if (!silent) {
-          showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
+          logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
+
+          if (!silent) {
+            showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
+          }
+        } catch (e) {
+          if (!silent) {
+            handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
+          }
+        } finally {
+          if (!silent) {
+            setProcessStatus(null);
+          }
         }
-      } catch (e) {
+      } else {
         if (!silent) {
-          handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
-        }
-      } finally {
-        if (!silent) {
-          setProcessStatus(null);
+          showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
         }
       }
-    } else {
-      if (!silent) {
-        showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
-      }
-    }
+    }, silent ? 5000 : 0); // 자동(silent) 체크는 5초 디바운스
   };
 
   const handleTargetedUpdate = async (noteId: string, command: string) => {
@@ -563,6 +711,7 @@ export const useNoteSync = (
     handleAddNote,
     handleAddChildNote,
     handleTextFileUpload,
+    handleRefreshNotes: fetchNotes,
     isRemoteUpdate
   };
 };

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, collection, onSnapshot, setDoc, query, orderBy, writeBatch } from 'firebase/firestore';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { db, handleFirestoreError, OperationType, getDocsWithCacheFallback } from '../firebase';
+import { doc, collection, setDoc, query, orderBy, writeBatch, limit } from 'firebase/firestore';
 import { AppState, ChatMessage } from '../types';
 import { chatWithNotes } from '../services/gemini';
 
@@ -24,19 +24,25 @@ export const useChatSession = (
     if (!userId || !currentProjectId) return;
 
     const chatsRef = collection(db, 'users', userId, 'projects', currentProjectId, 'chats');
-    const chatsQuery = query(chatsRef, orderBy('createdAt', 'asc'));
+    // 최근 50개 메시지만 가져오도록 제한 (할당량 절약)
+    const chatsQuery = query(chatsRef, orderBy('createdAt', 'desc'), limit(50));
 
-    const unsubscribeChats = onSnapshot(chatsQuery, (querySnap) => {
-      const chatsList: ChatMessage[] = [];
-      querySnap.forEach((doc) => {
-        chatsList.push(doc.data() as ChatMessage);
-      });
-      setState(prev => ({ ...prev, chatMessages: chatsList }));
-    }, (e) => handleFirestoreError(e, OperationType.GET, chatsRef.path));
-
-    return () => {
-      unsubscribeChats();
+    const fetchChats = async () => {
+      try {
+        const querySnap = await getDocsWithCacheFallback(chatsQuery);
+        const chatsList: ChatMessage[] = [];
+        querySnap.forEach((doc) => {
+          chatsList.push(doc.data() as ChatMessage);
+        });
+        // 시간순 정렬 (desc로 가져왔으므로 뒤집기)
+        chatsList.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        setState(prev => ({ ...prev, chatMessages: chatsList }));
+      } catch (e) {
+        handleFirestoreError(e, OperationType.GET, chatsRef.path);
+      }
     };
+
+    fetchChats();
   }, [userId, currentProjectId, setState]);
 
   const handleChat = async () => {

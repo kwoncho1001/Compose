@@ -2,20 +2,56 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { 
   initializeFirestore, 
-  persistentLocalCache, 
-  persistentMultipleTabManager 
+  persistentLocalCache,
+  persistentSingleTabManager,
+  getDocs,
+  getDoc,
+  getDocsFromCache,
+  getDocFromCache,
+  DocumentReference,
+  Query,
+  DocumentSnapshot,
+  QuerySnapshot
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// 오프라인 지속성(캐시) 설정 적용
+// 오프라인 지속성(캐시) 설정 적용 - 할당량 절약을 위해 영구 캐시 사용
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager() // 여러 탭에서 동시 접속 시 데이터 정합성 유지
-  })
+  localCache: persistentLocalCache({})
 }, firebaseConfig.firestoreDatabaseId);
+
+/**
+ * 할당량 초과 시 캐시에서 데이터를 가져오는 래퍼 함수 (Query용)
+ */
+export async function getDocsWithCacheFallback(query: Query): Promise<QuerySnapshot> {
+  try {
+    return await getDocs(query);
+  } catch (error: any) {
+    if (error.code === 'resource-exhausted' || error.message?.includes('Quota')) {
+      console.warn('Firestore Quota exceeded, falling back to cache.');
+      return await getDocsFromCache(query);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 할당량 초과 시 캐시에서 데이터를 가져오는 래퍼 함수 (Document용)
+ */
+export async function getDocWithCacheFallback(docRef: DocumentReference): Promise<DocumentSnapshot> {
+  try {
+    return await getDoc(docRef);
+  } catch (error: any) {
+    if (error.code === 'resource-exhausted' || error.message?.includes('Quota')) {
+      console.warn('Firestore Quota exceeded, falling back to cache.');
+      return await getDocFromCache(docRef);
+    }
+    throw error;
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',

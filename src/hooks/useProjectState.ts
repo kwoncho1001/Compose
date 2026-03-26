@@ -1,144 +1,86 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { db, auth, handleFirestoreError, OperationType, getDocsWithCacheFallback, getDocWithCacheFallback } from '../firebase';
-import { doc, collection, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
-import { AppState, Note, GCM, ChatMessage, NoteMetadata } from '../types';
+import { useState, useEffect } from 'react';
+import { db, auth, handleFirestoreError, OperationType } from '../firebase';
+import { doc, collection, onSnapshot, setDoc, updateDoc, writeBatch, getDocs } from 'firebase/firestore';
+import { AppState } from '../types';
 
 export const useProjectState = (
   setDialogConfig: any,
   setProcessStatus: any,
   showAlert: any
 ) => {
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [noteMetadata, setNoteMetadata] = useState<NoteMetadata[]>([]);
-  const [gcm, setGcm] = useState<GCM>({ entities: {}, variables: {} });
-  const [githubConfig, setGithubConfig] = useState({
-    repo: '',
-    token: process.env.Github_Token || '',
+  const [state, setState] = useState<AppState>({
+    notes: [],
+    syncRegistry: { entries: {}, lastSyncedAt: '' },
+    gcm: { entities: {}, variables: {} },
+    githubRepo: '',
+    githubToken: process.env.Github_Token || '',
     lastSyncedAt: '',
     lastSyncedSha: '',
-    fileSyncLogs: {} as Record<string, string>
+    fileSyncLogs: {},
+    chatMessages: [],
   });
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string>('default-project');
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   const userId = auth.currentUser?.uid;
 
-  // Combined state for backward compatibility where needed, but hooks should prefer granular access
-  const state: AppState = useMemo(() => ({
-    notes,
-    noteMetadata,
-    gcm,
-    githubRepo: githubConfig.repo,
-    githubToken: githubConfig.token,
-    lastSyncedAt: githubConfig.lastSyncedAt,
-    lastSyncedSha: githubConfig.lastSyncedSha,
-    fileSyncLogs: githubConfig.fileSyncLogs,
-    chatMessages
-  }), [notes, gcm, githubConfig, chatMessages]);
-
-  const setState: React.Dispatch<React.SetStateAction<AppState>> = (update) => {
-    if (typeof update === 'function') {
-      const next = update(state);
-      if (next.notes !== notes) setNotes(next.notes);
-      if (next.noteMetadata !== noteMetadata) setNoteMetadata(next.noteMetadata || []);
-      if (next.gcm !== gcm) setGcm(next.gcm);
-      if (next.githubRepo !== githubConfig.repo || 
-          next.githubToken !== githubConfig.token || 
-          next.lastSyncedAt !== githubConfig.lastSyncedAt || 
-          next.lastSyncedSha !== githubConfig.lastSyncedSha ||
-          next.fileSyncLogs !== githubConfig.fileSyncLogs) {
-        setGithubConfig({
-          repo: next.githubRepo,
-          token: next.githubToken,
-          lastSyncedAt: next.lastSyncedAt || '',
-          lastSyncedSha: next.lastSyncedSha || '',
-          fileSyncLogs: next.fileSyncLogs || {}
-        });
-      }
-      if (next.chatMessages !== chatMessages) setChatMessages(next.chatMessages || []);
-    } else {
-      if (update.notes !== notes) setNotes(update.notes);
-      if (update.noteMetadata !== noteMetadata) setNoteMetadata(update.noteMetadata || []);
-      if (update.gcm !== gcm) setGcm(update.gcm);
-      setGithubConfig({
-        repo: update.githubRepo,
-        token: update.githubToken,
-        lastSyncedAt: update.lastSyncedAt || '',
-        lastSyncedSha: update.lastSyncedSha || '',
-        fileSyncLogs: update.fileSyncLogs || {}
-      });
-      if (update.chatMessages !== chatMessages) setChatMessages(update.chatMessages || []);
-    }
-  };
-
   // Fetch projects list
-  const fetchProjects = useCallback(async () => {
+  useEffect(() => {
     if (!userId) return;
     const projectsRef = collection(db, 'users', userId, 'projects');
-    try {
-      const querySnap = await getDocsWithCacheFallback(projectsRef);
+    const unsubscribe = onSnapshot(projectsRef, (querySnap) => {
       const projectsList: { id: string; name: string }[] = [];
       querySnap.forEach((doc) => {
         projectsList.push({ id: doc.id, name: doc.data().name || doc.id });
       });
       setProjects(projectsList);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.GET, projectsRef.path);
-    }
+    }, (e) => handleFirestoreError(e, OperationType.GET, projectsRef.path));
+
+    return () => unsubscribe();
   }, [userId]);
 
-  useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
-
   // Firebase Sync for current project
-  const fetchCurrentProject = useCallback(async () => {
+  useEffect(() => {
     if (!userId || !currentProjectId) return;
 
     const projectRef = doc(db, 'users', userId, 'projects', currentProjectId);
-    
-    try {
-      const docSnap = await getDocWithCacheFallback(projectRef);
+
+    const unsubscribeProject = onSnapshot(projectRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setGcm(data.gcm || { entities: {}, variables: {} });
-        setGithubConfig(prev => ({
+        setState(prev => ({
           ...prev,
-          repo: data.githubRepo || '',
-          token: data.githubToken || process.env.Github_Token || '',
+          gcm: data.gcm || { entities: {}, variables: {} },
+          githubRepo: data.githubRepo || '',
+          githubToken: data.githubToken || process.env.Github_Token || '',
           lastSyncedAt: data.lastSyncedAt || '',
           lastSyncedSha: data.lastSyncedSha || '',
-          fileSyncLogs: data.fileSyncLogs || {}
         }));
       } else {
         if (currentProjectId === 'default-project') {
-          setGcm({ entities: {}, variables: {} });
-          setGithubConfig({
-            repo: '',
-            token: process.env.Github_Token || '',
+          setState(prev => ({
+            ...prev,
+            gcm: { entities: {}, variables: {} },
+            githubRepo: '',
+            githubToken: process.env.Github_Token || '',
             lastSyncedAt: '',
             lastSyncedSha: '',
-            fileSyncLogs: {}
-          });
-          await setDoc(projectRef, {
+          }));
+          setDoc(projectRef, {
             id: currentProjectId,
             name: 'Default Project',
             gcm: { entities: {}, variables: {} },
             lastUpdated: new Date().toISOString()
-          });
+          }).catch(e => handleFirestoreError(e, OperationType.WRITE, projectRef.path));
         }
       }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.GET, projectRef.path);
-    }
-  }, [userId, currentProjectId]);
+    }, (e) => handleFirestoreError(e, OperationType.GET, projectRef.path));
 
-  useEffect(() => {
-    fetchCurrentProject();
-  }, [fetchCurrentProject]);
+    return () => {
+      unsubscribeProject();
+    };
+  }, [userId, currentProjectId]);
 
   const cleanObject = (obj: any) => {
     const newObj = { ...obj };
@@ -212,12 +154,12 @@ export const useProjectState = (
           
           // 1. 해당 프로젝트의 모든 노트 조회 및 삭제 예약
           const notesRef = collection(db, 'users', userId, 'projects', id, 'notes');
-          const notesSnap = await getDocsWithCacheFallback(notesRef);
+          const notesSnap = await getDocs(notesRef);
           notesSnap.forEach((doc) => batch.delete(doc.ref));
 
           // 2. 해당 프로젝트의 모든 채팅 내역 조회 및 삭제 예약
           const chatsRef = collection(db, 'users', userId, 'projects', id, 'chats');
-          const chatsSnap = await getDocsWithCacheFallback(chatsRef);
+          const chatsSnap = await getDocs(chatsRef);
           chatsSnap.forEach((doc) => batch.delete(doc.ref));
 
           // 3. 프로젝트 문서 자체 삭제 예약

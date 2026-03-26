@@ -5,7 +5,7 @@ import { updateSpecFromCode, generateFixGuide, partialMerge, generateImpactAnaly
 export const useConflictResolver = (
   note: Note | null,
   allNotes: Note[],
-  onUpdateNote: (note: Note) => void,
+  onUpdateNote: (note: Note) => Promise<void>,
   showAlert: (title: string, message: string, type: 'info' | 'warning' | 'error' | 'success') => void
 ) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);

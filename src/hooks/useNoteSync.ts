@@ -1,12 +1,12 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import { db, handleFirestoreError, OperationType, getDocsWithCacheFallback, getDocWithCacheFallback } from '../firebase';
-import { doc, collection, setDoc, deleteDoc, writeBatch, getDoc, onSnapshot } from 'firebase/firestore';
-import { Note, AppState, NoteType, NoteMetadata } from '../types';
+import { useEffect, useCallback, useRef } from 'react';
+import { db, handleFirestoreError, OperationType } from '../firebase';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { Note, AppState, NoteType, SyncEntry, SyncRegistry } from '../types';
 import { syncNoteRelationships, cleanupNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
 import { wouldCreateCycle, normalizeHierarchy } from '../utils/hierarchyValidator';
-import { generateNoteSHA } from '../utils/sha';
-
+import { generateNoteFingerprint } from '../utils/crypto';
+import { getSyncRegistry, getNote, saveNoteWithRegistry, deleteNotesWithRegistry, saveNotesBatchWithRegistry } from '../services/syncService';
 import { updateSingleNote } from '../services/gemini';
 
 export const useNoteSync = (
@@ -24,367 +24,240 @@ export const useNoteSync = (
   syncProject: (updates: Partial<AppState>) => Promise<void>,
   abortControllerRef: React.MutableRefObject<AbortController | null>
 ) => {
-  const isRemoteUpdate = useRef(false);
-  const isFetched = useRef(false);
-  const integrityCheckTimeout = useRef<NodeJS.Timeout | null>(null);
-  const dirtyNotesRef = useRef<Map<string, Note>>(new Map());
+  const syncQueueRef = useRef<Record<string, Note>>({});
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchNotes = useCallback(async () => {
+  // --- [단계 2: 비교 및 최적화 판단] ---
+  // 초기화 단계: Registry만 읽어와서 로컬 맵 구성 (Lazy Loading 전략)
+  useEffect(() => {
     if (!userId || !currentProjectId) return;
-    
-    setIsInitialLoading(true);
-    const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
-    
-    try {
-      // 1. 메타데이터 먼저 가져오기 (1회 읽기)
-      const metaSnap = await getDocWithCacheFallback(metadataRef);
-      if (metaSnap.exists()) {
-        const metadata = (metaSnap.data() as { notes: NoteMetadata[] }).notes || [];
-        setState(prev => ({ ...prev, noteMetadata: metadata }));
-      } else {
-        // 메타데이터가 없으면 전체 노트를 읽어서 메타데이터 생성 (초기 1회)
-        const notesRef = collection(db, 'users', userId, 'projects', currentProjectId, 'notes');
-        const querySnap = await getDocsWithCacheFallback(notesRef);
-        const notesList: Note[] = [];
-        querySnap.forEach((doc) => {
-          notesList.push(doc.data() as Note);
-        });
-        
-        const notesWithSha = await Promise.all(notesList.map(async n => {
-          const sha = await generateNoteSHA(n);
-          return { ...n, sha };
+
+    const loadRegistry = async () => {
+      setIsInitialLoading(true);
+      const registry = await getSyncRegistry(userId, currentProjectId);
+      
+      if (registry) {
+        // Registry 정보를 바탕으로 "뼈대" 노트 목록 생성
+        const skeletonNotes: Note[] = Object.values(registry.entries).map(entry => ({
+          id: entry.id,
+          title: entry.title,
+          folder: entry.folder,
+          status: entry.status,
+          priority: entry.priority,
+          noteType: entry.noteType,
+          lastUpdated: entry.lastUpdated,
+          sha: entry.sha,
+          content: '', // 실제 내용은 나중에 로딩 (Lazy Loading)
+          summary: '',
+          version: '1.0.0',
+          importance: 3,
+          tags: [],
+          parentNoteIds: [],
+          childNoteIds: [],
+          relatedNoteIds: []
         }));
 
-        const metadata: NoteMetadata[] = notesWithSha.map(n => ({
-          id: n.id,
-          title: n.title,
-          folder: n.folder,
-          noteType: n.noteType,
-          parentNoteIds: n.parentNoteIds || [],
-          childNoteIds: n.childNoteIds || [],
-          relatedNoteIds: n.relatedNoteIds || [],
-          lastUpdated: n.lastUpdated,
-          status: n.status,
-          priority: n.priority,
-          consistencyConflict: n.consistencyConflict,
-          sha: n.sha
-        }));
+        skeletonNotes.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
         
-        await setDoc(metadataRef, { notes: metadata });
-        setState(prev => ({ ...prev, notes: notesWithSha, noteMetadata: metadata }));
+        setState(prev => ({ 
+          ...prev, 
+          notes: skeletonNotes,
+          syncRegistry: registry 
+        }));
       }
-      isFetched.current = true;
-    } catch (e) {
-      handleFirestoreError(e, OperationType.GET, metadataRef.path);
-    } finally {
       setIsInitialLoading(false);
-    }
+    };
 
-    // Set up real-time listener for metadata/all
-    const unsubscribe = onSnapshot(metadataRef, (docSnap) => {
+    loadRegistry();
+
+    // Registry 실시간 감시 (다른 기기에서의 변경 감지용)
+    const registryRef = doc(db, 'users', userId, 'projects', currentProjectId, 'sync', 'sync_index');
+    const unsubscribeRegistry = onSnapshot(registryRef, (docSnap) => {
       if (docSnap.exists()) {
-        const metadata = (docSnap.data() as { notes: NoteMetadata[] }).notes || [];
+        const newRegistry = docSnap.data() as SyncRegistry;
         setState(prev => {
-          // Only update if there are changes to avoid unnecessary re-renders
-          const prevShaMap = new Map(prev.noteMetadata.map(m => [m.id, m.sha]));
-          const newShaMap = new Map(metadata.map(m => [m.id, m.sha]));
-          
+          // 서버 Registry와 로컬 상태 비교
+          const updatedNotes = [...prev.notes];
           let hasChanges = false;
-          if (prev.noteMetadata.length !== metadata.length) {
-            hasChanges = true;
-          } else {
-            for (const m of metadata) {
-              if (prevShaMap.get(m.id) !== m.sha) {
-                hasChanges = true;
-                break;
+
+          Object.values(newRegistry.entries).forEach(entry => {
+            const localNote = updatedNotes.find(n => n.id === entry.id);
+            if (!localNote || localNote.sha !== entry.sha) {
+              // 서버가 더 최신이거나 새로운 노트인 경우
+              if (!localNote) {
+                updatedNotes.push({
+                  ...entry,
+                  content: '',
+                  summary: '',
+                  version: '1.0.0',
+                  importance: 3,
+                  tags: [],
+                  parentNoteIds: [],
+                  childNoteIds: [],
+                  relatedNoteIds: []
+                } as Note);
+              } else {
+                // 기존 노트의 메타데이터 업데이트 (내용은 나중에 fetch)
+                const idx = updatedNotes.findIndex(n => n.id === entry.id);
+                updatedNotes[idx] = {
+                  ...updatedNotes[idx],
+                  ...entry,
+                  // SHA가 다르면 내용을 비워서 다시 로드하게 함 (혹은 서버에서 가져옴)
+                  content: localNote.sha !== entry.sha ? '' : localNote.content
+                };
               }
+              hasChanges = true;
             }
-          }
-          
+          });
+
+          // 삭제된 노트 처리
+          const serverIds = new Set(Object.keys(newRegistry.entries));
+          const filteredNotes = updatedNotes.filter(n => serverIds.has(n.id));
+          if (filteredNotes.length !== updatedNotes.length) hasChanges = true;
+
           if (hasChanges) {
-            // Clean up deleted notes from state.notes
-            const updatedNotes = prev.notes.filter(n => newShaMap.has(n.id));
-            return { ...prev, notes: updatedNotes, noteMetadata: metadata };
+            filteredNotes.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+            return { ...prev, notes: filteredNotes, syncRegistry: newRegistry };
           }
           return prev;
         });
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, metadataRef.path);
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeRegistry();
+    };
   }, [userId, currentProjectId, setState, setIsInitialLoading]);
 
-  const fetchNoteContent = useCallback(async (noteId: string) => {
-    if (!userId || !currentProjectId || !noteId) return;
-    
-    // 이미 본문이 로드되어 있는지 확인하고, 메타데이터의 SHA와 일치하는지 확인
-    const existingNote = state.notes.find(n => n.id === noteId);
-    const metadataSha = state.noteMetadata.find(m => m.id === noteId)?.sha;
-    
-    // 로컬에 노트가 있고, SHA가 일치하면 (또는 메타데이터에 SHA가 없으면) 다시 가져오지 않음
-    if (existingNote && existingNote.content && (!metadataSha || existingNote.sha === metadataSha)) {
-      return;
-    }
-
-    // If the note is currently being edited locally, don't overwrite it with remote changes
-    if (dirtyNotesRef.current.has(noteId)) {
-      return;
-    }
-
-    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', noteId);
-    try {
-      const docSnap = await getDocWithCacheFallback(noteRef);
-      if (docSnap.exists()) {
-        const fullNote = docSnap.data() as Note;
-        const sha = await generateNoteSHA(fullNote);
-        const noteWithSha = { ...fullNote, sha };
-        
-        setState(prev => {
-          const newNotes = [...prev.notes];
-          const idx = newNotes.findIndex(n => n.id === noteId);
-          if (idx !== -1) {
-            newNotes[idx] = noteWithSha;
-          } else {
-            newNotes.push(noteWithSha);
-          }
-          return { ...prev, notes: newNotes };
-        });
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.GET, noteRef.path);
-    }
-  }, [userId, currentProjectId, state.notes, state.noteMetadata, setState]);
-
+  // --- [지연 로딩(Lazy Loading) 구현] ---
+  // 사용자가 노트를 선택했을 때 내용이 없으면 Firestore에서 가져옴
   useEffect(() => {
-    if (selectedNoteId) {
-      fetchNoteContent(selectedNoteId);
-    }
-  }, [selectedNoteId, fetchNoteContent]);
+    if (!userId || !currentProjectId || !selectedNoteId) return;
 
-  useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    
-    if (userId && currentProjectId) {
-      fetchNotes().then(unsub => {
-        unsubscribe = unsub;
-      });
+    const currentNote = state.notes.find(n => n.id === selectedNoteId);
+    if (currentNote && !currentNote.content && currentNote.sha) {
+      const fetchFullNote = async () => {
+        setProcessStatus({ message: '노트 내용을 불러오는 중...' });
+        const fullNote = await getNote(userId, currentProjectId, selectedNoteId);
+        if (fullNote) {
+          setState(prev => ({
+            ...prev,
+            notes: prev.notes.map(n => n.id === selectedNoteId ? fullNote : n)
+          }));
+        }
+        setProcessStatus(null);
+      };
+      fetchFullNote();
     }
+  }, [selectedNoteId, userId, currentProjectId]);
+
+  // --- [단계 3: 데이터 백업(쓰기) 및 디바운싱] ---
+  const performSync = useCallback(async () => {
+    if (!userId || !currentProjectId || Object.keys(syncQueueRef.current).length === 0) return;
+
+    const notesToSync = Object.values(syncQueueRef.current);
+    syncQueueRef.current = {};
     
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
+    setProcessStatus({ message: '변경 사항 동기화 중...' });
+
+    const entries: Record<string, SyncEntry> = { ...state.syncRegistry.entries };
+    
+    for (const note of notesToSync) {
+      const sha = await generateNoteFingerprint(note);
+      const entry: SyncEntry = {
+        id: note.id,
+        sha,
+        lastUpdated: note.lastUpdated,
+        title: note.title,
+        folder: note.folder,
+        status: note.status,
+        priority: note.priority,
+        noteType: note.noteType
+      };
+      entries[note.id] = entry;
+      note.sha = sha;
+    }
+
+    await saveNotesBatchWithRegistry(userId, currentProjectId, notesToSync, entries, cleanObject);
+    
+    setState(prev => ({
+      ...prev,
+      notes: prev.notes.map(n => {
+        const syncedNote = notesToSync.find(sn => sn.id === n.id);
+        return syncedNote ? { ...n, sha: syncedNote.sha } : n;
+      }),
+      syncRegistry: {
+        ...prev.syncRegistry,
+        entries
       }
-    };
-  }, [userId, currentProjectId, fetchNotes]);
+    }));
+
+    setProcessStatus(null);
+  }, [userId, currentProjectId, state.syncRegistry, cleanObject, setState, setProcessStatus]);
+
+  const queueSync = useCallback((note: Note) => {
+    syncQueueRef.current[note.id] = note;
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(performSync, 5000); // 5초 디바운싱
+  }, [performSync]);
 
   const syncNote = async (note: Note) => {
-    if (!userId || !currentProjectId) return;
-    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-    try {
-      await setDoc(noteRef, cleanObject(note));
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, noteRef.path);
-    }
+    queueSync(note);
   };
 
   const deleteNoteFromFirestore = async (noteId: string) => {
     if (!userId || !currentProjectId) return;
-    const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', noteId);
-    try {
-      await deleteDoc(noteRef);
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, noteRef.path);
-    }
+    const newRegistry = { ...state.syncRegistry };
+    delete newRegistry.entries[noteId];
+    await deleteNotesWithRegistry(userId, currentProjectId, [noteId], newRegistry);
   };
 
-  const performSync = async () => {
-    if (!userId || !currentProjectId || dirtyNotesRef.current.size === 0) return;
-
-    const notesToSync = Array.from(dirtyNotesRef.current.values());
-    dirtyNotesRef.current.clear();
-
-    try {
-      const notesWithSha = await Promise.all(notesToSync.map(async note => {
-        const sha = await generateNoteSHA(note);
-        return { ...note, sha };
-      }));
-
-      const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
-      const metadataSnap = await getDocWithCacheFallback(metadataRef);
-      let existingMetadata: NoteMetadata[] = [];
-      if (metadataSnap.exists()) {
-        existingMetadata = metadataSnap.data().notes || [];
-      }
-
-      const existingShaMap = new Map(existingMetadata.map(m => [m.id, m.sha]));
-
-      const notesToUpload = notesWithSha.filter(note => {
-        const existingSha = existingShaMap.get(note.id);
-        return existingSha !== note.sha;
-      });
-
-      if (notesToUpload.length > 0) {
-        const chunkSize = 500;
-        for (let i = 0; i < notesToUpload.length; i += chunkSize) {
-          const chunk = notesToUpload.slice(i, i + chunkSize);
-          const batch = writeBatch(db);
-          chunk.forEach(note => {
-            const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
-            batch.set(noteRef, cleanObject(note));
-          });
-          await batch.commit();
-        }
-      }
-
-      // Update metadata/all with new SHAs, merging with existing metadata from Firestore
-      const mergedMetadataMap = new Map<string, NoteMetadata>();
-      existingMetadata.forEach(m => mergedMetadataMap.set(m.id, m));
-      
-      notesWithSha.forEach(n => {
-        mergedMetadataMap.set(n.id, {
-          id: n.id,
-          title: n.title,
-          folder: n.folder,
-          noteType: n.noteType,
-          parentNoteIds: n.parentNoteIds || [],
-          childNoteIds: n.childNoteIds || [],
-          relatedNoteIds: n.relatedNoteIds || [],
-          lastUpdated: n.lastUpdated,
-          status: n.status,
-          priority: n.priority,
-          consistencyConflict: n.consistencyConflict,
-          sha: n.sha
-        });
-      });
-      
-      const mergedMetadata = Array.from(mergedMetadataMap.values());
-      
-      setDoc(metadataRef, { notes: mergedMetadata }).catch(e => console.error('Metadata update failed', e));
-
-      setState(prev => {
-        const updatedNotes = prev.notes.filter(n => mergedMetadataMap.has(n.id));
-        notesWithSha.forEach(n => {
-          const idx = updatedNotes.findIndex(un => un.id === n.id);
-          if (idx !== -1) updatedNotes[idx] = n;
-          else updatedNotes.push(n);
-        });
-        
-        return { ...prev, notes: updatedNotes, noteMetadata: mergedMetadata };
-      });
-
-    } catch (e) {
-      handleFirestoreError(e, OperationType.WRITE, 'sync-notes');
-      notesToSync.forEach(note => {
-        if (!dirtyNotesRef.current.has(note.id)) {
-          dirtyNotesRef.current.set(note.id, note);
-        }
-      });
-    }
-  };
-
-  const saveNotesToFirestore = async (notes: Note[], immediate = false) => {
+  const saveNotesToFirestore = async (notes: Note[]) => {
     if (!userId || !currentProjectId) return;
     
-    setState(prev => {
-      const updatedNotes = [...prev.notes];
-      notes.forEach(n => {
-        const idx = updatedNotes.findIndex(un => un.id === n.id);
-        if (idx !== -1) updatedNotes[idx] = n;
-        else updatedNotes.push(n);
-      });
-      
-      const updatedMetadata = [...prev.noteMetadata];
-      notes.forEach(n => {
-        const idx = updatedMetadata.findIndex(m => m.id === n.id);
-        const newMeta: NoteMetadata = {
-          id: n.id,
-          title: n.title,
-          folder: n.folder,
-          noteType: n.noteType,
-          parentNoteIds: n.parentNoteIds || [],
-          childNoteIds: n.childNoteIds || [],
-          relatedNoteIds: n.relatedNoteIds || [],
-          lastUpdated: n.lastUpdated,
-          status: n.status,
-          priority: n.priority,
-          consistencyConflict: n.consistencyConflict,
-          sha: prev.noteMetadata?.find(m => m.id === n.id)?.sha
-        };
-        if (idx !== -1) updatedMetadata[idx] = newMeta;
-        else updatedMetadata.push(newMeta);
-      });
-      
-      return { ...prev, notes: updatedNotes, noteMetadata: updatedMetadata };
-    });
-
-    notes.forEach(note => {
-      dirtyNotesRef.current.set(note.id, note);
-    });
-
-    if (syncTimeoutRef.current) {
-      clearTimeout(syncTimeoutRef.current);
+    const entries = { ...state.syncRegistry.entries };
+    for (const note of notes) {
+      const sha = await generateNoteFingerprint(note);
+      note.sha = sha;
+      entries[note.id] = {
+        id: note.id,
+        sha,
+        lastUpdated: note.lastUpdated,
+        title: note.title,
+        folder: note.folder,
+        status: note.status,
+        priority: note.priority,
+        noteType: note.noteType
+      };
     }
 
-    if (immediate) {
-      await performSync();
-    } else {
-      syncTimeoutRef.current = setTimeout(() => {
-        performSync();
-      }, 5000);
-    }
+    await saveNotesBatchWithRegistry(userId, currentProjectId, notes, entries, cleanObject);
+    
+    setState(prev => ({
+      ...prev,
+      notes: prev.notes.map(n => {
+        const savedNote = notes.find(sn => sn.id === n.id);
+        return savedNote ? { ...n, sha: savedNote.sha } : n;
+      }),
+      syncRegistry: {
+        ...prev.syncRegistry,
+        entries
+      }
+    }));
   };
 
   const deleteNotesFromFirestore = async (noteIds: string[]) => {
     if (!userId || !currentProjectId) return;
-    
-    // Optimistic Update: Update local state immediately
-    setState(prev => {
-      const updatedNotes = prev.notes.filter(n => !noteIds.includes(n.id));
-      const updatedMetadata = prev.noteMetadata.filter(m => !noteIds.includes(m.id));
-      return { ...prev, notes: updatedNotes, noteMetadata: updatedMetadata };
-    });
-
-    // Remove from dirty notes if pending
-    noteIds.forEach(id => dirtyNotesRef.current.delete(id));
-
-    // Update metadata/all in Firestore
-    const metadataRef = doc(db, 'users', userId, 'projects', currentProjectId, 'metadata', 'all');
-    try {
-      const metaSnap = await getDocWithCacheFallback(metadataRef);
-      if (metaSnap.exists()) {
-        const existingMetadata = (metaSnap.data() as { notes: NoteMetadata[] }).notes || [];
-        const updatedMetadata = existingMetadata.filter(m => !noteIds.includes(m.id));
-        await setDoc(metadataRef, { notes: updatedMetadata });
-      }
-    } catch (e) {
-      console.error('Metadata update failed during deletion', e);
-    }
-
-    const chunkSize = 500;
-    for (let i = 0; i < noteIds.length; i += chunkSize) {
-      const chunk = noteIds.slice(i, i + chunkSize);
-      const batch = writeBatch(db);
-      chunk.forEach(id => {
-        const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', id);
-        batch.delete(noteRef);
-      });
-      try {
-        await batch.commit();
-      } catch (e) {
-        handleFirestoreError(e, OperationType.DELETE, 'batch-notes');
-      }
-    }
+    const newRegistry = { ...state.syncRegistry };
+    await deleteNotesWithRegistry(userId, currentProjectId, noteIds, newRegistry);
   };
 
   const handleUpdateNote = async (updatedNote: Note) => {
-    const oldMeta = state.noteMetadata.find(n => n.id === updatedNote.id);
-    if (oldMeta) {
-      const newParents = (updatedNote.parentNoteIds || []).filter(id => !(oldMeta.parentNoteIds || []).includes(id));
+    const oldNote = state.notes.find(n => n.id === updatedNote.id);
+    if (oldNote) {
+      const newParents = (updatedNote.parentNoteIds || []).filter(id => !(oldNote.parentNoteIds || []).includes(id));
       for (const pId of newParents) {
-        if (wouldCreateCycle(updatedNote.id, pId, state.noteMetadata)) {
+        if (wouldCreateCycle(updatedNote.id, pId, state.notes)) {
           setDialogConfig({
             isOpen: true,
             title: '순환 참조 발견',
@@ -398,50 +271,30 @@ export const useNoteSync = (
       }
     }
 
-    const updatedMeta: NoteMetadata = {
-      id: updatedNote.id,
-      title: updatedNote.title,
-      folder: updatedNote.folder,
-      noteType: updatedNote.noteType,
-      parentNoteIds: updatedNote.parentNoteIds || [],
-      childNoteIds: updatedNote.childNoteIds || [],
-      relatedNoteIds: updatedNote.relatedNoteIds || [],
-      lastUpdated: updatedNote.lastUpdated,
-      status: updatedNote.status,
-      priority: updatedNote.priority,
-      consistencyConflict: updatedNote.consistencyConflict,
-      sha: updatedNote.sha
-    };
-
-    const affectedMetadata = syncNoteRelationships(updatedMeta, state.noteMetadata);
+    const affectedNotes = syncNoteRelationships(updatedNote, state.notes);
     
-    const fullNotesToSave: Note[] = [updatedNote]; // The updated note is always saved
-    
-    for (const meta of affectedMetadata) {
-      if (meta.id === updatedNote.id) continue; // Already added
-      
-      let fullNote = state.notes.find(n => n.id === meta.id);
-      if (!fullNote) {
-        const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', meta.id);
-        const docSnap = await getDocWithCacheFallback(noteRef);
-        if (docSnap.exists()) {
-          fullNote = docSnap.data() as Note;
-        }
-      }
-      if (fullNote) {
-        fullNotesToSave.push({
-          ...fullNote,
-          parentNoteIds: meta.parentNoteIds || [],
-          childNoteIds: meta.childNoteIds || [],
-          relatedNoteIds: meta.relatedNoteIds || []
-        });
-      }
+    // SHA 갱신 및 동기화 큐 등록
+    for (const note of affectedNotes) {
+      note.lastUpdated = new Date().toISOString();
+      note.sha = await generateNoteFingerprint(note);
+      queueSync(note);
     }
-
-    saveNotesToFirestore(fullNotesToSave);
+    
+    setState(prev => {
+      const newNotes = [...prev.notes];
+      affectedNotes.forEach(an => {
+        const idx = newNotes.findIndex(n => n.id === an.id);
+        if (idx !== -1) {
+          newNotes[idx] = an;
+        } else {
+          newNotes.push(an);
+        }
+      });
+      return { ...prev, notes: newNotes };
+    });
   };
 
-  const handleAddNote = () => {
+  const handleAddNote = async () => {
     const newNote: Note = {
       id: Math.random().toString(36).substr(2, 9),
       title: '새 노트',
@@ -459,24 +312,24 @@ export const useNoteSync = (
       parentNoteIds: [],
       noteType: 'Feature'
     };
-    handleUpdateNote(newNote);
+    await handleUpdateNote(newNote);
     setSelectedNoteId(newNote.id);
   };
 
   const handleAddChildNote = async (parentId: string) => {
-    const parentMeta = state.noteMetadata.find(n => n.id === parentId);
-    if (!parentMeta) return;
+    const parentNote = state.notes.find(n => n.id === parentId);
+    if (!parentNote) return;
 
     let childNoteType: NoteType = 'Task';
-    let updatedParentMeta: NoteMetadata | null = null;
+    let updatedParent: Note | null = null;
     
-    if (parentMeta.noteType === 'Task') {
+    if (parentNote.noteType === 'Task') {
       // 1. 부모가 Task인데 자식이 생기려 한다면, 부모를 Feature로 승격
-      updatedParentMeta = { ...parentMeta, noteType: 'Feature' };
+      updatedParent = { ...parentNote, noteType: 'Feature' };
       childNoteType = 'Task';
-    } else if (parentMeta.noteType === 'Epic') {
+    } else if (parentNote.noteType === 'Epic') {
       childNoteType = 'Feature';
-    } else if (parentMeta.noteType === 'Feature') {
+    } else if (parentNote.noteType === 'Feature') {
       childNoteType = 'Task';
     }
 
@@ -484,7 +337,7 @@ export const useNoteSync = (
     const newNote: Note = {
       id: newNoteId,
       title: '새 하위 노트',
-      folder: parentMeta.folder,
+      folder: parentNote.folder,
       content: '# 새 하위 노트\n여기에 세부 기능을 설명하세요.',
       summary: '세부 기능 설명',
       status: 'Planned',
@@ -499,40 +352,19 @@ export const useNoteSync = (
       noteType: childNoteType
     };
 
-    let fullNotesToSave: Note[] = [newNote];
-    
-    if (updatedParentMeta) {
+    let notesToUpdate = [newNote];
+    if (updatedParent) {
       // 승격된 부모의 계층 정상화 (Sibling Promotion)
-      const hierarchyFixes = normalizeHierarchy(updatedParentMeta, state.noteMetadata);
-      
-      const metaToSave = [updatedParentMeta, ...hierarchyFixes.filter(f => f.id !== updatedParentMeta!.id)];
-      
-      for (const meta of metaToSave) {
-        let fullNote = state.notes.find(n => n.id === meta.id);
-        if (!fullNote) {
-          const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', meta.id);
-          const docSnap = await getDocWithCacheFallback(noteRef);
-          if (docSnap.exists()) {
-            fullNote = docSnap.data() as Note;
-          }
-        }
-        if (fullNote) {
-          fullNotesToSave.push({
-            ...fullNote,
-            noteType: meta.noteType,
-            parentNoteIds: meta.parentNoteIds || [],
-            relatedNoteIds: meta.relatedNoteIds || []
-          });
-        }
-      }
+      const hierarchyFixes = normalizeHierarchy(updatedParent, state.notes);
+      notesToUpdate = [...notesToUpdate, updatedParent, ...hierarchyFixes.filter(f => f.id !== updatedParent!.id)];
     }
 
-    saveNotesToFirestore(fullNotesToSave);
+    await saveNotesToFirestore(notesToUpdate);
     setSelectedNoteId(newNote.id);
   };
 
   const handleDeleteNote = (noteId: string) => {
-    const targetNote = state.noteMetadata.find(n => n.id === noteId);
+    const targetNote = state.notes.find(n => n.id === noteId);
     if (!targetNote) return;
 
     setDialogConfig({
@@ -543,49 +375,37 @@ export const useNoteSync = (
       confirmText: '삭제',
       cancelText: '취소',
       onConfirm: () => {
-        const affectedMetadata = cleanupNoteRelationships(noteId, state.noteMetadata);
+        const affectedNotes = cleanupNoteRelationships(noteId, state.notes);
         
-        const orphans = affectedMetadata.filter(n => {
-          const oldMeta = state.noteMetadata.find(old => old.id === n.id);
-          return (oldMeta?.parentNoteIds || []).includes(noteId) && n.parentNoteIds.length === 0;
+        const orphans = affectedNotes.filter(n => {
+          const oldNote = state.notes.find(old => old.id === n.id);
+          return (oldNote?.parentNoteIds || []).includes(noteId) && n.parentNoteIds.length === 0;
         });
 
         const executeDelete = async (deleteOrphans: boolean = false) => {
-          const finalAffectedMetadata = [...affectedMetadata];
+          const finalAffectedNotes = [...affectedNotes];
           const notesToDelete = [noteId];
           
           if (deleteOrphans) {
             orphans.forEach(o => notesToDelete.push(o.id));
           }
 
-          const metadataToSave = finalAffectedMetadata.filter(n => !notesToDelete.includes(n.id));
-          
-          if (metadataToSave.length > 0) {
-            const fullNotesToSave: Note[] = [];
-            for (const meta of metadataToSave) {
-              let fullNote = state.notes.find(n => n.id === meta.id);
-              if (!fullNote) {
-                const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', meta.id);
-                const docSnap = await getDocWithCacheFallback(noteRef);
-                if (docSnap.exists()) {
-                  fullNote = docSnap.data() as Note;
-                }
-              }
-              if (fullNote) {
-                fullNotesToSave.push({
-                  ...fullNote,
-                  parentNoteIds: meta.parentNoteIds || [],
-                  childNoteIds: meta.childNoteIds || [],
-                  relatedNoteIds: meta.relatedNoteIds || []
-                });
-              }
-            }
-            if (fullNotesToSave.length > 0) {
-              saveNotesToFirestore(fullNotesToSave);
-            }
+          if (finalAffectedNotes.length > 0) {
+            saveNotesToFirestore(finalAffectedNotes.filter(n => !notesToDelete.includes(n.id)));
           }
           
           await deleteNotesFromFirestore(notesToDelete);
+
+          setState(prev => {
+            const notesMap = new Map(prev.notes.map(n => [n.id, n]));
+            finalAffectedNotes.forEach(an => notesMap.set(an.id, an));
+            const filteredNotes = Array.from(notesMap.values()).filter(n => !notesToDelete.includes(n.id));
+            
+            return {
+              ...prev,
+              notes: filteredNotes
+            };
+          });
 
           if (notesToDelete.includes(selectedNoteId || '')) {
             setSelectedNoteId(null);
@@ -613,7 +433,7 @@ export const useNoteSync = (
   };
 
   const handleDeleteFolder = (folderPath: string) => {
-    const notesToDelete = state.noteMetadata.filter(n => n.folder === folderPath || n.folder.startsWith(`${folderPath}/`));
+    const notesToDelete = state.notes.filter(n => n.folder === folderPath || n.folder.startsWith(`${folderPath}/`));
     if (notesToDelete.length === 0) return;
     
     setDialogConfig({
@@ -627,58 +447,42 @@ export const useNoteSync = (
         const ids = notesToDelete.map(n => n.id);
         const idsSet = new Set(ids);
         
-        const remainingMetadata = state.noteMetadata.filter(n => !idsSet.has(n.id));
-        const affectedMetadataMap = new Map<string, NoteMetadata>();
+        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
+        const affectedNotesMap = new Map<string, Note>();
         
-        remainingMetadata.forEach(meta => {
+        remainingNotes.forEach(note => {
           let changed = false;
-          let updatedMeta = { ...meta };
+          let updatedNote = { ...note };
           
-          if ((updatedMeta.parentNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.parentNoteIds = updatedMeta.parentNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
-          if ((updatedMeta.childNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.childNoteIds = updatedMeta.childNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
-          if ((updatedMeta.relatedNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.relatedNoteIds = updatedMeta.relatedNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
           
           if (changed) {
-            affectedMetadataMap.set(updatedMeta.id, updatedMeta);
+            affectedNotesMap.set(updatedNote.id, updatedNote);
           }
         });
         
-        const finalAffectedMetadata = Array.from(affectedMetadataMap.values());
-        if (finalAffectedMetadata.length > 0) {
-          const fullNotesToSave: Note[] = [];
-          for (const meta of finalAffectedMetadata) {
-            let fullNote = state.notes.find(n => n.id === meta.id);
-            if (!fullNote) {
-              const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', meta.id);
-              const docSnap = await getDocWithCacheFallback(noteRef);
-              if (docSnap.exists()) {
-                fullNote = docSnap.data() as Note;
-              }
-            }
-            if (fullNote) {
-              fullNotesToSave.push({
-                ...fullNote,
-                parentNoteIds: meta.parentNoteIds || [],
-                childNoteIds: meta.childNoteIds || [],
-                relatedNoteIds: meta.relatedNoteIds || []
-              });
-            }
-          }
-          if (fullNotesToSave.length > 0) {
-            saveNotesToFirestore(fullNotesToSave);
-          }
+        const finalAffectedNotes = Array.from(affectedNotesMap.values());
+        if (finalAffectedNotes.length > 0) {
+          saveNotesToFirestore(finalAffectedNotes);
         }
         
         await deleteNotesFromFirestore(ids);
+        
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
+        }));
         
         if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
         setDialogConfig(null);
@@ -697,58 +501,42 @@ export const useNoteSync = (
       cancelText: '취소',
       onConfirm: async () => {
         const idsSet = new Set(noteIds);
-        const remainingMetadata = state.noteMetadata.filter(n => !idsSet.has(n.id));
-        const affectedMetadataMap = new Map<string, NoteMetadata>();
+        const remainingNotes = state.notes.filter(n => !idsSet.has(n.id));
+        const affectedNotesMap = new Map<string, Note>();
         
-        remainingMetadata.forEach(meta => {
+        remainingNotes.forEach(note => {
           let changed = false;
-          let updatedMeta = { ...meta };
+          let updatedNote = { ...note };
           
-          if ((updatedMeta.parentNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.parentNoteIds = updatedMeta.parentNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.parentNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.parentNoteIds = updatedNote.parentNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
-          if ((updatedMeta.childNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.childNoteIds = updatedMeta.childNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.childNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.childNoteIds = updatedNote.childNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
-          if ((updatedMeta.relatedNoteIds || []).some(id => idsSet.has(id))) {
-            updatedMeta.relatedNoteIds = updatedMeta.relatedNoteIds.filter(id => !idsSet.has(id));
+          if ((updatedNote.relatedNoteIds || []).some(id => idsSet.has(id))) {
+            updatedNote.relatedNoteIds = updatedNote.relatedNoteIds.filter(id => !idsSet.has(id));
             changed = true;
           }
           
           if (changed) {
-            affectedMetadataMap.set(updatedMeta.id, updatedMeta);
+            affectedNotesMap.set(updatedNote.id, updatedNote);
           }
         });
         
-        const finalAffectedMetadata = Array.from(affectedMetadataMap.values());
-        if (finalAffectedMetadata.length > 0) {
-          const fullNotesToSave: Note[] = [];
-          for (const meta of finalAffectedMetadata) {
-            let fullNote = state.notes.find(n => n.id === meta.id);
-            if (!fullNote) {
-              const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', meta.id);
-              const docSnap = await getDocWithCacheFallback(noteRef);
-              if (docSnap.exists()) {
-                fullNote = docSnap.data() as Note;
-              }
-            }
-            if (fullNote) {
-              fullNotesToSave.push({
-                ...fullNote,
-                parentNoteIds: meta.parentNoteIds || [],
-                childNoteIds: meta.childNoteIds || [],
-                relatedNoteIds: meta.relatedNoteIds || []
-              });
-            }
-          }
-          if (fullNotesToSave.length > 0) {
-            saveNotesToFirestore(fullNotesToSave);
-          }
+        const finalAffectedNotes = Array.from(affectedNotesMap.values());
+        if (finalAffectedNotes.length > 0) {
+          saveNotesToFirestore(finalAffectedNotes);
         }
         
         await deleteNotesFromFirestore(noteIds);
+        
+        setState(prev => ({
+          ...prev,
+          notes: prev.notes.filter(n => !idsSet.has(n.id)).map(n => affectedNotesMap.has(n.id) ? affectedNotesMap.get(n.id)! : n)
+        }));
         
         if (selectedNoteId && idsSet.has(selectedNoteId)) setSelectedNoteId(null);
         setDialogConfig(null);
@@ -758,73 +546,42 @@ export const useNoteSync = (
   };
 
   const handleSanitizeIntegrity = async (silent = false) => {
-    if (state.noteMetadata.length === 0 || !userId || !currentProjectId) return;
-    
-    // 디바운스 처리: 너무 자주 실행되지 않도록 함
-    if (integrityCheckTimeout.current) {
-      clearTimeout(integrityCheckTimeout.current);
-    }
+    if (state.notes.length === 0 || !userId || !currentProjectId) return;
 
-    integrityCheckTimeout.current = setTimeout(async () => {
-      // Skip automatic integrity check if the last update was from remote to prevent loops
-      if (silent && isRemoteUpdate.current) {
-        console.log('[useNoteSync] Skipping silent integrity check due to remote update flag');
-        return;
+    const { fixedNotes, fixCount, logs } = sanitizeNoteIntegrity(state.notes);
+
+    if (fixCount > 0) {
+      if (!silent) {
+        setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
       }
-
-      const { fixedNotes: fixedMetadata, fixCount, logs } = sanitizeNoteIntegrity(state.noteMetadata);
-
-      if (fixCount > 0) {
-        if (!silent) {
-          setProcessStatus({ message: `데이터 무결성 복구 중 (${fixCount}건)...` });
-        }
+      
+      try {
+        const batch = writeBatch(db);
+        fixedNotes.forEach(note => {
+          const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', note.id);
+          batch.set(noteRef, cleanObject(note));
+        });
+        await batch.commit();
         
-        try {
-          // Fetch full notes for the fixed metadata
-          const fullNotesToSave: Note[] = [];
-          for (const meta of fixedMetadata) {
-            let fullNote = state.notes.find(n => n.id === meta.id);
-            if (!fullNote) {
-              const noteRef = doc(db, 'users', userId, 'projects', currentProjectId, 'notes', meta.id);
-              const docSnap = await getDocWithCacheFallback(noteRef);
-              if (docSnap.exists()) {
-                fullNote = docSnap.data() as Note;
-              }
-            }
-            if (fullNote) {
-              fullNotesToSave.push({
-                ...fullNote,
-                parentNoteIds: meta.parentNoteIds || [],
-                childNoteIds: meta.childNoteIds || [],
-                relatedNoteIds: meta.relatedNoteIds || []
-              });
-            }
-          }
+        logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
 
-          if (fullNotesToSave.length > 0) {
-            saveNotesToFirestore(fullNotesToSave);
-          }
-          
-          logs.forEach(log => console.log(`[IntegrityFix] ${log}`));
-
-          if (!silent) {
-            showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
-          }
-        } catch (e) {
-          if (!silent) {
-            handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
-          }
-        } finally {
-          if (!silent) {
-            setProcessStatus(null);
-          }
-        }
-      } else {
         if (!silent) {
-          showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
+          showAlert('성공', `데이터 무결성 복구가 완료되었습니다. (${fixCount}건 수정)`, 'success');
+        }
+      } catch (e) {
+        if (!silent) {
+          handleFirestoreError(e, OperationType.WRITE, 'integrity-check');
+        }
+      } finally {
+        if (!silent) {
+          setProcessStatus(null);
         }
       }
-    }, silent ? 5000 : 0); // 자동(silent) 체크는 5초 디바운스
+    } else {
+      if (!silent) {
+        showAlert('알림', '데이터 무결성에 이상이 없습니다.', 'info');
+      }
+    }
   };
 
   const handleTargetedUpdate = async (noteId: string, command: string) => {
@@ -840,41 +597,37 @@ export const useNoteSync = (
         targetNote,
         command,
         state.gcm,
-        state.noteMetadata,
+        state.notes,
         signal
       );
 
       if (signal.aborted) return;
 
-      const fullNotesToSave: Note[] = [updatedNote];
-      
-      for (const id of affectedNoteIds) {
-        if (id === updatedNote.id) continue;
-        let fullNote = state.notes.find(n => n.id === id);
-        if (!fullNote) {
-          const noteRef = doc(db, 'users', userId!, 'projects', currentProjectId!, 'notes', id);
-          const docSnap = await getDocWithCacheFallback(noteRef);
-          if (docSnap.exists()) {
-            fullNote = docSnap.data() as Note;
-          }
+      await saveNotesToFirestore([updatedNote, ...state.notes.filter(n => affectedNoteIds.includes(n.id)).map(n => ({
+        ...n,
+        consistencyConflict: {
+          description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
+          suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
         }
-        if (fullNote) {
-          fullNotesToSave.push({
-            ...fullNote,
-            consistencyConflict: {
-              description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
-              suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
-            }
-          });
-        }
-      }
-
-      saveNotesToFirestore(fullNotesToSave);
+      }))]);
       syncProject({ gcm: updatedGcm });
 
       setState(prev => ({
         ...prev,
-        gcm: updatedGcm
+        gcm: updatedGcm,
+        notes: prev.notes.map(n => {
+          if (n.id === noteId) return updatedNote;
+          if (affectedNoteIds.includes(n.id)) {
+            return {
+              ...n,
+              consistencyConflict: {
+                description: `이 노트는 "${updatedNote.title}"의 최근 변경 사항에 영향을 받을 수 있습니다.`,
+                suggestion: "업데이트된 GCM 및 로직과 일치하는지 이 노트를 검토하십시오."
+              }
+            };
+          }
+          return n;
+        })
       }));
     } catch (error) {
       if ((error as any)?.message === "Operation cancelled" || error === "Operation cancelled") {
@@ -926,6 +679,10 @@ export const useNoteSync = (
 
     if (newNotes.length > 0) {
       saveNotesToFirestore(newNotes);
+      setState(prev => ({
+        ...prev,
+        notes: [...prev.notes, ...newNotes]
+      }));
       setSelectedNoteId(newNotes[0].id);
       showAlert('가져오기 성공', `${newNotes.length}개의 노트를 성공적으로 불러왔습니다.`, 'success');
     }
@@ -946,8 +703,6 @@ export const useNoteSync = (
     handleTargetedUpdate,
     handleAddNote,
     handleAddChildNote,
-    handleTextFileUpload,
-    handleRefreshNotes: fetchNotes,
-    isRemoteUpdate
+    handleTextFileUpload
   };
 };

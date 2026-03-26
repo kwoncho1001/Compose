@@ -40,6 +40,12 @@ service cloud.firestore {
     //   - createdAt: string (required)
     //   - expiresAt: timestamp (required)
     //
+    // Collection: /users/{userId}/projects/{projectId}/sync
+    // Document ID: sync_index
+    // Fields:
+    //   - entries: map (required)
+    //   - lastUpdated: string (required)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -113,6 +119,10 @@ service cloud.firestore {
         }
 
         match /syncLogs/{logId} {
+          allow read, write: if isOwner(userId) || isAdmin();
+        }
+
+        match /sync/{syncId} {
           allow read, write: if isOwner(userId) || isAdmin();
         }
 

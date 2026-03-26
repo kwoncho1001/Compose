@@ -58,6 +58,19 @@
         "expiresAt": { "type": "object", "description": "Firestore Timestamp for TTL" }
       },
       "required": ["id", "role", "content", "createdAt", "expiresAt"]
+    },
+    "SyncRegistry": {
+      "title": "Sync Registry",
+      "description": "A mapping of note IDs to their metadata for efficient synchronization and lazy loading",
+      "type": "object",
+      "properties": {
+        "notesMetadata": {
+          "type": "object",
+          "description": "A map of noteId to { sha, title, folder, lastUpdated, noteType, status }"
+        },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["notesMetadata", "lastUpdated"]
     }
   },
   "firestore": {
@@ -68,6 +81,10 @@
     "/users/{userId}/projects/{projectId}/notes/{noteId}": {
       "schema": "Note",
       "description": "Notes within a project"
+    },
+    "/users/{userId}/projects/{projectId}/sync/registry": {
+      "schema": "SyncRegistry",
+      "description": "The sync registry for a project"
     },
     "/users/{userId}/projects/{projectId}/syncLogs/{logId}": {
       "schema": "object",

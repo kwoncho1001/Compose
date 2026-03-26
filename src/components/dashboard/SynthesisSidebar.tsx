@@ -69,13 +69,7 @@ export const SynthesisSidebar: React.FC<SynthesisSidebarProps> = ({ onStart, isS
         </div>
       </div>
 
-      {/* 실시간 진행 상태 브리핑 영역 (예시) */}
-      <div className="pt-4 border-t border-neutral-100 dark:border-neutral-800">
-        <div className="flex items-center gap-2 text-[10px] text-neutral-400 dark:text-neutral-500">
-          <Link className="w-3 h-3" />
-          <span>참조 DNA: lucide-react, framer-motion, tailwindcss...</span>
-        </div>
-      </div>
+
     </div>
   );
 };

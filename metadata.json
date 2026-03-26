@@ -1,5 +1,5 @@
 {
-  "name": "Compose",
-  "description": "",
+  "name": "SHA-Sync Notes",
+  "description": "A note-taking app implementing a SHA-based synchronization algorithm with Firestore optimization.",
   "requestFramePermissions": []
 }

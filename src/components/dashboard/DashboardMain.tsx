@@ -13,7 +13,7 @@ interface DashboardMainProps {
   darkMode: boolean;
   selectedNote: Note | undefined;
   gcm: GCM;
-  handleUpdateNote: (note: Note) => void;
+  handleUpdateNote: (note: Note) => Promise<void>;
   handleTargetedUpdate: (noteId: string, instruction: string) => Promise<void>;
   handleGenerateSubModules: (note: Note) => Promise<void>;
   handleDeleteNote: (id: string) => void;

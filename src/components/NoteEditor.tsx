@@ -15,7 +15,7 @@ interface NoteEditorProps {
   note: Note | null;
   allNotes: Note[];
   gcm: GCM;
-  onUpdateNote: (note: Note) => void;
+  onUpdateNote: (note: Note) => Promise<void>;
   onTargetedUpdate: (noteId: string, command: string) => Promise<void>;
   onGenerateSubModules: (mainNote: Note) => Promise<void>;
   onDeleteNote: (noteId: string) => void;

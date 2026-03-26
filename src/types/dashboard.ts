@@ -42,21 +42,20 @@ export interface DashboardActions {
   handleDeleteProject: (id: string) => void;
   
   // Note Actions
-  handleUpdateNote: (note: Note) => void;
+  handleUpdateNote: (note: Note) => Promise<void>;
   handleDeleteNote: (id: string) => void;
   handleDeleteFolder: (folder: string) => void;
   handleDeleteMultiple: (ids: string[]) => void;
   handleSanitizeIntegrity: (silent?: boolean) => void;
-  handleRefreshNotes: () => Promise<void>;
   handleTargetedUpdate: (noteId: string, instruction: string) => Promise<void>;
-  handleAddNote: (type?: NoteType, folder?: string) => void;
-  handleAddChildNote: (parentId: string, type?: NoteType) => void;
+  handleAddNote: (type?: NoteType, folder?: string) => Promise<void>;
+  handleAddChildNote: (parentId: string, type?: NoteType) => Promise<void>;
   handleTextFileUpload: (e: React.ChangeEvent<HTMLInputElement>, ref: React.RefObject<HTMLInputElement>) => void;
   
   // AI Actions
   handleOptimizeBlueprint: () => Promise<void>;
   handleCheckConsistency: () => Promise<void>;
-  handleEnforceHierarchy: (notesList?: Note[], silentSuccess?: boolean, skipSave?: boolean) => Promise<Note[]>;
+  handleEnforceHierarchy: () => Promise<void>;
   handleGenerateSubModules: (note: Note) => Promise<void>;
   handleAnalyzeNextSteps: () => Promise<void>;
   

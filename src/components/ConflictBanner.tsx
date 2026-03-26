@@ -9,7 +9,7 @@ import { Button } from './common/Button';
 
 interface ConflictBannerProps {
   note: Note;
-  onUpdateNote: (note: Note) => void;
+  onUpdateNote: (note: Note) => Promise<void>;
   isAnalyzing: boolean;
   impactResult: string | null;
   setImpactResult: (val: string | null) => void;

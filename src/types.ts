@@ -1,7 +1,6 @@
 export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Deprecated' | 'Review-Required' | 'Temporary Merge';
 export type NoteType = 'Epic' | 'Feature' | 'Task' | 'Reference';
 export type NotePriority = 'S' | 'A' | 'B' | 'C' | 'Done'; // S(최고), A, B, C, Done
-export type SyncSource = 'USER' | 'AI' | 'SYSTEM' | 'REMOTE';
 
 export interface Note {
   // --- 구획 1: 요약 ---
@@ -64,27 +63,25 @@ export interface GCM {
   variables: Record<string, string>;
 }
 
-export interface NoteMetadata {
+export interface SyncEntry {
   id: string;
+  sha: string;
+  lastUpdated: string;
   title: string;
   folder: string;
-  noteType: NoteType;
-  parentNoteIds: string[];
-  childNoteIds: string[];
-  relatedNoteIds: string[];
-  lastUpdated: string;
   status: NoteStatus;
   priority: NotePriority;
-  consistencyConflict?: {
-    description: string;
-    suggestion: string;
-  };
-  sha?: string;
+  noteType: NoteType;
+}
+
+export interface SyncRegistry {
+  entries: Record<string, SyncEntry>;
+  lastSyncedAt: string;
 }
 
 export interface AppState {
   notes: Note[];
-  noteMetadata: NoteMetadata[];
+  syncRegistry: SyncRegistry;
   gcm: GCM;
   githubRepo: string;
   githubToken: string;

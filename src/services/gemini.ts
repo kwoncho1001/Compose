@@ -15,5 +15,4 @@ export * from './gemini/assistantService';
 export * from './gemini/searchService';
 export * from './gemini/analyzeService';
 export * from './gemini/transpileService';
-export * from './gemini/referenceService';
-export * from './gemini/mappingService';
+export * from './gemini/syncAnalysisService';

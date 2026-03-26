@@ -9,3 +9,14 @@ export const generateDeterministicId = (filePath: string, logicHash: string): st
   const hashPart = logicHash.replace('LOGIC_', '');
   return `ref_${pathPart}_${hashPart}`;
 };
+
+/**
+ * 프로젝트 ID와 Task 제목을 조합해 항상 일정한 Task ID를 생성합니다.
+ * 동일한 프로젝트 내에서 동일한 제목의 Task는 항상 같은 ID를 갖게 됩니다.
+ */
+export const generateTaskDeterministicId = (projectId: string, taskTitle: string): string => {
+  // 비ASCII 문자를 처리하기 위해 encodeURIComponent 사용
+  const projectPart = btoa(encodeURIComponent(projectId)).substring(0, 8);
+  const titlePart = btoa(encodeURIComponent(taskTitle)).substring(0, 16);
+  return `task_${projectPart}_${titlePart}`;
+};

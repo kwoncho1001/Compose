@@ -2,9 +2,9 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { Note, SyncRegistry, SyncEntry, NoteType } from '../types';
 import { fetchGithubFileContent } from './github';
-import { updateCodeSnapshot, analyzeLogicUnitDeeply, designTaskFromReferences, produceReferenceNote, mapUnitToTask } from './gemini';
+import { updateCodeSnapshot, analyzeLogicUnitDeeply, designTaskFromReferences, analyzeAndMapUnit } from './gemini';
 import { extractLogicUnits } from '../utils/codeParser';
-import { generateDeterministicId } from '../utils/idGenerator';
+import { generateDeterministicId, generateTaskDeterministicId } from '../utils/idGenerator';
 
 const SYNC_REGISTRY_ID = 'sync_index';
 
@@ -178,6 +178,49 @@ export const deleteNotesWithRegistry = async (
   }
 };
 
+// --- Phase 0: Pre-fetch Filtering ---
+export const filterFilesPhase = (
+  githubFiles: { path: string; sha: string }[],
+  syncLog: Record<string, string>,
+  currentNotes: Note[],
+  forceUpdate: boolean
+): { filesToProcess: { path: string; sha: string }[]; skippedItems: AnalysisItem[] } => {
+  console.log("Phase 0 시작: SHA 기반 사전 필터링");
+  const filesToProcess: { path: string; sha: string }[] = [];
+  const skippedItems: AnalysisItem[] = [];
+
+  for (const file of githubFiles) {
+    const lastSyncedSha = syncLog[file.path];
+    
+    if (!forceUpdate && lastSyncedSha === file.sha) {
+      // SHA가 동일하면 Fetch 건너뜀. 기존 노드들을 추적 목록에 추가.
+      const existingRefs = currentNotes.filter(n => 
+        n.noteType === 'Reference' && 
+        n.filePath === file.path
+      );
+      
+      for (const ref of existingRefs) {
+        skippedItems.push({
+          unit: { 
+            title: ref.title, 
+            logicHash: ref.logicHash,
+            codeSnippet: "" // Fetch를 안했으므로 스니펫은 없지만, 추적용으로는 충분
+          },
+          taskId: ref.parentNoteIds?.[0] || 'unmapped_task',
+          file,
+          globallyExistingRef: ref,
+          existingRef: ref
+        });
+      }
+    } else {
+      filesToProcess.push(file);
+    }
+  }
+  
+  console.log(`Phase 0 완료. 처리 대상: ${filesToProcess.length}개, 건너뜀: ${githubFiles.length - filesToProcess.length}개`);
+  return { filesToProcess, skippedItems };
+};
+
 // --- Phase 1: Local Extraction ---
 export const extractPhase = async (
   githubRepo: string,
@@ -266,14 +309,15 @@ export const analyzeReferencesPhase = async (
     const chunk = unitsToAnalyze.slice(j, j + chunkSize);
     
     const results = await Promise.allSettled(chunk.map(async (item) => {
-      // 1. Mapping (AI)
-      const mapping = await mapUnitToTask({
+      // 1. Integrated Mapping & Analysis (AI)
+      const result = await analyzeAndMapUnit({
         title: item.unit.title,
         codeSnippet: item.unit.codeSnippet
       }, existingTasks, signal);
 
-      let taskId = mapping.matchedTaskId;
-      let suggestedTask = mapping.suggestedTask;
+      let taskId = result.matchedTaskId;
+      let suggestedTask = result.suggestedTask;
+      const analysis = result.analysis;
 
       if (!taskId && suggestedTask) {
         const existingTask = workingNotes.find(n => n.title === suggestedTask!.title);
@@ -282,26 +326,13 @@ export const analyzeReferencesPhase = async (
         } else if (suggestedTaskMap.has(suggestedTask.title)) {
           taskId = suggestedTaskMap.get(suggestedTask.title);
         } else {
-          const newTaskId = Math.random().toString(36).substr(2, 9);
+          const newTaskId = generateTaskDeterministicId(projectId, suggestedTask.title);
           suggestedTaskMap.set(suggestedTask.title, newTaskId);
           taskId = newTaskId;
         }
       }
 
       if (!taskId) taskId = 'unmapped_task';
-
-      const taskNote = workingNotes.find(n => n.id === taskId) || 
-                       (suggestedTask ? { title: suggestedTask.title, content: suggestedTask.content, summary: suggestedTask.summary } : { title: "Unmapped Task", content: "", summary: "" });
-
-      // 2. Deep Analysis (AI)
-      const analysis = await produceReferenceNote({
-        title: item.unit.title,
-        codeSnippet: item.unit.codeSnippet
-      }, {
-        title: taskNote.title,
-        content: taskNote.content || "",
-        summary: taskNote.summary || ""
-      }, signal);
 
       return { ...item, analysis, taskId, suggestedTask };
     }));
@@ -527,6 +558,7 @@ export const designTasksPhase = async (
 export const cleanupPhase = async (
   currentNotes: Note[],
   allProcessedUnits: AnalysisItem[],
+  githubFiles: { path: string; sha: string }[],
   saveNotesToFirestore: (notes: Note[]) => Promise<void>
 ): Promise<Note[]> => {
   console.log("Phase 5 시작: 폐기된 노드 처리 및 마무리");
@@ -535,7 +567,7 @@ export const cleanupPhase = async (
   const touchedNotes: Note[] = [];
   const processedNoteIdsByFile = new Map<string, string[]>();
 
-  // Track processed IDs per file
+  // 1. 이번 동기화에서 확인된(분석됨 + 건너뜀) ID들을 파일별로 분류
   for (const item of allProcessedUnits) {
     const producedNote = workingNotes.find(n => n.logicHash === item.unit.logicHash);
     if (producedNote && producedNote.filePath) {
@@ -547,7 +579,7 @@ export const cleanupPhase = async (
     }
   }
 
-  // Handle Discarded Notes (Per File)
+  // 2. 파일 내에서 사라진 로직 단위 처리 (파일은 존재하나 일부 로직이 삭제된 경우)
   for (const [filePath, processedIds] of processedNoteIdsByFile.entries()) {
     const oldNoteIds = workingNotes
       .filter(n => n.noteType === 'Reference' && n.githubLink && n.githubLink.startsWith(filePath))
@@ -567,6 +599,25 @@ export const cleanupPhase = async (
         };
         workingNotes[noteIndex] = discardedNote;
         touchedNotes.push(discardedNote);
+      }
+    }
+  }
+
+  // 3. 완전히 삭제된 파일 처리 (GitHub 트리에는 없으나 노트에는 존재하는 파일)
+  const currentFilePaths = new Set(githubFiles.map(f => f.path));
+  for (let i = 0; i < workingNotes.length; i++) {
+    const note = workingNotes[i];
+    if (note.noteType === 'Reference' && note.filePath && !currentFilePaths.has(note.filePath)) {
+      if (note.status !== 'Deprecated') {
+        const deletedNote = {
+          ...note,
+          status: 'Deprecated' as const,
+          folder: '시스템/폐기된 소스',
+          parentNoteIds: [],
+          tags: Array.from(new Set([...(note.tags || []), 'file_deleted']))
+        };
+        workingNotes[i] = deletedNote;
+        touchedNotes.push(deletedNote);
       }
     }
   }

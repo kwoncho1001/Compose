@@ -4,6 +4,7 @@ import { Note, AppState, NoteType } from '../types';
 import { subscribeSyncLog, saveSyncLog, clearSyncLog } from '../services/syncLog';
 import { fetchGithubFiles, fetchLatestCommitSha, fetchGithubFileContent } from '../services/github';
 import { 
+  filterFilesPhase,
   extractPhase, 
   prepareAnalysisPhase, 
   analyzeReferencesPhase, 
@@ -15,6 +16,7 @@ import {
 import { syncNoteRelationships } from '../utils/noteMirroring';
 import { sanitizeNoteIntegrity } from '../utils/integrityChecker';
 import { normalizeHierarchy } from '../utils/hierarchyValidator';
+import { generateTaskDeterministicId } from '../utils/idGenerator';
 
 export const useGithubIntegration = (
   userId: string | undefined,
@@ -80,7 +82,7 @@ export const useGithubIntegration = (
           const emptyLogContent = `**최종 동기화 시각:** 초기화됨\n\n| 파일 경로 | SHA 값 |\n| :--- | :--- |\n| (데이터 없음) | (데이터 없음) |`;
           
           const newLogNote: Note = {
-            id: Math.random().toString(36).substr(2, 9),
+            id: generateTaskDeterministicId(currentProjectId, logTitle),
             title: logTitle,
             content: emptyLogContent,
             folder: logFolder,
@@ -228,11 +230,15 @@ export const useGithubIntegration = (
         setState(prev => ({ ...prev, fileSyncLogs: currentLogs }));
       }
 
-      const filesActuallyToProcess = filesToProcess.filter(f => 
-        currentLogs[f.path] !== f.sha
+      // Phase 0: Pre-fetch Filtering (SHA 기반 사전 필터링)
+      const { filesToProcess: filesActuallyToProcess, skippedItems } = filterFilesPhase(
+        filesToProcess,
+        currentLogs,
+        currentNotes,
+        forceUpdate
       );
 
-      if (filesActuallyToProcess.length === 0) {
+      if (filesActuallyToProcess.length === 0 && skippedItems.length === 0) {
         showAlert('알림', '모든 파일이 이미 최신 상태입니다.', 'info');
         
         if (state.lastSyncedSha !== latestSha || logsChanged) {
@@ -254,7 +260,7 @@ export const useGithubIntegration = (
             await saveNotesToFirestore([logNote]);
           } else {
             const newLogNote: Note = {
-              id: Math.random().toString(36).substr(2, 9),
+              id: generateTaskDeterministicId(currentProjectId, logTitle),
               title: logTitle,
               folder: logFolder,
               content: logContent,
@@ -289,9 +295,9 @@ export const useGithubIntegration = (
       }
 
       // Process files one by one for robustness
-      let workingNotes = [...state.notes];
-      const allProcessedUnits: any[] = [];
-      const allProducedRefs: Note[] = [];
+      let workingNotes = [...currentNotes];
+      const allProcessedUnits: AnalysisItem[] = [...skippedItems];
+      const allProducedRefs: Note[] = skippedItems.map(si => si.existingRef!).filter(Boolean);
 
       for (let i = 0; i < filesActuallyToProcess.length; i++) {
         if (signal.aborted) break;
@@ -385,6 +391,7 @@ export const useGithubIntegration = (
       const finalNotes = await cleanupPhase(
         workingNotes,
         allProcessedUnits,
+        githubFiles,
         saveNotesToFirestore
       );
       workingNotes = finalNotes;

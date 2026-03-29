@@ -38,12 +38,13 @@ ${codeSnippet}
    - **Output**: 반환 값, 상태 업데이트, 부수 효과(Side Effects), UI 렌더링 결과
    - 구체적인 설계적 근거와 예외 처리 전략 등을 풍성하게 서술하십시오.
    - 'Technical Specification' 섹션에 모든 분석 역량을 집중하십시오.
-2. **구조**: 시스템 지침의 4개 섹션 구조(Context, Specification, Constraints, Impact)를 따르되, Specification 섹션을 가장 상세히 작성하십시오.
-3. 모든 텍스트는 한국어로 작성하십시오.
+2. **분량 및 깊이**: 분석 내용은 최소 500자 이상의 풍부한 내용을 담아야 합니다. 단순히 코드를 설명하는 것이 아니라, 설계 의도와 구현 세부 사항을 깊이 있게 다루십시오.
+3. **구조**: 시스템 지침의 4개 섹션 구조(Context, Specification, Constraints, Impact)를 따르되, Specification 섹션을 가장 상세히 작성하십시오.
+4. 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
 {
-  "content": "심층 분석된 상세 내용 (Markdown)",
+  "content": "심층 분석된 상세 내용 (Markdown, 최소 500자 이상)",
   "summary": "구현 핵심 요약 (한국어)",
   "importance": 1~5,
   "tags": ["tag1", "tag2"]
@@ -307,34 +308,39 @@ export const designTaskFromReferences = async (
   const referenceDetails = references.map(r => `[부품: ${r.title}]\n요약: ${r.summary}\n핵심내용: ${r.content.slice(0, 300)}...`).join('\n\n');
   
   const prompt = `
-당신은 '시스템 아키텍처 및 상세 설계 전문가'입니다. 
-제공된 '구현 부품(Reference)'들을 분석하여, 이들을 포괄하는 상위 설계 노드(Task/Feature)의 **핵심 설계서**를 작성하십시오.
+ 당신은 '시스템 아키텍처 및 상세 설계 전문가'입니다. 
+ 제공된 '구현 부품(Reference)'들을 분석하여, 이들을 포괄하는 상위 설계 노드(Task/Feature)의 **핵심 설계서**를 작성하십시오.
 
-[대상 노드]
-제목: ${taskTitle}
-기존 내용: ${existingTask?.content || '없음'}
+ [대상 노드]
+ 제목: ${taskTitle}
+ 기존 내용: ${existingTask?.content || '없음'}
 
-[포함된 부품 명세]
-${referenceDetails}
+ [포함된 부품 명세]
+ ${referenceDetails}
 
-[작업 지침]
-1. **역공학 설계 및 관계 추출**: 부품들의 기능을 종합하여, 이 노드가 담당하는 '추상적 역할'과 '구체적 명세'를 도출하십시오.
-2. **관계 기반 자동 생성 (핵심)**: 
-   - 분석 중 "이 부분은 추가 구현이 필요함", "다른 모듈과의 연동이 필요함", "TODO", "FIXME" 등의 단서를 발견하면, 이를 'Specification' 섹션에 명시하십시오.
-   - 해당 단서들을 바탕으로 새로운 Task 또는 Feature가 필요하다고 판단되면, 관련 태그(예: #needs-implementation, #related-to-X)를 추가하고 내용에 구체적인 제안을 포함하십시오.
-3. **구조**: Context(배경), Specification(핵심 로직/데이터 흐름), Constraints(제약/예외), Impact(영향도) 순으로 작성하십시오.
-4. **핵심 요약**: 불필요한 수사여구를 배제하고, 기술적 사실과 설계 의도에 집중하여 명확하게 작성하십시오.
-5. 모든 텍스트는 한국어로 작성하십시오.
+ [작업 지침]
+ 1. **역공학 설계 및 관계 추출**: 부품들의 기능을 종합하여, 이 노드가 담당하는 '추상적 역할'과 '구체적 명세'를 도출하십시오.
+ 2. **상세 분석 지침 (IPO Deep-Dive)**: 
+    - 단순히 부품들을 나열하지 말고, 이들이 결합되어 시스템 전체에서 어떤 가치를 만들어내는지 심층 분석하십시오.
+    - **Input/Output**: 이 Task/Feature가 외부와 주고받는 데이터의 흐름을 명확히 정의하십시오.
+    - **Process**: 여러 부품들이 협력하여 비즈니스 로직을 완수하는 전체적인 시퀀스와 알고리즘을 상세히 설명하십시오.
+ 3. **관계 기반 자동 생성 (핵심)**: 
+    - 분석 중 "이 부분은 추가 구현이 필요함", "다른 모듈과의 연동이 필요함", "TODO", "FIXME" 등의 단서를 발견하면, 이를 'Specification' 섹션에 명시하십시오.
+    - 해당 단서들을 바탕으로 새로운 Task 또는 Feature가 필요하다고 판단되면, 관련 태그(예: #needs-implementation, #related-to-X)를 추가하고 내용에 구체적인 제안을 포함하십시오.
+ 4. **분량 및 깊이**: 각 설계 내용은 최소 800자 이상의 풍부한 내용을 담아야 합니다. 상위 설계 노드로서 하위 부품들을 충분히 설명하고 가이드할 수 있어야 합니다.
+ 5. **구조**: Context(배경), Specification(핵심 로직/데이터 흐름), Constraints(제약/예외), Impact(영향도) 순으로 작성하십시오.
+ 6. **가독성**: Markdown 문법을 적극 활용하여 구조화하십시오. (표, 리스트, 코드 블록 등)
+ 7. 모든 텍스트는 한국어로 작성하십시오.
 
-Return JSON:
-{
-  "content": "종합 설계 명세 (Markdown)",
-  "summary": "핵심 역할 요약 (1-2문장)",
-  "folder": "도메인/경로",
-  "importance": 1~5,
-  "tags": ["auto-generated", "design-leading-code", ...]
-}
-`;
+ Return JSON:
+ {
+   "content": "종합 설계 명세 (Markdown, 최소 800자 이상)",
+   "summary": "핵심 역할 요약 (1-2문장)",
+   "folder": "도메인/경로",
+   "importance": 1~5,
+   "tags": ["auto-generated", "design-leading-code", ...]
+ }
+ `;
 
   const response = await generateContentWithRetry({
     model: MODEL_NAME,

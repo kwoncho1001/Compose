@@ -32,6 +32,7 @@ export const parseAIContent = (rawContent: string): string => {
     let cleaned = rawContent
       .replace(/```json\s?|```markdown\s?|```/g, '') // JSON/Markdown 블록 제거
       .replace(/^"|"$/g, '') // 시작/끝 따옴표 제거
+      .replace(/\\n/g, '\n') // 리터럴 \n을 실제 줄바꿈으로 변환
       .trim();
     
     // 3. 만약 정제 후에도 비어있다면 원본 반환 (최소한의 안전장치)
@@ -357,7 +358,7 @@ export const analyzeReferencesPhase = async (
   let workingNotes = [...currentNotes];
   const producedReferences: Note[] = [];
   const analyzedItems: AnalysisItem[] = [];
-  const chunkSize = 5;
+  const chunkSize = 1; // User requested 1 AI call per Reference Note for maximum precision
 
   const existingTasks = workingNotes
     .filter(n => n.noteType === 'Task' || n.noteType === 'Feature')
@@ -373,7 +374,8 @@ export const analyzeReferencesPhase = async (
     const batchResult = await analyzeAndMapBatch(
       chunk.map(item => ({
         title: item.unit.title,
-        codeSnippet: item.unit.codeSnippet
+        codeSnippet: item.unit.codeSnippet,
+        fileContext: item.content // Pass full file content as context for better accuracy
       })), 
       existingTasks, 
       signal

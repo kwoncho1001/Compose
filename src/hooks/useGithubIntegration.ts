@@ -200,13 +200,20 @@ export const useGithubIntegration = (
         }
       }
 
-      const sourceExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp'];
+      const sourceExtensions = [
+        '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.c', '.cpp', 
+        '.html', '.css', '.scss', '.less', '.json', '.yaml', '.yml', '.md', 
+        '.sql', '.sh', '.rb', '.php', '.swift', '.kt', '.rs', '.dart'
+      ];
       filesToProcess = files.filter(file => 
-        sourceExtensions.some(ext => file.path.endsWith(ext)) &&
+        sourceExtensions.some(ext => file.path.toLowerCase().endsWith(ext)) &&
         !file.path.includes('node_modules') &&
         !file.path.includes('.git') &&
         !file.path.includes('dist') &&
-        !file.path.includes('build')
+        !file.path.includes('build') &&
+        !file.path.includes('.next') &&
+        !file.path.includes('package-lock.json') &&
+        !file.path.includes('yarn.lock')
       );
 
       if (filesToProcess.length === 0) {

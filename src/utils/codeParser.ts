@@ -24,8 +24,11 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
 
     // 1. Top-level declarations
     if (isTopLevel) {
-      const declPattern = /^(export\s+)?(class|function|const|let|var|interface|type|enum)\s+([a-zA-Z0-9_]+)/;
+      const declPattern = /^(export\s+(default\s+)?)?(class|function|const|let|var|interface|type|enum)\s+([a-zA-Z0-9_]+)/;
       if (declPattern.test(trimmed)) return true;
+
+      const arrowExportPattern = /^export\s+default\s+(async\s+)?(\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/;
+      if (arrowExportPattern.test(trimmed)) return true;
     }
     
     // 2. Inner logic (Hooks, handlers, any functions)
@@ -111,6 +114,16 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
 
   while (stack.length > 0) {
     pushUnit(stack.pop()!);
+  }
+
+  // Fallback: If no units were extracted, treat the entire file as a single unit
+  if (units.length === 0 && code.trim().length > 0) {
+    const fileName = filePath.split('/').pop() || filePath;
+    units.push({
+      title: `[File] ${fileName}`,
+      codeSnippet: code,
+      logicHash: generateHash(code)
+    });
   }
 
   function pushUnit(unit: ActiveUnit) {

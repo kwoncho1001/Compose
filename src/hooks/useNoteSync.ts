@@ -433,7 +433,10 @@ export const useNoteSync = (
   };
 
   const handleDeleteFolder = (folderPath: string) => {
-    const notesToDelete = state.notes.filter(n => n.folder === folderPath || n.folder.startsWith(`${folderPath}/`));
+    const notesToDelete = state.notes.filter(n => {
+      const nFolder = n.folder || '미분류';
+      return nFolder === folderPath || nFolder.startsWith(`${folderPath}/`);
+    });
     if (notesToDelete.length === 0) return;
     
     setDialogConfig({
@@ -690,6 +693,16 @@ export const useNoteSync = (
     if (textFileInputRef.current) textFileInputRef.current.value = '';
   };
 
+  const handleRefreshNotes = async () => {
+    if (!userId || !currentProjectId) return;
+    setIsInitialLoading(true);
+    const registry = await getSyncRegistry(userId, currentProjectId);
+    if (registry) {
+      setState(prev => ({ ...prev, syncRegistry: registry }));
+    }
+    setIsInitialLoading(false);
+  };
+
   return {
     syncNote,
     deleteNoteFromFirestore,
@@ -703,6 +716,7 @@ export const useNoteSync = (
     handleTargetedUpdate,
     handleAddNote,
     handleAddChildNote,
-    handleTextFileUpload
+    handleTextFileUpload,
+    handleRefreshNotes
   };
 };

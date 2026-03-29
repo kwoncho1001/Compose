@@ -5,7 +5,8 @@ import { safeJsonParse } from "./utils";
 
 export const suggestGcmUpdates = async (
   notes: Note[],
-  currentGcm: GCM
+  currentGcm: GCM,
+  signal?: AbortSignal
 ): Promise<{ suggestedEntities: GCMEntity[]; suggestedVariables: Record<string, string> }> => {
   const prompt = `
 당신은 시스템 아키텍트입니다. 현재 작성된 모든 노트들을 분석하여 공통적으로 사용되는 엔티티(Entity)나 전역 변수를 추출하여 GCM(Global Context Map)에 등록할 것을 제안하십시오.
@@ -35,7 +36,9 @@ Return JSON:
       systemInstruction,
       responseMimeType: "application/json",
     },
-  });
+  }, 3, 1000, signal);
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   return safeJsonParse(response.text || '{"suggestedEntities": [], "suggestedVariables": {}}');
 };

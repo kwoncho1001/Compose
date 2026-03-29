@@ -24,17 +24,28 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
 
     // 1. Top-level declarations
     if (isTopLevel) {
-      const declPattern = /^(export\s+)?(class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/;
+      const declPattern = /^(export\s+)?(class|function|const|let|var|interface|type|enum)\s+([a-zA-Z0-9_]+)/;
       if (declPattern.test(trimmed)) return true;
     }
     
-    // 2. Inner logic (Hooks, handlers)
+    // 2. Inner logic (Hooks, handlers, any functions)
     if (!isTopLevel) {
+      // Hooks
       const hookPattern = /^(const|let|var)?\s*([a-zA-Z0-9_]+)?\s*=?\s*(useEffect|useMemo|useCallback|useLayoutEffect|use[A-Z][a-zA-Z0-9_]+)\s*\(/;
       if (hookPattern.test(trimmed)) return true;
       
-      const handlerPattern = /^(const|let|var)\s+(handle[A-Z][a-zA-Z0-9_]+)\s*=\s*(async\s+)?(\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/;
-      if (handlerPattern.test(trimmed)) return true;
+      // Arrow functions (any name, not just handle...)
+      const arrowFuncPattern = /^(const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(async\s+)?(\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/;
+      if (arrowFuncPattern.test(trimmed)) return true;
+
+      // Standard function declarations
+      const funcDeclPattern = /^function\s+([a-zA-Z0-9_]+)\s*\(/;
+      if (funcDeclPattern.test(trimmed)) return true;
+
+      // Large logic blocks (if/switch/try with significant content)
+      // This is tricky, but we can try to catch the start of these blocks if they are at a certain indentation or look "important"
+      const blockPattern = /^(if|switch|try|for|while)\s*\(.*\)\s*\{/;
+      if (blockPattern.test(trimmed) && trimmed.length > 20) return true;
     }
     return false;
   };
@@ -42,15 +53,21 @@ export const extractLogicUnits = (code: string, filePath: string): LogicUnit[] =
   const getUnitTitle = (line: string, isTopLevel: boolean) => {
     const trimmed = line.trim();
     if (isTopLevel) {
-      const match = trimmed.match(/(?:class|function|const|let|var|interface|type)\s+([a-zA-Z0-9_]+)/);
+      const match = trimmed.match(/(?:class|function|const|let|var|interface|type|enum)\s+([a-zA-Z0-9_]+)/);
       if (match && match[1]) return match[1];
     } else {
       const hookMatch = trimmed.match(/(?:const|let|var)?\s*([a-zA-Z0-9_]+)?\s*=?\s*(useEffect|useMemo|useCallback|use[A-Z][a-zA-Z0-9_]+)/);
       if (hookMatch && hookMatch[2]) {
         return hookMatch[1] ? `${hookMatch[1]}_${hookMatch[2]}` : hookMatch[2];
       }
-      const handlerMatch = trimmed.match(/(?:const|let|var)\s+(handle[A-Z][a-zA-Z0-9_]+)/);
-      if (handlerMatch && handlerMatch[1]) return handlerMatch[1];
+      const arrowMatch = trimmed.match(/(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=/);
+      if (arrowMatch && arrowMatch[1]) return arrowMatch[1];
+
+      const funcMatch = trimmed.match(/^function\s+([a-zA-Z0-9_]+)/);
+      if (funcMatch && funcMatch[1]) return funcMatch[1];
+
+      const blockMatch = trimmed.match(/^(if|switch|try|for|while)/);
+      if (blockMatch && blockMatch[1]) return `${blockMatch[1]}_Block`;
     }
     return 'Anonymous_Logic';
   };

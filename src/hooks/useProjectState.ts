@@ -10,6 +10,7 @@ export const useProjectState = (
 ) => {
   const [state, setState] = useState<AppState>({
     notes: [],
+    noteMetadata: [],
     syncRegistry: { entries: {}, lastSyncedAt: '' },
     gcm: { entities: {}, variables: {} },
     githubRepo: '',
@@ -19,6 +20,32 @@ export const useProjectState = (
     fileSyncLogs: {},
     chatMessages: [],
   });
+
+  // Sync noteMetadata whenever notes change
+  useEffect(() => {
+    const newMetadata = state.notes.map(n => ({
+      id: n.id,
+      title: n.title,
+      folder: n.folder,
+      summary: n.summary,
+      noteType: n.noteType,
+      priority: n.priority,
+      status: n.status,
+      importance: n.importance,
+      parentNoteIds: n.parentNoteIds || [],
+      childNoteIds: n.childNoteIds || [],
+      consistencyConflict: n.consistencyConflict
+    }));
+
+    // Simple comparison to avoid infinite loop
+    const currentMetadataStr = JSON.stringify(state.noteMetadata);
+    const newMetadataStr = JSON.stringify(newMetadata);
+
+    if (currentMetadataStr !== newMetadataStr) {
+      setState(prev => ({ ...prev, noteMetadata: newMetadata }));
+    }
+  }, [state.notes, state.noteMetadata]);
+
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string>('default-project');
   const [isInitialLoading, setIsInitialLoading] = useState(true);

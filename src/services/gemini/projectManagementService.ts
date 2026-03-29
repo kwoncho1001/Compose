@@ -46,7 +46,7 @@ Return JSON:
         required: ["suggestion", "updatedStatuses"],
       },
     },
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 

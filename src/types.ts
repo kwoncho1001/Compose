@@ -2,6 +2,23 @@ export type NoteStatus = 'Planned' | 'In-Progress' | 'Done' | 'Conflict' | 'Depr
 export type NoteType = 'Epic' | 'Feature' | 'Task' | 'Reference';
 export type NotePriority = 'S' | 'A' | 'B' | 'C' | 'Done'; // S(최고), A, B, C, Done
 
+export interface NoteMetadata {
+  id: string;
+  title: string;
+  folder: string;
+  summary: string;
+  noteType: NoteType;
+  priority: NotePriority;
+  status: NoteStatus;
+  importance: number;
+  parentNoteIds: string[];
+  childNoteIds: string[];
+  consistencyConflict?: {
+    description: string;
+    suggestion: string;
+  };
+}
+
 export interface Note {
   // --- 구획 1: 요약 ---
   id: string; // 시스템 자동 생성
@@ -81,6 +98,7 @@ export interface SyncRegistry {
 
 export interface AppState {
   notes: Note[];
+  noteMetadata: NoteMetadata[];
   syncRegistry: SyncRegistry;
   gcm: GCM;
   githubRepo: string;

@@ -24,7 +24,7 @@ ${fileContent.slice(0, 15000)}
 반환 JSON: { "isMatch": boolean, "reason": "한국어 문자열" }
 `;
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -39,7 +39,7 @@ ${fileContent.slice(0, 15000)}
           required: ["isMatch", "reason"],
         },
       },
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -65,11 +65,11 @@ ${content}
 ${fileContent.slice(0, 15000)}
 `;
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: { systemInstruction }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -92,11 +92,11 @@ ${content}
 ${fileContent.slice(0, 15000)}
 `;
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: { systemInstruction }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -140,11 +140,11 @@ ${context}
 `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: { systemInstruction }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -156,7 +156,7 @@ ${context}
   }
 };
 
-export const partialMerge = async (spec: string, code: string): Promise<string> => {
+export const partialMerge = async (spec: string, code: string, signal?: AbortSignal): Promise<string> => {
   const prompt = `
 디자인 명세와 실제 구현 코드 사이의 충돌이 발생했습니다. 두 내용을 지능적으로 병합하여 최적의 명세를 만드세요.
 디자인 명세:
@@ -171,11 +171,13 @@ ${code}
 3. GCM 변수와 일치하지 않는 부분이 있다면 코드의 구현을 우선하되 명세에 기록하세요.
 `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: prompt,
     config: { systemInstruction }
-  });
+  }, 3, 1000, signal);
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   return response.text || spec;
 };

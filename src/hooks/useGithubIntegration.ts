@@ -364,9 +364,13 @@ export const useGithubIntegration = (
           // Update local state partially to show progress
           setState(prev => ({ ...prev, notes: workingNotes, fileSyncLogs: { ...currentLogs } }));
 
-        } catch (fileError) {
+        } catch (fileError: any) {
+          if (fileError?.message === "Operation cancelled" || fileError === "Operation cancelled") {
+            console.log(`Operation cancelled during processing of ${file.path}`);
+            break; // Stop processing files if cancelled
+          }
           console.error(`Failed to process file ${file.path}:`, fileError);
-          // Continue to next file
+          // Continue to next file for other errors
         }
       }
 

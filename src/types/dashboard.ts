@@ -18,6 +18,7 @@ export interface DashboardUIState {
   isInitialLoading: boolean;
   chatInput: string;
   isChatting: boolean;
+  searchQuery: string;
 }
 
 export interface DashboardActions {
@@ -29,6 +30,7 @@ export interface DashboardActions {
   setViewMode: (mode: 'editor' | 'mindmap') => void;
   setRightSidebarOpen: (open: boolean) => void;
   setChatInput: (input: string) => void;
+  setSearchQuery: (query: string) => void;
   
   handleCancelProcess: () => void;
   showAlert: (title: string, message: string, type?: 'info' | 'warning' | 'error' | 'success') => void;
@@ -51,6 +53,7 @@ export interface DashboardActions {
   handleAddNote: (type?: NoteType, folder?: string) => Promise<void>;
   handleAddChildNote: (parentId: string, type?: NoteType) => Promise<void>;
   handleTextFileUpload: (e: React.ChangeEvent<HTMLInputElement>, ref: React.RefObject<HTMLInputElement>) => void;
+  handleRefreshNotes: () => Promise<void>;
   
   // AI Actions
   handleOptimizeBlueprint: () => Promise<void>;

@@ -1,6 +1,7 @@
 import { ai, MODEL_NAME } from "./config";
 import { RepoSummaries } from "../../types";
 import { safeJsonParse } from "./utils";
+import { generateContentWithRetry } from "./core";
 
 /**
  * [로직 3] summarizeReposShort
@@ -42,13 +43,13 @@ export const summarizeReposShort = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
         responseMimeType: "application/json"
       }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -101,13 +102,13 @@ export const extractRepoFeatures = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
         responseMimeType: "application/json"
       }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 

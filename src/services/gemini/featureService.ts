@@ -18,7 +18,7 @@ export const decomposeFeature = async (
   updatedGcm: GCM 
 }> => {
   // 1. 첫 번째 AI 호출로 메인 노트 설계
-  const step1Response = await ai.models.generateContent({
+  const step1Response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: `사용자의 요청 "${featureRequest}"을 분석하여 Epic(대목표) 또는 Feature(기능)로 설계하십시오.`,
     config: { 
@@ -26,7 +26,7 @@ export const decomposeFeature = async (
       responseMimeType: "application/json",
       responseSchema: noteSchema
     }
-  });
+  }, 3, 1000, signal);
   if (signal?.aborted) throw new Error("Operation cancelled");
   const mainFeature = safeJsonParse(step1Response.text);
 
@@ -55,7 +55,7 @@ export const decomposeFeature = async (
   };
 
   // 2. 두 번째 AI 호출로 하위 노트(자식) 설계
-  const step2Response = await ai.models.generateContent({
+  const step2Response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: `메인 기능 "${mainNote.title}"에 속하는 하위 ${childType}들을 3~5개 설계하십시오.`,
     config: { 
@@ -71,7 +71,7 @@ export const decomposeFeature = async (
         required: ["newDetailNotes", "updatedDetailNotes", "updatedGcm"],
       }
     }
-  });
+  }, 3, 1000, signal);
   if (signal?.aborted) throw new Error("Operation cancelled");
   const step2Result = safeJsonParse(step2Response.text);
 
@@ -181,7 +181,7 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: prompt,
     config: { 
@@ -206,7 +206,7 @@ Return JSON:
         required: ["detectedNoteType", "newChildNotes", "updatedGcm"],
       },
     }
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 

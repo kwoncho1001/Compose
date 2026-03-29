@@ -1,14 +1,9 @@
 import React from 'react';
 import { auth } from '../firebase';
 import { signOut } from 'firebase/auth';
-import { LogIn, LogOut, User, Loader2 } from 'lucide-react';
+import { LogOut, User } from 'lucide-react';
 
-interface AuthProps {
-  onLogin?: () => void;
-  isLoggingIn?: boolean;
-}
-
-export const Auth: React.FC<AuthProps> = ({ onLogin, isLoggingIn }) => {
+export const Auth: React.FC = () => {
   const [user, setUser] = React.useState(auth.currentUser);
 
   React.useEffect(() => {
@@ -26,33 +21,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin, isLoggingIn }) => {
     }
   };
 
-  if (!user) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 dark:bg-slate-950 p-4">
-        <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-slate-200 dark:border-slate-800">
-          <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/40 rounded-full flex items-center justify-center mx-auto mb-6">
-            <LogIn className="w-8 h-8 text-indigo-600 dark:text-indigo-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Vibe-Architect</h1>
-          <p className="text-slate-600 dark:text-slate-400 mb-8">
-            계층형 설계도와 AI를 활용한 시스템 아키텍처 설계 도구입니다. 시작하려면 로그인하세요.
-          </p>
-          <button
-            onClick={onLogin}
-            disabled={isLoggingIn}
-            className={`w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-200 dark:shadow-none ${isLoggingIn ? 'opacity-70 cursor-not-allowed' : ''}`}
-          >
-            {isLoggingIn ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-            )}
-            {isLoggingIn ? '로그인 중...' : 'Google로 로그인'}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  if (!user) return null;
 
   return (
     <div className="flex items-center gap-3 px-3 py-1.5 bg-white dark:bg-slate-800 rounded-full border border-slate-200 dark:border-slate-700 shadow-sm">

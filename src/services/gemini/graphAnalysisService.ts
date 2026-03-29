@@ -4,7 +4,8 @@ import { generateContentWithRetry } from "./core";
 import { safeJsonParse } from "./utils";
 
 export const detectMissingLinks = async (
-  notes: Note[]
+  notes: Note[],
+  signal?: AbortSignal
 ): Promise<{ suggestedLinks: { fromId: string; toId: string; reason: string }[] }> => {
   const prompt = `
 당신은 그래프 분석 전문가입니다. 마인드맵 상에서 논리적 연결(relatedNoteIds)이 부족하거나 고립된 노드(Orphan Node)를 찾아 관계 형성을 추천하십시오.
@@ -29,12 +30,14 @@ Return JSON:
       systemInstruction,
       responseMimeType: "application/json",
     },
-  });
+  }, 3, 1000, signal);
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   return safeJsonParse(response.text || '{"suggestedLinks": []}');
 };
 
-export const analyzeSharedCore = async (notes: Note[]): Promise<{ suggestedPromotions: { noteId: string; reason: string }[] }> => {
+export const analyzeSharedCore = async (notes: Note[], signal?: AbortSignal): Promise<{ suggestedPromotions: { noteId: string; reason: string }[] }> => {
   const prompt = `
 당신은 아키텍처 분석가입니다. 다음 노트들의 연결 관계(relatedNoteIds)를 분석하여, 여러 다른 노트들로부터 빈번하게 참조되는(In-degree가 높은) 노트를 찾아 'Shared Core' 모듈로 격상할 것을 제안하세요.
 공통 유틸리티, 인증 로직, 전역 상태 관리, 공통 UI 컴포넌트 등이 대상입니다.
@@ -57,7 +60,9 @@ ${notes.map(n => `- ID: ${n.id}, 제목: ${n.title}, 폴더: ${n.folder}, 참조
       systemInstruction,
       responseMimeType: "application/json",
     },
-  });
+  }, 3, 1000, signal);
+
+  if (signal?.aborted) throw new Error("Operation cancelled");
 
   return safeJsonParse(response.text || '{"suggestedPromotions": []}');
 };

@@ -1,5 +1,5 @@
 {
-  "name": "SHA-Sync Notes",
-  "description": "A note-taking app implementing a SHA-based synchronization algorithm with Firestore optimization.",
+  "name": "CodeSync AI",
+  "description": "AI-powered code analysis and documentation synchronization for your projects.",
   "requestFramePermissions": []
 }

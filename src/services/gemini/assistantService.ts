@@ -35,11 +35,11 @@ ${query}
       { role: 'user', parts: [{ text: prompt }] }
     ];
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents,
       config: { systemInstruction }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -76,11 +76,11 @@ ${designContext}
 `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: { systemInstruction }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 

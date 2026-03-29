@@ -10,17 +10,38 @@ const SYNC_REGISTRY_ID = 'sync_index';
 
 /**
  * AI가 생성한 콘텐츠에서 JSON 마크다운 블록이나 불필요한 따옴표를 제거하고 순수 텍스트만 추출합니다.
+ * 예상치 못한 형식(JSON이 아닌 일반 텍스트 등)으로 올 경우를 대비해 데이터를 정제하고 강제로 본문에 채워 넣는 안전장치를 포함합니다.
  */
 export const parseAIContent = (rawContent: string): string => {
-  if (!rawContent) return '';
+  if (!rawContent || rawContent.trim() === '') return '분석 내용이 없습니다.';
+  
   try {
+    // 1. JSON 시도
     const parsed = JSON.parse(rawContent);
-    return typeof parsed === 'object' ? (parsed.content || JSON.stringify(parsed, null, 2)) : String(parsed);
+    if (typeof parsed === 'object' && parsed !== null) {
+      // 다양한 필드명 대응 (content, analysis, technicalSpecification 등)
+      return parsed.content || 
+             parsed.analysis?.content || 
+             parsed.technicalSpecification || 
+             parsed.summary || 
+             JSON.stringify(parsed, null, 2);
+    }
+    return String(parsed);
   } catch (e) {
-    return rawContent
-      .replace(/```json\s?|```/g, '')
-      .replace(/^"|"$/g, '')
+    // 2. JSON이 아닐 경우 마크다운 및 따옴표 정제
+    let cleaned = rawContent
+      .replace(/```json\s?|```markdown\s?|```/g, '') // JSON/Markdown 블록 제거
+      .replace(/^"|"$/g, '') // 시작/끝 따옴표 제거
       .trim();
+    
+    // 3. 만약 정제 후에도 비어있다면 원본 반환 (최소한의 안전장치)
+    if (!cleaned || cleaned.length < 10) {
+      // 너무 짧거나 비어있으면 원본에서 JSON 구조를 제외한 텍스트만이라도 추출 시도
+      const textOnly = rawContent.replace(/\{[\s\S]*\}|\[[\s\S]*\]/g, '').trim();
+      return textOnly || cleaned || rawContent || '분석 내용 추출 실패';
+    }
+    
+    return cleaned;
   }
 };
 
@@ -283,6 +304,9 @@ export const extractPhase = async (
       const physicalUnits = extractLogicUnits(content, file.path);
       allExtractedUnits.push(...physicalUnits.map(u => ({ unit: u, file, content })));
     } catch (e: any) {
+      if (e?.message === "Operation cancelled" || e === "Operation cancelled") {
+        throw e;
+      }
       console.error(`Failed to extract units from ${file.path}:`, e);
     }
   }
@@ -355,20 +379,30 @@ export const analyzeReferencesPhase = async (
       signal
     );
 
+    if (!batchResult || !batchResult.results) {
+      console.error("AI Batch Analysis failed to return results.");
+      continue;
+    }
+
     const batchNotes: Note[] = [];
     
     for (let k = 0; k < chunk.length; k++) {
       const item = chunk[k];
       const result = batchResult.results[k];
-      if (!result) continue;
+      
+      if (!result) {
+        console.warn(`AI skipped result for unit: ${item.unit.title}`);
+        continue;
+      }
 
+      const { unit, existingRef, file } = item;
       let taskId = result.matchedTaskId;
       let suggestedTask = result.suggestedTask;
       const analysis = result.analysis;
 
       // Skip if analysis is missing (AI failure)
-      if (!analysis) {
-        console.warn(`Skipping unit ${item.unit.title} due to missing AI analysis.`);
+      if (!analysis || (!analysis.content && !analysis.summary)) {
+        console.warn(`Skipping unit ${item.unit.title} due to missing or empty AI analysis.`);
         continue;
       }
 
@@ -385,9 +419,31 @@ export const analyzeReferencesPhase = async (
         }
       }
 
-      if (!taskId) taskId = 'unmapped_task';
+      // Fallback: If still no taskId, create one based on file path
+      if (!taskId || taskId === 'unmapped_task') {
+        const fileName = file.path.split('/').pop() || file.path;
+        const fallbackTitle = `[Source] ${fileName} Implementation`;
+        const newTaskId = generateTaskDeterministicId(projectId, fallbackTitle);
+        
+        const existingTask = workingNotes.find(n => n.id === newTaskId);
+        if (existingTask) {
+          taskId = existingTask.id;
+        } else if (suggestedTaskMap.has(fallbackTitle)) {
+          taskId = suggestedTaskMap.get(fallbackTitle);
+        } else {
+          suggestedTaskMap.set(fallbackTitle, newTaskId);
+          taskId = newTaskId;
+          // Create a dummy suggestedTask for Phase 4 to pick up
+          suggestedTask = {
+            title: fallbackTitle,
+            folder: `구현/소스/${file.path.split('/').slice(0, -1).join('/') || 'root'}`,
+            content: `${file.path} 소스 파일의 로직 분석 및 구현 증빙을 위한 자동 생성된 작업 노드입니다.`,
+            summary: `${fileName} 소스 구현 분석`,
+            noteType: 'Task'
+          };
+        }
+      }
 
-      const { unit, existingRef, file } = item;
       const analyzedItem: AnalysisItem = { ...item, analysis, taskId, suggestedTask };
       analyzedItems.push(analyzedItem);
 
@@ -453,15 +509,45 @@ export const analyzeReferencesPhase = async (
 
   // Handle skipped units
   for (const item of unitsToSkip) {
+    if (signal?.aborted) throw new Error("Operation cancelled");
     const { globallyExistingRef, existingRef, file } = item;
     const targetRef = globallyExistingRef || existingRef;
     if (!targetRef) continue;
 
-    const taskId = targetRef.parentNoteIds?.[0] || 'unmapped_task';
-    analyzedItems.push({ ...item, taskId, existingRef: targetRef });
+    let taskId = targetRef.parentNoteIds?.[0];
+    
+    // Fallback: If orphaned or unmapped, try to assign a task
+    if (!taskId || taskId === 'unmapped_task') {
+      const fileName = file.path.split('/').pop() || file.path;
+      const fallbackTitle = `[Source] ${fileName} Implementation`;
+      const newTaskId = generateTaskDeterministicId(projectId, fallbackTitle);
+      
+      const existingTask = workingNotes.find(n => n.id === newTaskId);
+      if (existingTask) {
+        taskId = existingTask.id;
+      } else if (suggestedTaskMap.has(fallbackTitle)) {
+        taskId = suggestedTaskMap.get(fallbackTitle);
+      } else {
+        suggestedTaskMap.set(fallbackTitle, newTaskId);
+        taskId = newTaskId;
+        // Create a dummy suggestedTask for Phase 4 to pick up
+        const suggestedTask = {
+          title: fallbackTitle,
+          folder: `구현/소스/${file.path.split('/').slice(0, -1).join('/') || 'root'}`,
+          content: `${file.path} 소스 파일의 로직 분석 및 구현 증빙을 위한 자동 생성된 작업 노드입니다.`,
+          summary: `${fileName} 소스 구현 분석`,
+          noteType: 'Task' as NoteType
+        };
+        // We add this to analyzedItems so Phase 4 can find it
+        analyzedItems.push({ ...item, taskId, existingRef: targetRef, suggestedTask });
+      }
+    } else {
+      analyzedItems.push({ ...item, taskId, existingRef: targetRef });
+    }
 
     const updatedRef: Note = {
       ...targetRef,
+      parentNoteIds: [taskId || 'unmapped_task'],
       lastUpdated: new Date().toISOString(),
       sha: file.sha
     };
@@ -554,7 +640,14 @@ export const designTasksPhase = async (
 
     const batchTasks: Note[] = [];
     for (const res of results) {
-      if (res.status !== 'fulfilled' || !res.value || res.value.skip) continue;
+      if (res.status === 'rejected') {
+        if (res.reason?.message === "Operation cancelled" || res.reason === "Operation cancelled") {
+          throw res.reason;
+        }
+        console.error("Failed to design task:", res.reason);
+        continue;
+      }
+      if (!res.value || res.value.skip) continue;
       const { group, design, existingTask, onlyUpdateChildren, newChildIds } = res.value;
       
       let finalTask: Note;

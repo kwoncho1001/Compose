@@ -95,7 +95,7 @@ Return JSON:
         required: ["updatedNotes", "deletedNoteIds", "updatedGcm", "report"]
       }
     }
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -169,7 +169,7 @@ Return JSON:
           required: ["report", "inconsistentNotes"]
         }
       },
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 

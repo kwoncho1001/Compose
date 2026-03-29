@@ -61,8 +61,12 @@ ${JSON.stringify(designNotes.map(n => ({ id: n.id, title: n.title, noteType: n.n
 ${JSON.stringify(referenceNotes.map(n => ({ id: n.id, title: n.title, summary: n.summary, githubLink: n.githubLink, logicHash: n.logicHash })))}
 
 [작업 지침]
-1. **원자적 로직 추출 (Step 1)**: 
+1. **원자적 로직 추출 및 심층 분석 (IPO Step 1)**: 
    - [물리적 추출 단위]를 기반으로 하되, 각 단위 내부에서 독립적인 책임을 가진 **더 작은 원자적 로직 단위**를 찾아내십시오.
+   - 단순히 코드를 요약하지 말고, **함수 단위로 어떤 입력을 받아 어떤 처리를 거쳐 무엇을 내뱉는지(Input-Process-Output)**를 상세히 설명하십시오.
+   - **Input**: 매개변수, 전역 상태, Props, API 응답 등
+   - **Process**: 구체적인 계산 방식, 조건문(if/switch), 반복문, 알고리즘의 흐름, 비즈니스 로직의 핵심 단계
+   - **Output**: 반환 값, 상태 업데이트, 부수 효과(Side Effects), UI 렌더링 결과
    - 특히 React 컴포넌트의 경우, 내부의 복잡한 조건부 렌더링 블록, 대규모 데이터 처리 로직, 에러 처리 핸들러, 주요 Hook(useEffect, useMemo 등)을 각각 별도의 유닛으로 분리하십시오.
    - **강력 권고**: 파일 하나에서 최소 3~5개 이상의 로직 유닛이 나오도록 세분화하십시오. 단순히 파일 전체를 하나의 유닛으로 묶는 것은 지양하십시오.
    - 각 유닛에 대해 해당 로직을 포함하는 **정확한 코드 조각(codeSnippet)**을 추출하십시오.

@@ -7,15 +7,19 @@ export interface TreeItem {
   type: 'folder' | 'note';
   name: string;
   path: string;
+  folderPath?: string;
   note?: Note | NoteMetadata;
   children?: TreeItem[];
 }
 
-export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = []) => {
+export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = [], externalSearchTerm: string = '') => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
-  const [searchTerm, setSearchTerm] = useState('');
+  const [internalSearchTerm, setInternalSearchTerm] = useState('');
+
+  const searchTerm = externalSearchTerm || internalSearchTerm;
+  const setSearchTerm = setInternalSearchTerm;
 
   const toggleExpand = (path: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -93,7 +97,7 @@ export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = []
       let currentLevel = roots;
       let currentPath = 'root';
 
-      folderParts.forEach((part) => {
+      folderParts.forEach((part, index) => {
         currentPath = `${currentPath}/${part}`;
         let folderItem = folderMap.get(currentPath);
         if (!folderItem) {
@@ -101,7 +105,8 @@ export const useSidebarLogic = (notes: Note[], noteMetadata: NoteMetadata[] = []
             id: `folder-${currentPath}`,
             type: 'folder',
             name: part,
-            path: currentPath
+            path: currentPath,
+            folderPath: folderParts.slice(0, index + 1).join('/')
           };
           folderMap.set(currentPath, folderItem);
           currentLevel.push(folderItem);

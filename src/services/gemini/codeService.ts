@@ -31,9 +31,12 @@ ${codeSnippet}
 설계 요약: ${taskContext.summary}
 
 [작업 지침]
-1. **기술적 증빙 중심 (Deep-Dive)**: 
-   - 코드를 단순히 설명하지 말고, "이 로직이 왜 이 Task를 해결하는가?"에 집중하십시오.
-   - 상세 알고리즘, 데이터 흐름, 설계적 근거, 예외 처리 전략 등을 풍성하게 서술하십시오.
+1. **기술적 증빙 중심 (IPO Deep-Dive)**: 
+   - 코드를 단순히 요약하지 말고, **함수 단위로 어떤 입력을 받아 어떤 처리를 거쳐 무엇을 내뱉는지(Input-Process-Output)**를 상세히 설명하십시오.
+   - **Input**: 매개변수, 전역 상태, Props, API 응답 등
+   - **Process**: 구체적인 계산 방식, 조건문(if/switch), 반복문, 알고리즘의 흐름, 비즈니스 로직의 핵심 단계
+   - **Output**: 반환 값, 상태 업데이트, 부수 효과(Side Effects), UI 렌더링 결과
+   - 구체적인 설계적 근거와 예외 처리 전략 등을 풍성하게 서술하십시오.
    - 'Technical Specification' 섹션에 모든 분석 역량을 집중하십시오.
 2. **구조**: 시스템 지침의 4개 섹션 구조(Context, Specification, Constraints, Impact)를 따르되, Specification 섹션을 가장 상세히 작성하십시오.
 3. 모든 텍스트는 한국어로 작성하십시오.
@@ -156,8 +159,9 @@ export const generateNoteFromCode = async (
 언어 설정: 모든 텍스트는 반드시 한국어로 작성하십시오. 가독성을 위해 줄바꿈을 충분히 사용하십시오.
 
 [중요] 지시사항:
-1. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
-2. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
+1. **심층 분석**: 단순히 파일을 요약하지 말고, **함수 단위로 어떤 입력을 받아 어떤 처리를 거쳐 무엇을 내뱉는지(Input-Process-Output)**를 상세히 설명하십시오.
+2. 'content'는 반드시 시스템 지침의 4개 섹션 구조를 따라야 합니다.
+3. 'summary'는 파일 경로가 아닌, 기능의 역할을 설명하는 1-2문장의 한국어 요약이어야 합니다.
 
 파일 이름: ${fileName}
 소스 코드:
@@ -188,7 +192,7 @@ Return JSON matching the Note schema (title, folder, content, summary, importanc
         responseMimeType: "application/json",
         responseSchema: noteSchema,
       },
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -314,10 +318,13 @@ export const designTaskFromReferences = async (
 ${referenceDetails}
 
 [작업 지침]
-1. **역공학 설계**: 부품들의 기능을 종합하여, 이 노드가 담당하는 '추상적 역할'과 '구체적 명세'를 도출하십시오.
-2. **구조**: Context(배경), Specification(핵심 로직/데이터 흐름), Constraints(제약/예외), Impact(영향도) 순으로 작성하십시오.
-3. **핵심 요약**: 불필요한 수사여구를 배제하고, 기술적 사실과 설계 의도에 집중하여 명확하게 작성하십시오.
-4. 모든 텍스트는 한국어로 작성하십시오.
+1. **역공학 설계 및 관계 추출**: 부품들의 기능을 종합하여, 이 노드가 담당하는 '추상적 역할'과 '구체적 명세'를 도출하십시오.
+2. **관계 기반 자동 생성 (핵심)**: 
+   - 분석 중 "이 부분은 추가 구현이 필요함", "다른 모듈과의 연동이 필요함", "TODO", "FIXME" 등의 단서를 발견하면, 이를 'Specification' 섹션에 명시하십시오.
+   - 해당 단서들을 바탕으로 새로운 Task 또는 Feature가 필요하다고 판단되면, 관련 태그(예: #needs-implementation, #related-to-X)를 추가하고 내용에 구체적인 제안을 포함하십시오.
+3. **구조**: Context(배경), Specification(핵심 로직/데이터 흐름), Constraints(제약/예외), Impact(영향도) 순으로 작성하십시오.
+4. **핵심 요약**: 불필요한 수사여구를 배제하고, 기술적 사실과 설계 의도에 집중하여 명확하게 작성하십시오.
+5. 모든 텍스트는 한국어로 작성하십시오.
 
 Return JSON:
 {

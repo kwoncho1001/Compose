@@ -1,6 +1,7 @@
 import { ai, MODEL_NAME } from "./config";
 import { Note, GCM, TranspilationResult } from "../../types";
 import { safeJsonParse, sanitizeNotes } from "./utils"; 
+import { generateContentWithRetry } from "./core";
 
 /**
  * [로직 4] transpileExternalLogic
@@ -42,13 +43,13 @@ export const transpileExternalLogic = async (
   `;
 
   try {
-    const result = await ai.models.generateContent({
+    const result = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
         responseMimeType: "application/json"
       }
-    });
+    }, 3, 1000, signal);
 
     if (signal?.aborted) throw new Error("Operation cancelled");
 

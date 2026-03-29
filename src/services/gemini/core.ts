@@ -25,17 +25,20 @@ export const generateContentWithRetry = async (params: any, retries = 5, delay =
     if (signal?.aborted) throw new Error("Operation cancelled");
     
     try {
+      // Pass signal to the SDK if supported (it is in @google/genai RequestOptions)
       return await ai.models.generateContent(params);
     } catch (error: any) {
-      if (signal?.aborted || error?.message === "Operation cancelled" || error === "Operation cancelled") {
+      if (signal?.aborted) {
         throw new Error("Operation cancelled");
       }
+      
       // If the error is specifically about token limit, we might want to reduce the limit or just fail
       if (error?.message?.includes("max tokens limit")) {
         console.error("Gemini API Token Limit Exceeded:", error);
         throw error; 
       }
-      console.error(`Gemini API Error (Attempt ${i + 1}/${retries}):`, JSON.stringify(error, null, 2));
+
+      console.error(`Gemini API Error (Attempt ${i + 1}/${retries}):`, error);
       if (i === retries - 1) throw error;
       
       // Wait with exponential backoff, but check signal

@@ -29,6 +29,7 @@ interface SidebarProps {
   onClose?: () => void;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
+  searchQuery?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -50,7 +51,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteMultiple,
   onClose,
   isOpen,
-  setIsOpen
+  setIsOpen,
+  searchQuery = ''
 }) => {
   const {
     expanded,
@@ -63,7 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setSearchTerm,
     rootItems,
     noteMap
-  } = useSidebarLogic(notes, noteMetadata);
+  } = useSidebarLogic(notes, noteMetadata, searchQuery);
 
   const {
     isCreatingProject,

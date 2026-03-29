@@ -13,7 +13,7 @@ export const Dashboard: React.FC = () => {
   const {
     isSidebarOpen, isMobileMenuOpen, activeSidebarTab, selectedNoteId,
     darkMode, isDecomposing, isSyncing, processStatus, nextStepSuggestion,
-    rightSidebarOpen, viewMode, isInitialLoading, chatInput, isChatting
+    rightSidebarOpen, viewMode, isInitialLoading, chatInput, isChatting, searchQuery
   } = uiState;
 
   const {
@@ -64,6 +64,7 @@ export const Dashboard: React.FC = () => {
         onDeleteMultiple={handleDeleteMultiple}
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
+        searchQuery={searchQuery}
       />
 
       <div className="flex-1 flex flex-col min-w-0 bg-white dark:bg-slate-900 transition-colors duration-200">
@@ -73,6 +74,9 @@ export const Dashboard: React.FC = () => {
           setRightSidebarOpen={setRightSidebarOpen} handleExport={handleExport}
           fileInputRef={fileInputRef} handleImport={handleImport}
           handleRefreshNotes={actions.handleRefreshNotes}
+          currentProjectName={projects.find(p => p.id === currentProjectId)?.name}
+          searchQuery={uiState.searchQuery}
+          setSearchQuery={actions.setSearchQuery}
         />
 
         <ProcessBanner processStatus={processStatus} handleCancelProcess={handleCancelProcess} />

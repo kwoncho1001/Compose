@@ -39,6 +39,7 @@ export const useDashboard = () => {
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'editor' | 'mindmap'>('editor');
+  const [searchQuery, setSearchQuery] = useState('');
   
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -298,12 +299,13 @@ export const useDashboard = () => {
     viewMode,
     isInitialLoading,
     chatInput: chatSession.chatInput,
-    isChatting: chatSession.isChatting
+    isChatting: chatSession.isChatting,
+    searchQuery
   }), [
     isSidebarOpen, isMobileMenuOpen, activeSidebarTab, selectedNoteId, darkMode,
     isDecomposing, isSyncing, isRefactoring, isCheckingConsistency, processStatus,
     nextStepSuggestion, leftSidebarOpen, rightSidebarOpen, viewMode, isInitialLoading,
-    chatSession.chatInput, chatSession.isChatting
+    chatSession.chatInput, chatSession.isChatting, searchQuery
   ]);
 
   const actions: DashboardActions = useMemo(() => ({
@@ -315,6 +317,7 @@ export const useDashboard = () => {
     setViewMode,
     setRightSidebarOpen,
     setChatInput: chatSession.setChatInput,
+    setSearchQuery,
     handleCancelProcess,
     showAlert,
     handleExport,
@@ -349,6 +352,7 @@ export const useDashboard = () => {
   }), [
     setIsSidebarOpen, setIsMobileMenuOpen, setActiveSidebarTab, setSelectedNoteId,
     setDarkMode, setViewMode, setRightSidebarOpen, chatSession.setChatInput,
+    setSearchQuery,
     handleCancelProcess, showAlert, handleExport, handleImport, setCurrentProjectId,
     handleCreateProject, handleRenameProject, handleDeleteProject, handleUpdateNote,
     handleDeleteNote, handleDeleteFolder, handleDeleteMultiple, handleSanitizeIntegrity, handleRefreshNotes,

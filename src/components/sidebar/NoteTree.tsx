@@ -238,7 +238,7 @@ export const NoteTree: React.FC<NoteTreeProps> = ({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteFolder(item.path);
+                        onDeleteFolder(item.folderPath || item.path);
                       }}
                       className="p-1 text-slate-500 hover:text-red-500 transition-colors"
                       title="이 폴더와 하위 노트 모두 삭제"

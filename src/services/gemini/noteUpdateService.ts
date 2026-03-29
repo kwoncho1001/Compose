@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { Note, GCM } from "../../types";
+import { Note, GCM, NoteMetadata } from "../../types";
 import { ai, MODEL_NAME, systemInstruction, noteSchema } from "./config";
 import { generateContentWithRetry } from "./core";
 import { safeJsonParse } from "./utils";
@@ -43,7 +43,7 @@ Return JSON:
 }
 `;
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -65,7 +65,7 @@ Return JSON:
           required: ["updatedNote", "updatedGcm", "affectedNoteIds"],
         },
       },
-    });
+    }, 3, 1000, signal);
     
     if (signal?.aborted) throw new Error("Operation cancelled");
 
@@ -127,7 +127,7 @@ Return JSON:
 }
 `;
 
-  const response = await ai.models.generateContent({
+  const response = await generateContentWithRetry({
     model: MODEL_NAME,
     contents: prompt,
     config: {
@@ -144,7 +144,7 @@ Return JSON:
         required: ["content", "summary", "importance", "tags"],
       },
     },
-  });
+  }, 3, 1000, signal);
 
   if (signal?.aborted) throw new Error("Operation cancelled");
 

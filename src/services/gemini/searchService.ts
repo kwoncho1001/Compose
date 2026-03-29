@@ -1,6 +1,7 @@
 import { ai, MODEL_NAME } from "./config";
 import { SearchStrategy } from "../../types";
 import { safeJsonParse } from "./utils";
+import { generateContentWithRetry } from "./core";
 
 /**
  * [교정] refineSearchGoal
@@ -9,7 +10,7 @@ import { safeJsonParse } from "./utils";
 export const refineSearchGoal = async (query: string, signal?: AbortSignal): Promise<string[]> => {
   try {
     console.log('Refining search goal for:', query);
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: `
 입력 키워드: "${query}"
@@ -21,7 +22,7 @@ export const refineSearchGoal = async (query: string, signal?: AbortSignal): Pro
       config: {
         responseMimeType: "application/json",
       }
-    });
+    }, 3, 1000, signal);
     if (signal?.aborted) throw new Error("Operation cancelled");
     console.log('Raw response from AI:', response.text);
     const result = safeJsonParse(response.text || "[]") || [query];
@@ -40,7 +41,7 @@ export const refineSearchGoal = async (query: string, signal?: AbortSignal): Pro
  */
 export const translateQueryForGithub = async (query: string, signal?: AbortSignal): Promise<SearchStrategy> => {
   try {
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry({
       model: MODEL_NAME,
       contents: `
 요구사항: "${query}"
@@ -60,7 +61,7 @@ export const translateQueryForGithub = async (query: string, signal?: AbortSigna
         tools: [{ googleSearch: {} }],
         responseMimeType: "application/json"
       }
-    });
+    }, 3, 1000, signal);
     if (signal?.aborted) throw new Error("Operation cancelled");
     const parsed = safeJsonParse(response.text || "{}");
     
